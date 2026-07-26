@@ -24,7 +24,7 @@ jobs:
       - name: Run trial
         run: python trial_run.py
         env:
-          OPENROUTER_API_KEY: ${{ secrets.hermes-phase2-trial }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 
       - name: Upload trace DB
         if: always()

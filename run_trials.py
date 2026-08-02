@@ -83,6 +83,8 @@ async def trial_2_new_feature() -> bool:
         with open(path, "w") as f:
             f.write(code)
         ok = all(kw in code for kw in ["class ProgressTracker", "start_lesson", "complete_lesson", "get_progress"])
+        if ok:
+            compile(code, path, "exec")
         print(f"  [New Feature] {'PASS' if ok else 'FAIL'} — {path} ({len(code)} chars)")
         return ok
     except Exception as e:
@@ -131,6 +133,9 @@ async def trial_3_bug_fix() -> bool:
             f.write(fixed)
 
         ok = any(kw in fixed for kw in ["ZeroDivisionError", "ValueError", "return 0", "return None", ": 0.0", "empty"])
+        if ok and has_bug:
+            compile(code, path, "exec")
+            compile(fixed, fix_path, "exec")
         print(f"  [Bug Fix - Fixed] {'PASS' if ok else 'FAIL'} — {fix_path} ({len(fixed)} chars)")
         return ok and has_bug
     except Exception as e:
@@ -169,6 +174,8 @@ async def trial_4_write_tests() -> bool:
         with open(path, "w") as f:
             f.write(code)
         ok = all(kw in code for kw in ["def test_", "pytest", "fixture", "client", "assert"])
+        if ok:
+            compile(code, path, "exec")
         print(f"  [Write Tests] {'PASS' if ok else 'FAIL'} — {path} ({len(code)} chars)")
         return ok
     except Exception as e:

@@ -1,10 +1,11 @@
-name: Phase 1 Trial Run
+name: Phase 2 CI
 
 on:
   push:
-    branches: [main, feature/*]
+    branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   trial:
@@ -37,7 +38,7 @@ jobs:
   exit-criteria-trials:
     needs: trial
     runs-on: ubuntu-latest
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') }}
 
     steps:
       - uses: actions/checkout@v4

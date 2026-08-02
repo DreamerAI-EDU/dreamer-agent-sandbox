@@ -21,17 +21,6 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Debug - check key presence
-        run: |
-          if [ -n "$OPENROUTER_API_KEY" ]; then
-            echo "OPENROUTER_API_KEY is SET (length: ${#OPENROUTER_API_KEY})"
-            echo "First 8 chars: ${OPENROUTER_API_KEY:0:8}"
-          else
-            echo "OPENROUTER_API_KEY is EMPTY"
-          fi
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-
       - name: Run trial
         run: python trial_run.py
         env:

@@ -32,7 +32,7 @@ from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-from otel_exporter import SQLiteSpanExporter
+from agents.otel_exporter import SQLiteSpanExporter
 
 OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))
 TRACE_DB = os.path.join(OUTPUT_DIR, "traces.db")
@@ -44,17 +44,17 @@ trace.set_tracer_provider(_trace_provider)
 
 print(f"[OTel] SQLite exporter → {TRACE_DB}")
 
-from state_bus import StateBus, Message
-from sandbox_manager import SandboxManager, SandboxConfig, ResourceLockedError
-from hermes_scheduler import (
+from agents.state_bus import StateBus, Message
+from agents.sandbox_manager import SandboxManager, SandboxConfig, ResourceLockedError
+from agents.hermes_scheduler import (
     HermesScheduler,
     TaskNode,
     TaskStatus,
     ExecutionBatch,
     ResourceLock,
 )
-from merge_arbiter import MergeArbiter, MergeResult, ConflictSeverity
-from agents import CurriculumAgent, BackendAgent, DatabaseAgent, AgentContext
+from agents.merge_arbiter import MergeArbiter, MergeResult, ConflictSeverity
+from agents.agents import CurriculumAgent, BackendAgent, DatabaseAgent, AgentContext
 
 
 # ═══════════════════════════════════════════════════════════

@@ -12,7 +12,7 @@ import tempfile
 import datetime
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List
-from state_bus import StateBus, Message
+from .state_bus import StateBus, Message
 
 
 @dataclass

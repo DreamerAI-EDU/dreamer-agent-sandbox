@@ -15,7 +15,7 @@ Usage:
 
 import sys
 import os
-from otel_exporter import query_trace_summary, query_trace_tree, query_errors
+from .otel_exporter import query_trace_summary, query_trace_tree, query_errors
 
 
 def format_duration(us: int) -> str:

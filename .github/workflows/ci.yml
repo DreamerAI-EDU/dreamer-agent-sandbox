@@ -1,0 +1,71 @@
+name: Phase 2 CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  trial:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run trial
+        run: python trial_run.py
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+
+      - name: Security agent self-test
+        run: python trial_security.py
+
+      - name: Upload trace DB
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: traces-db
+          path: traces.db
+          retention-days: 7
+
+  exit-criteria-trials:
+    needs: trial
+    runs-on: ubuntu-latest
+    if: ${{ !cancelled() && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Dependency audit (non-blocking)
+        run: pip install pip-audit && pip-audit || true
+
+      - name: Run exit criteria trials
+        run: python run_trials.py
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+
+      - name: Upload trial outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trial-outputs
+          path: output_trials/
+          retention-days: 7

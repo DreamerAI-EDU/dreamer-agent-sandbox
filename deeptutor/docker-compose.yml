@@ -1,0 +1,98 @@
+# Dreamer AI — Phase 0 Docker Compose
+# DeepTutor container + Dreamer DB (PostgreSQL)
+# Version: v3 Phase 0
+
+services:
+
+  # --- DeepTutor (Core AI Engine) ---
+  deeptutor:
+    image: hkuds/deeptutor:v1.5.8
+    container_name: dreamer-deeptutor
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${DEEPTUTOR_WS_PORT:-8765}:8765"        # WebSocket API
+      - "127.0.0.1:${DEEPTUTOR_HTTP_PORT:-8000}:8000"       # Health check + management
+    volumes:
+      # Shared KBs (read-only, mounted from host)
+      - ./knowledge_bases:/app/data/knowledge_bases:ro
+      # Ephemeral workspaces (per-student, auto-cleaned after 24h)
+      - deeptutor_workspaces:/app/data/workspaces
+      # Model weights cache
+      - deeptutor_models:/app/models
+    environment:
+      - DEEPTUTOR_HOST=0.0.0.0
+      - DEEPTUTOR_PORT=8765
+      - DEEPTUTOR_WS_ENABLED=true
+      - DEEPTUTOR_MAX_CONCURRENT=50
+      - DEEPTUTOR_WORKSPACE_ROOT=/app/data/workspaces
+      - DEEPTUTOR_KB_ROOT=/app/data/knowledge_bases
+      # LLM configuration
+      - LLM_PROVIDER=${LLM_PROVIDER:-deepseek}
+      - LLM_MODEL=${LLM_MODEL:-deepseek-v4-flash}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.deepseek.com}
+      # Embedding model
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-BAAI/bge-m3}
+      # Session settings
+      - SESSION_TYPE=ephemeral              # v1: no persistent memory
+      - WORKSPACE_TTL_HOURS=24              # Cleanup after 24h
+      - WORKSPACE_INACTIVE_DAYS=90          # v2: persistent cleanup threshold
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - dreamer-net
+
+  # --- Dreamer Database (PostgreSQL) ---
+  dreamer-db:
+    image: postgres:16-alpine
+    container_name: dreamer-db
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
+    volumes:
+      - dreamer_db_data:/var/lib/postgresql/data
+      # Auto-run schema on first init
+      - ./dreamer_db_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    environment:
+      - POSTGRES_USER=${DB_USER:-dreamer}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=${DB_NAME:-dreamer}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-dreamer} -d ${DB_NAME:-dreamer}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dreamer-net
+
+  # --- Redis (Session cache + rate limiting) ---
+  dreamer-redis:
+    image: redis:7-alpine
+    container_name: dreamer-redis
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    volumes:
+      - dreamer_redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - dreamer-net
+
+volumes:
+  deeptutor_workspaces:
+  deeptutor_models:
+  dreamer_db_data:
+  dreamer_redis_data:
+
+networks:
+  dreamer-net:
+    driver: bridge

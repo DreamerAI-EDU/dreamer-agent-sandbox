@@ -274,3 +274,103 @@ class HermesScheduler:
                     "task_id": t.task_id,
                 }
         return locks
+
+
+# ── Phase 3: Security Gate ──────────────────────────────
+
+class SecurityGate:
+    """
+    Post-generation / Pre-merge security gate.
+
+    Sits between code-generating agents (be, db) and Merge Arbiter.
+    Audits each task's artifacts against SecurityAgent rules.
+
+    Flow:
+      1. Task completes → artifacts produced
+      2. SecurityGate.audit_artifacts(task) runs
+      3. If pass → proceed to next batch (Merge Arbiter)
+      4. If blocked → attempt retry (up to cap) or escalate
+    """
+
+    def __init__(self, output_dir: str = "."):
+        from security_agent import SecurityAgent, MAX_RETRIES
+        self.auditor = SecurityAgent()
+        self.output_dir = output_dir
+        self.MAX_RETRIES = MAX_RETRIES
+
+    def audit_artifacts(
+        self, task: TaskNode
+    ) -> dict:
+        """
+        Audit all artifacts produced by a task.
+        Returns: {
+            "verdict": "pass" | "blocked" | "escalated",
+            "findings": [...],
+            "escalated_findings": [...],
+            "retries_exhausted": bool
+        }
+        """
+        import os
+
+        all_findings = []
+        blocked = False
+        all_escalated = True
+
+        for artifact in task.artifacts:
+            path = os.path.join(self.output_dir, artifact)
+            if not os.path.isfile(path):
+                continue
+            report = self.auditor.audit(path, task.agent, task.task_id)
+
+            if report.blocked:
+                blocked = True
+                # Check which findings are still retry-eligible
+                escalated = self.auditor.escalated_findings(report, task.task_id)
+                fixable = [f for f in report.findings
+                           if f not in escalated and self.auditor.can_retry(task.task_id, f)]
+
+                if fixable:
+                    all_escalated = False
+                    # Record attempts and return fix hint
+                    for f in fixable:
+                        self.auditor.record_retry(task.task_id, f)
+
+                all_findings.extend(
+                    {"artifact": artifact, "rule_id": f.rule_id, "severity": f.severity,
+                     "line": f.line, "description": f.description, "recommendation": f.recommendation}
+                    for f in report.findings
+                )
+
+        if not all_findings:
+            return {"verdict": "pass", "findings": [], "escalated_findings": [], "retries_exhausted": False}
+
+        if not blocked:
+            return {"verdict": "pass", "findings": all_findings, "escalated_findings": [], "retries_exhausted": False}
+
+        if all_escalated:
+            return {"verdict": "escalated", "findings": all_findings,
+                    "escalated_findings": list(set(f["rule_id"] for f in all_findings)),
+                    "retries_exhausted": True}
+
+        return {"verdict": "blocked", "findings": all_findings,
+                "escalated_findings": [], "retries_exhausted": False}
+
+    def fix_hint(self, task: TaskNode) -> str:
+        """
+        Generate a fix prompt for the LLM to retry code generation.
+        Only includes retry-eligible (non-exhausted) findings.
+        """
+        import os
+        from security_agent import SecurityReport, Finding
+
+        hints = []
+        for artifact in task.artifacts:
+            path = os.path.join(self.output_dir, artifact)
+            if not os.path.isfile(path):
+                continue
+            report = self.auditor.audit(path, task.agent, task.task_id)
+            hint = self.auditor.fix_hint(report, task.task_id)
+            if hint:
+                hints.append(f"[{artifact}]\n{hint}")
+
+        return "\n\n".join(hints) if hints else ""

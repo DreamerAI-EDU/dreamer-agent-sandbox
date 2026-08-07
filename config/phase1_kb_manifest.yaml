@@ -1,0 +1,114 @@
+# =============================================================================
+# Phase 1 — KB Manifest
+# 12 Knowledge Bases for Dreamer AI Education
+# Dreamer 4D is the pedagogical spine; IB ATL skills are cross-reference only.
+# =============================================================================
+
+manifest_version: "v1-phase1"
+last_updated: "2026-08-06"
+
+knowledge_bases:
+  - kb_name: dreamer-core-kb
+    description: Core AI literacy concepts — what is AI, how does it learn, types of AI
+    domain_agent_owner: compere-agent
+    total_topics: 8
+    dreamer_phases: [Dream, Discover]
+    modes: [contextual, direct]
+
+  - kb_name: dreamer-project-ideation
+    description: Project brainstorming frameworks, design thinking, problem definition
+    domain_agent_owner: compere-agent
+    total_topics: 6
+    dreamer_phases: [Dream]
+    modes: [contextual]
+
+  - kb_name: dreamer-coding-python
+    description: Python fundamentals in project context — variables, loops, functions, OOP
+    domain_agent_owner: creation-agent
+    total_topics: 12
+    dreamer_phases: [Discover, Design]
+    modes: [contextual, direct, hybrid]
+
+  - kb_name: dreamer-coding-ai
+    description: AI coding tools — prompt engineering, GPT-assisted coding, copilot usage
+    domain_agent_owner: creation-agent
+    total_topics: 10
+    dreamer_phases: [Discover, Design]
+    modes: [contextual, hybrid]
+
+  - kb_name: dreamer-data-science
+    description: Data collection, visualization, basic statistics, bias detection
+    domain_agent_owner: research-agent
+    total_topics: 8
+    dreamer_phases: [Dream, Discover, Design]
+    modes: [contextual, direct]
+
+  - kb_name: dreamer-game-design
+    description: Game mechanics, balance, probability, player feedback loops
+    domain_agent_owner: creation-agent
+    total_topics: 9
+    dreamer_phases: [Discover, Design, Deliver]
+    modes: [contextual, hybrid]
+
+  - kb_name: dreamer-storytelling
+    description: Narrative structure, creative writing with AI, character development
+    domain_agent_owner: creation-agent
+    total_topics: 7
+    dreamer_phases: [Discover, Design]
+    modes: [contextual]
+
+  - kb_name: dreamer-music-art
+    description: AI-generated music/art, remix culture, creative tools
+    domain_agent_owner: creation-agent
+    total_topics: 6
+    dreamer_phases: [Dream, Discover, Design]
+    modes: [contextual]
+
+  - kb_name: dreamer-maths-ai
+    description: Mathematical foundations of AI — probability, linear algebra, optimisation
+    domain_agent_owner: research-agent
+    total_topics: 10
+    dreamer_phases: [Dream, Discover]
+    modes: [contextual, direct, hybrid]
+
+  - kb_name: dreamer-language-ai
+    description: NLP concepts, language models, translation, sentiment analysis
+    domain_agent_owner: research-agent
+    total_topics: 8
+    dreamer_phases: [Dream, Discover, Design]
+    modes: [contextual, direct]
+
+  - kb_name: dreamer-ethical-ai
+    description: AI ethics, fairness, bias, privacy, consent, environmental impact
+    domain_agent_owner: compere-agent
+    total_topics: 6
+    dreamer_phases: [Dream, Deliver]
+    modes: [contextual, direct, hybrid]
+    always_append: true
+
+  - kb_name: dreamer-assessment
+    description: Dreamer 4D rubrics, progress levels, assessment criteria
+    domain_agent_owner: assessment-agent
+    total_topics: 5
+    dreamer_phases: [Design, Deliver]
+    modes: [contextual, direct, hybrid]
+    sample_doc: sample_kb/dreamer-assessment/dreamer-assessment-rubrics-01.md
+
+# Dreamer 4D Phase definitions (pedagogical spine)
+phase_definitions:
+  Dream:
+    zh: 想像
+    description: Generate original ideas, explore possibilities, ask "what if" beyond the first AI output
+    ib_atl_cross_ref: [thinking-creative, self-management-reflection]
+  Discover:
+    zh: 探究
+    description: Evaluate AI outputs for accuracy and bias, fact-check, cite AI tools, understand limitations
+    ib_atl_cross_ref: [research-information-literacy, research-media-literacy, thinking-critical]
+  Design:
+    zh: 創造
+    description: Produce original, functional, intentional work using AI tools; transfer skills across tools
+    ib_atl_cross_ref: [communication-representation, thinking-transfer]
+  Deliver:
+    zh: 分享
+    description: Present work clearly in both Chinese and English, confident oral delivery, thoughtful reflection
+    ib_atl_cross_ref: [communication-exchange, self-management-organization, self-management-reflection]

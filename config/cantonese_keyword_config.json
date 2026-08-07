@@ -1,0 +1,223 @@
+{
+  "_meta": {
+    "version": "v3-phase0",
+    "description": "Dreamer AI — Cantonese + Bilingual keyword config. Externalized for zero-code tuning.",
+    "last_updated": "2026-08-06"
+  },
+
+  "languages": {
+    "en":    { "script": "latin",       "market": "international",  "locale": "en-HK" },
+    "zh-hk": { "script": "traditional", "market": "hong_kong",      "locale": "zh-Hant-HK", "default": true },
+    "zh-cn": { "script": "simplified",  "market": "mainland",       "locale": "zh-Hans-CN" }
+  },
+
+  "mode_keywords": {
+    "direct": {
+      "en": [
+        "exam", "examination", "test", "quiz", "assessment",
+        "revision", "revise", "study for", "prepare for",
+        "homework", "assignment", "due tomorrow",
+        "school test", "mock exam", "final exam", "midterm",
+        "help me study", "teach me", "explain to me",
+        "practice questions", "past paper", "drill",
+        "I have a test", "I need to pass", "grade me"
+      ],
+      "zh-hk": [
+        "測驗", "考試", "小測", "大考", "模擬試",
+        "溫書", "溫習", "複習", "背書",
+        "做功課", "交功課", "練習", "操卷",
+        "補習", "補課", "默書", "聽寫",
+        "教我", "解釋俾我聽", "幫我溫",
+        "聽日測驗", "下星期考試", "就快考試",
+        "past paper", "歷屆試題", "pastpaper"
+      ],
+      "zh-cn": [
+        "测验", "考试", "测试", "模拟考试",
+        "复习", "温习", "背诵",
+        "做功课", "交作业", "练习", "刷题",
+        "补习", "补课", "默写", "听写",
+        "教我", "解释给我听", "帮我复习",
+        "明天测验", "下周考试", "快考试了",
+        "真题", "历年试题"
+      ]
+    },
+
+    "contextual": {
+      "en": [
+        "I want to make", "build a project", "create a",
+        "design", "invent", "explore",
+        "how does AI", "what is AI", "can AI",
+        "make a game", "build an app", "design a website",
+        "my own project", "creative", "imagine",
+        "draw", "animate", "story", "write a",
+        "experiment with", "try out", "play with"
+      ],
+      "zh-hk": [
+        "我想整", "我想做", "我想設計", "我想創造",
+        "整遊戲", "做遊戲", "設計遊戲",
+        "整app", "做app", "寫程式",
+        "AI係點樣", "AI可以點", "AI點樣做",
+        "探索", "試下", "玩下",
+        "自己嘅project", "自己嘅項目",
+        "畫畫", "動畫", "故事", "寫故仔",
+        "實驗", "創作", "想像"
+      ],
+      "zh-cn": [
+        "我想做", "我想设计", "我想创造",
+        "做游戏", "设计游戏",
+        "做app", "写程序",
+        "AI是什么样的", "AI可以怎么", "AI怎么做",
+        "探索", "试一下", "玩一下",
+        "自己的项目", "自己的project",
+        "画画", "动画", "故事", "写故事",
+        "实验", "创作", "想象"
+      ]
+    },
+
+    "hybrid": {
+      "en": [
+        "use AI to revise", "use AI to study",
+        "can AI help me with", "can AI explain",
+        "generate using AI", "AI-powered",
+        "AI tutor", "AI assistant for",
+        "AI help me learn", "AI to practice",
+        "use AI for homework", "AI for school"
+      ],
+      "zh-hk": [
+        "用AI溫", "用AI溫習", "用AI溫書",
+        "AI幫我溫", "AI幫我溫書",
+        "AI做功課", "AI幫手做功課",
+        "AI教我", "AI解釋",
+        "用AI練習", "AI補習",
+        "AI tutor", "AI老師"
+      ],
+      "zh-cn": [
+        "用AI复习", "用AI温习",
+        "AI帮我复习", "AI帮我温习",
+        "AI做作业", "AI帮忙做作业",
+        "AI教我", "AI解释",
+        "用AI练习", "AI补习",
+        "AI辅导", "AI老师"
+      ]
+    }
+  },
+
+  "explicit_mode_overrides": {
+    "direct": {
+      "en": ["exam mode", "test mode", "study mode", "revision mode", "direct mode"],
+      "zh-hk": ["測驗模式", "考試模式", "溫書模式"],
+      "zh-cn": ["测验模式", "考试模式", "复习模式"]
+    },
+    "contextual": {
+      "en": ["project mode", "creative mode", "explore mode", "contextual mode", "normal mode"],
+      "zh-hk": ["項目模式", "創作模式", "探索模式"],
+      "zh-cn": ["项目模式", "创作模式", "探索模式"]
+    }
+  },
+
+  "tone_rules": {
+    "P1-P3": {
+      "en": {
+        "max_sentence_words": 10,
+        "encouragement_every_n_turns": 2,
+        "no_sarcasm": true,
+        "positive_framing_only": true,
+        "avoid_words": ["wrong", "incorrect", "fail", "bad"],
+        "prefer_words": ["let's try", "almost", "good start", "keep going"]
+      },
+      "zh-hk": {
+        "max_sentence_chars": 25,
+        "encouragement_every_n_turns": 2,
+        "no_sarcasm": true,
+        "positive_framing_only": true,
+        "avoid_words": ["錯", "唔啱", "失敗", "差"],
+        "prefer_words": ["試下", "差少少", "幾好", "繼續"]
+      },
+      "zh-cn": {
+        "max_sentence_chars": 25,
+        "encouragement_every_n_turns": 2,
+        "no_sarcasm": true,
+        "positive_framing_only": true,
+        "avoid_words": ["错", "不对", "失败", "差"],
+        "prefer_words": ["试试", "差一点点", "不错", "继续"]
+      }
+    },
+    "P4-P6": {
+      "en": {
+        "max_sentence_words": 15,
+        "positive_framing": true,
+        "allow_gentle_correction": true,
+        "avoid_words": ["wrong"],
+        "prefer_words": ["not quite", "let's check", "another way", "what if"]
+      },
+      "zh-hk": {
+        "max_sentence_chars": 35,
+        "positive_framing": true,
+        "allow_gentle_correction": true,
+        "avoid_words": ["錯晒"],
+        "prefer_words": ["唔係好啱", "睇多次", "試另一個方法", "如果咁樣呢"]
+      },
+      "zh-cn": {
+        "max_sentence_chars": 35,
+        "positive_framing": true,
+        "allow_gentle_correction": true,
+        "avoid_words": ["全错"],
+        "prefer_words": ["不太对", "再看一次", "试试另一种方法", "如果这样呢"]
+      }
+    },
+    "S1-S3": {
+      "en": {
+        "full_sentences": true,
+        "constructive_critique_ok": true,
+        "no_grade_anxiety_language": true,
+        "avoid_words": ["you failed", "you're behind", "not good enough"],
+        "prefer_words": ["here's what to strengthen", "focus area", "let's build on"]
+      },
+      "zh-hk": {
+        "full_sentences": true,
+        "constructive_critique_ok": true,
+        "no_grade_anxiety_language": true,
+        "avoid_words": ["你唔得", "你落後", "唔夠好"],
+        "prefer_words": ["呢度可以加強", "重點", "喺呢個基礎上"]
+      },
+      "zh-cn": {
+        "full_sentences": true,
+        "constructive_critique_ok": true,
+        "no_grade_anxiety_language": true,
+        "avoid_words": ["你不行", "你落后", "不够好"],
+        "prefer_words": ["这里可以加强", "重点", "在这个基础上"]
+      }
+    }
+  },
+
+  "session_wrap_up": {
+    "en": {
+      "P1-P3": "Great session! You made progress on {topic}. Come back anytime — I'll be here! 🌟",
+      "P4-P6": "Well done today! You worked on {topic}. Remember, practice makes progress. See you next time!",
+      "S1-S3": "Solid session on {topic}. Your key takeaway: {summary}. Keep building on this — consistent practice is the way forward."
+    },
+    "zh-hk": {
+      "P1-P3": "今日學得好叻呀！{topic} 進步咗好多。隨時返嚟搵我啦！",
+      "P4-P6": "今日做得好好！{topic} 方面有進步。記得，練習就會越嚟越好。下次再見！",
+      "S1-S3": "{topic} 方面嘅進度唔錯。重點回顧：{summary}。繼續努力，持之以恆就係成功之道。"
+    },
+    "zh-cn": {
+      "P1-P3": "今天学得很棒！{topic} 进步了很多。随时回来找我吧！",
+      "P4-P6": "今天做得很好！{topic} 方面有进步。记得，练习就会越来越好。下次再见！",
+      "S1-S3": "{topic} 方面的进度不错。重点回顾：{summary}。继续努力，持之以恒就是成功之道。"
+    }
+  },
+
+  "ethical_ai_tags": {
+    "controlled_vocabulary": [
+      "fairness",
+      "safety",
+      "privacy",
+      "bias",
+      "consent",
+      "environment",
+      "transparency",
+      "accountability"
+    ]
+  }
+}

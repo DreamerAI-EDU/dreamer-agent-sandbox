@@ -22,6 +22,14 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Check stale imports in agents/
+        run: |
+          if grep -rnE 'from (security_agent|hermes_scheduler|merge_arbiter|otel_exporter|sandbox_manager|state_bus|agents|codex_cli|security_rules|trace_viewer) import' agents/ --include="*.py" | grep -v 'from \.'; then
+            echo "ERROR: stale absolute imports found in agents/ — use relative imports (from .xxx import ...)"
+            exit 1
+          fi
+          echo "All agents/ imports clean"
+
       - name: Run trial
         run: python trial_run.py
         env:

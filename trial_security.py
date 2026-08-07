@@ -165,7 +165,7 @@ def trial_c_pipeline_integration() -> bool:
     """Verify SecurityGate inserts correctly between PG execution and Merge Arbiter."""
     import sys
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from hermes_scheduler import (
+    from agents.hermes_scheduler import (
         HermesScheduler, SecurityGate, TaskNode, ResourceLock,
     )
 

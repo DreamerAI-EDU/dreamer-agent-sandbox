@@ -15,7 +15,7 @@ import asyncio
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from codex_cli import generate_code, is_available
+from agents.codex_cli import generate_code, is_available
 
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output_trials")
 
@@ -196,20 +196,39 @@ def _strip_fences(code: str, lang: str = "") -> str:
     return code
 
 
-async def main():
-    if not is_available():
-        print("OPENROUTER_API_KEY not set — cannot run trials")
-        sys.exit(1)
+def trial_5_security() -> bool:
+    """Run Security Agent trial (no LLM needed — validates AST rules)."""
+    try:
+        from trial_security import trial_a_blocking, trial_b_no_false_positive, trial_c_pipeline_integration
+        a = trial_a_blocking()
+        b = trial_b_no_false_positive()
+        c = trial_c_pipeline_integration()
+        ok = a and b and c
+        print(f"  [Security Audit] {'PASS' if ok else 'FAIL'} — {3 if ok else (2 if (a and b) else (1 if (a or b or c) else 0))}/3 scenarios")
+        return ok
+    except Exception as e:
+        print(f"  [Security Audit] FAIL — {e}")
+        return False
 
+
+async def main():
     print("=" * 60)
-    print("Dreamer AI — Codex CLI Exit Criteria Trials (4 scenarios)")
+    print("Dreamer AI — Exit Criteria Trials (5 scenarios)")
     print("=" * 60)
 
     results = {}
-    results["UI Change"] = await trial_1_ui_change()
-    results["New Feature"] = await trial_2_new_feature()
-    results["Bug Fix"] = await trial_3_bug_fix()
-    results["Write Tests"] = await trial_4_write_tests()
+
+    # Security trial runs first (no LLM dependency)
+    results["Security"] = trial_5_security()
+
+    # LLM-dependent trials
+    if not is_available():
+        print("OPENROUTER_API_KEY not set — skipping LLM trials")
+    else:
+        results["UI Change"] = await trial_1_ui_change()
+        results["New Feature"] = await trial_2_new_feature()
+        results["Bug Fix"] = await trial_3_bug_fix()
+        results["Write Tests"] = await trial_4_write_tests()
 
     passed = sum(1 for v in results.values() if v)
     total = len(results)

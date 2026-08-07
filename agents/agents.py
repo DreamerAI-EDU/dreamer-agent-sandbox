@@ -10,9 +10,9 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Dict, Optional
-from state_bus import StateBus, Message
-from sandbox_manager import SandboxManager, SandboxConfig, ResourceLockedError
-from codex_cli import generate_code, is_available
+from .state_bus import StateBus, Message
+from .sandbox_manager import SandboxManager, SandboxConfig, ResourceLockedError
+from .codex_cli import generate_code, is_available
 
 logger = logging.getLogger(__name__)
 

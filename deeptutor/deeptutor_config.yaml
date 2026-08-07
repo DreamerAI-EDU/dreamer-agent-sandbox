@@ -1,0 +1,144 @@
+# DeepTutor Configuration — Dreamer AI v3 Phase 0
+# Model config, capability routing, KB registry
+
+server:
+  host: "0.0.0.0"
+  ws_port: 8765
+  http_port: 8000
+  max_concurrent: 50
+  connection_timeout_seconds: 300
+  graceful_shutdown_seconds: 30
+
+session:
+  type: ephemeral              # v1: no persistent memory; v2: persistent
+  workspace_root: /app/data/workspaces
+  ttl_hours: 24                # ephemeral workspace cleanup
+  inactive_days: 90            # v2: persistent workspace cleanup threshold
+
+# === LLM Configuration ===
+llm:
+  provider: deepseek
+  model: deepseek-v4-flash
+  api_key: ${LLM_API_KEY}
+  base_url: https://api.deepseek.com
+  max_tokens: 4096
+  temperature: 0.7
+  timeout_seconds: 60
+  retry:
+    max_attempts: 3
+    backoff_seconds: 2
+
+# Embedding model for KB retrieval
+embedding:
+  model: BAAI/bge-m3
+  dimension: 1024
+  batch_size: 32
+
+# === Knowledge Base Registry ===
+knowledge_bases:
+  root: /app/data/knowledge_bases
+
+  # T1: Core Academic (4 KB)
+  dreamer-maths:
+    engine: llama_index
+    chunk_size: 512
+    chunk_overlap: 64
+    metadata_required: true      # YAML frontmatter enforced
+
+  dreamer-english:
+    engine: llama_index
+    chunk_size: 512
+    chunk_overlap: 64
+    metadata_required: true
+
+  dreamer-computing:
+    engine: llama_index
+    chunk_size: 512
+    chunk_overlap: 64
+    metadata_required: true
+
+  dreamer-science:
+    engine: llama_index
+    chunk_size: 512
+    chunk_overlap: 64
+    metadata_required: true
+
+  # T2: Support (3 KB)
+  dreamer-psd:
+    engine: page_index
+    metadata_required: true
+
+  dreamer-life_skills:
+    engine: page_index
+    metadata_required: true
+
+  dreamer-l2l:
+    engine: page_index
+    metadata_required: true
+
+  # T3: Context (1 KB + 3 Support)
+  dreamer-history:
+    engine: page_index
+    metadata_required: true
+
+  dreamer-rubrics:
+    engine: graph_rag
+    metadata_required: true
+
+  dreamer-portfolio:
+    engine: light_rag
+    metadata_required: true
+
+  dreamer-prerequisites:
+    engine: graph_rag
+    metadata_required: true
+
+  # Universal
+  dreamer-ethical-ai:
+    engine: llama_index
+    chunk_size: 256
+    chunk_overlap: 32
+    metadata_required: true
+    always_append: true           # Appended to every query
+
+# === Capability Registry ===
+capabilities:
+  chat:
+    enabled: true
+    kb_access: all
+    max_context_tokens: 16384
+
+  deep_question:
+    enabled: true
+    kb_access: [dreamer-maths, dreamer-english, dreamer-computing, dreamer-science]
+    max_iterations: 3
+
+  deep_solve:
+    enabled: true
+    kb_access: [dreamer-maths, dreamer-science, dreamer-computing]
+    max_iterations: 5
+
+  deep_research:
+    enabled: true
+    kb_access: all
+    max_iterations: 7
+    web_search_enabled: false      # Disabled for K12 safety
+
+  visualize:
+    enabled: true
+    max_render_time_seconds: 30
+
+  book_engine:
+    enabled: true
+    kb_access: [dreamer-maths, dreamer-english, dreamer-science, dreamer-history]
+
+  mastery_path:
+    enabled: false                 # v1: not used; v2: re-evaluate
+
+# === Observability ===
+observability:
+  health_endpoint: /health
+  metrics_endpoint: /metrics
+  log_level: INFO
+  cost_tracking: true
+  trace_sampling_rate: 0.1         # 10% of requests traced

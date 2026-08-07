@@ -1,0 +1,194 @@
+{
+    "_meta":  {
+                  "version":  "v3-phase0",
+                  "description":  "Dreamer AI � Dreamer 4D Progress Levels assessment label mapping. All 4 layers, all 4 age bands, all 3 languages. IB ATL used as internal cross-reference for school alignment.",
+                  "framework":  {
+                                    "primary":  "Dreamer 4D",
+                                    "reference":  [
+                                                      "IB ATL",
+                                                      "HK curriculum"
+                                                  ]
+                                },
+                  "last_updated":  "2026-08-06"
+              },
+    "internal_labels":  {
+                            "not_yet":  {
+                                            "key":  "not_yet",
+                                            "value":  "Not Yet"
+                                        },
+                            "developing":  {
+                                               "key":  "developing",
+                                               "value":  "Developing"
+                                           },
+                            "achieved":  {
+                                             "key":  "achieved",
+                                             "value":  "Achieved"
+                                         },
+                            "exemplary":  {
+                                              "key":  "exemplary",
+                                              "value":  "Exemplary"
+                                          }
+                        },
+    "label_mapping":  {
+                          "not_yet":  {
+                                          "kid_facing":  {
+                                                             "P1-P3":  {
+                                                                           "en":  "Getting Started",
+                                                                           "zh-hk":  "開始緊啦！",
+                                                                           "zh-cn":  "开始啦！"
+                                                                       },
+                                                             "P4-P6":  {
+                                                                           "en":  "Keep Going!",
+                                                                           "zh-hk":  "繼續努力！",
+                                                                           "zh-cn":  "继续努力！"
+                                                                       },
+                                                             "S1-S3":  {
+                                                                           "en":  "Not Yet",
+                                                                           "zh-hk":  "仍需努力",
+                                                                           "zh-cn":  "仍需努力"
+                                                                       }
+                                                         },
+                                          "parent_facing":  {
+                                                                "en":  "Not Yet Achieved",
+                                                                "zh-hk":  "尚未達標",
+                                                                "zh-cn":  "尚未达标"
+                                                            }
+                                      },
+                          "developing":  {
+                                             "kid_facing":  {
+                                                                "P1-P3":  {
+                                                                              "en":  "Making Progress",
+                                                                              "zh-hk":  "進步中！",
+                                                                              "zh-cn":  "进步中！"
+                                                                          },
+                                                                "P4-P6":  {
+                                                                              "en":  "Almost There!",
+                                                                              "zh-hk":  "就快得啦！",
+                                                                              "zh-cn":  "快做到啦！"
+                                                                          },
+                                                                "S1-S3":  {
+                                                                              "en":  "Developing",
+                                                                              "zh-hk":  "發展中",
+                                                                              "zh-cn":  "发展中"
+                                                                          }
+                                                            },
+                                             "parent_facing":  {
+                                                                   "en":  "Developing",
+                                                                   "zh-hk":  "發展中",
+                                                                   "zh-cn":  "发展中"
+                                                               }
+                                         },
+                          "achieved":  {
+                                           "kid_facing":  {
+                                                              "P1-P3":  {
+                                                                            "en":  "You\u0027ve Got It!",
+                                                                            "zh-hk":  "你做到啦！",
+                                                                            "zh-cn":  "你做到啦！"
+                                                                        },
+                                                              "P4-P6":  {
+                                                                            "en":  "Well Done!",
+                                                                            "zh-hk":  "做得好！",
+                                                                            "zh-cn":  "做得好！"
+                                                                        },
+                                                              "S1-S3":  {
+                                                                            "en":  "Achieved",
+                                                                            "zh-hk":  "已達標",
+                                                                            "zh-cn":  "已达标"
+                                                                        }
+                                                          },
+                                           "parent_facing":  {
+                                                                 "en":  "Achieved",
+                                                                 "zh-hk":  "已達標",
+                                                                 "zh-cn":  "已达标"
+                                                             }
+                                       },
+                          "exemplary":  {
+                                            "kid_facing":  {
+                                                               "P1-P3":  {
+                                                                             "en":  "Amazing Work!",
+                                                                             "zh-hk":  "好犀利呀！",
+                                                                             "zh-cn":  "太厉害啦！"
+                                                                         },
+                                                               "P4-P6":  {
+                                                                             "en":  "Excellent!",
+                                                                             "zh-hk":  "非常出色！",
+                                                                             "zh-cn":  "非常出色！"
+                                                                         },
+                                                               "S1-S3":  {
+                                                                             "en":  "Exemplary",
+                                                                             "zh-hk":  "卓越表現",
+                                                                             "zh-cn":  "卓越表现"
+                                                                         }
+                                                           },
+                                            "parent_facing":  {
+                                                                  "en":  "Exemplary",
+                                                                  "zh-hk":  "卓越表現",
+                                                                  "zh-cn":  "卓越表现"
+                                                              }
+                                        }
+                      },
+    "mastery_pct_from_label":  {
+                                   "not_yet":  0.25,
+                                   "developing":  0.50,
+                                   "achieved":  0.75,
+                                   "exemplary":  1.00
+                               },
+    "streak_rules":  {
+                         "description":  "Consecutive label improvements increment streak. Any regression resets streak to 0.",
+                         "improvement_chain":  [
+                                                   [
+                                                       "not_yet",
+                                                       "developing"
+                                                   ],
+                                                   [
+                                                       "not_yet",
+                                                       "achieved"
+                                                   ],
+                                                   [
+                                                       "not_yet",
+                                                       "exemplary"
+                                                   ],
+                                                   [
+                                                       "developing",
+                                                       "achieved"
+                                                   ],
+                                                   [
+                                                       "developing",
+                                                       "exemplary"
+                                                   ],
+                                                   [
+                                                       "achieved",
+                                                       "exemplary"
+                                                   ]
+                                               ]
+                     },
+    "parent_report_sections":  {
+                                   "en":  {
+                                              "summary":  "Learning Summary",
+                                              "progress":  "Progress by Topic",
+                                              "strengths":  "Areas of Strength",
+                                              "development":  "Areas for Development",
+                                              "recommendations":  "Suggested Next Steps",
+                                              "session_count":  "Total Sessions This Period",
+                                              "time_spent":  "Total Learning Time"
+                                          },
+                                   "zh-hk":  {
+                                                 "summary":  "學習摘要",
+                                                 "progress":  "各課題進度",
+                                                 "strengths":  "強項",
+                                                 "development":  "發展領域",
+                                                 "recommendations":  "建議下一步",
+                                                 "session_count":  "本期學習次數",
+                                                 "time_spent":  "總學習時間"
+                                             },
+                                   "zh-cn":  {
+                                                 "summary":  "学习摘要",
+                                                 "progress":  "各课题进度",
+                                                 "strengths":  "强项",
+                                                 "development":  "发展领域",
+                                                 "recommendations":  "建议下一步",
+                                                 "session_count":  "本期学习次数",
+                                                 "time_spent":  "总学习时间"
+                                             }
+                               }
+}

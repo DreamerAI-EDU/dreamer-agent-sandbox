@@ -293,7 +293,7 @@ class SecurityGate:
     """
 
     def __init__(self, output_dir: str = "."):
-        from security_agent import SecurityAgent, MAX_RETRIES
+        from .security_agent import SecurityAgent, MAX_RETRIES
         self.auditor = SecurityAgent()
         self.output_dir = output_dir
         self.MAX_RETRIES = MAX_RETRIES
@@ -361,7 +361,7 @@ class SecurityGate:
         Only includes retry-eligible (non-exhausted) findings.
         """
         import os
-        from security_agent import SecurityReport, Finding
+        from .security_agent import SecurityReport, Finding
 
         hints = []
         for artifact in task.artifacts:

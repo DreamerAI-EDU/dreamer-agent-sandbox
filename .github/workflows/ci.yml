@@ -85,4 +85,6 @@ jobs:
         run: pip install -r requirements.txt && pip install pytest-asyncio pytest-mock
 
       - name: Run Phase 2 tests
-        run: pytest tests/test_deeptutor_ws.py tests/test_session_manager.py tests/test_kid_safe_pipeline.py tests/test_kid_safe_wiring.py tests/test_tone_rewrite.py tests/test_label_soften.py tests/test_session_wrap.py tests/test_error_templates.py tests/test_ethical_ai_kb.py -v --tb=short
+        # test_concurrent.py not included — requires real container + real token,
+        # managed via trial_ws.py end-to-end smoke test instead.
+        run: pytest tests/test_deeptutor_ws.py tests/test_session_manager.py tests/test_kid_safe_pipeline.py tests/test_kid_safe_wiring.py tests/test_tone_rewrite.py tests/test_label_soften.py tests/test_session_wrap.py tests/test_error_templates.py tests/test_ethical_ai_kb.py tests/test_registry.py tests/test_subagents.py -v --tb=short

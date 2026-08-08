@@ -12,85 +12,91 @@ Hermes Scheduler
        ▼
 SubagentRegistry (agents/registry.py)
        │
-       ├── Agent A (e.g. TutorAgent)
-       ├── Agent B (e.g. SafetyAgent)
-       ├── Agent C (e.g. SearchAgent)
-       └── Agent D (e.g. KnowledgeAgent)
+       ├── curriculum (student-facing, CONTEXTUAL + HYBRID)
+       ├── assessment (student-facing, DIRECT + HYBRID)
+       ├── portfolio   (student-facing, CONTEXTUAL)
+       ├── parent_report (non-student-facing, mode_allowlist=None)
+       └── marketing     (non-student-facing, mode_allowlist=None)
 ```
 
 ## Registry Design (`agents/registry.py`)
 
-### Core Data Structures
+### Core API
 
-| Structure | Purpose |
-|-----------|---------|
-| `AgentEntry` | Agent metadata: name, class_path, capabilities, fallback priority |
-| `SubagentRegistry` | Singleton registry with lazy-load and capability-based routing |
+| Method | Purpose |
+|--------|---------|
+| `register(name, agent_class, kb_ownership, capabilities, mode_allowlist)` | Register an agent stub with metadata |
+| `get(name)` | Lazy-instantiate and return agent instance |
+| `list_all()` | All registered agent names |
+| `list_by_kb(kb_name)` | Agents that own/control a specific KB |
+| `list_by_mode(mode)` | Student-facing agents for a given query mode |
 
 ### Key Design Decisions
 
-1. **Lazy-load by default** — agents are imported on first dispatch, not at startup. Keeps cold-start latency low.
-2. **Capability-based routing** — Hermes sends a `capability` field (e.g. `"tutoring"`, `"safety"`, `"search"`) and the registry picks the best-fit agent.
-3. **Fallback chain** — if the primary agent returns `NOT_MY_JOB`, the registry tries the next candidate in priority order.
-4. **Zero LLM overhead** — routing is pure Python `dict`/`set` lookup. No LLM calls in the registry path.
+1. **Lazy-load** — agent instances created on first `get()`, not at register time. Keeps cold-start latency low.
+2. **Thread-safe** — `threading.RLock` guards all registry mutations and reads.
+3. **`mode_allowlist=None`** — semantic marker for non-student-facing agents. `list_by_mode()` skips them. This avoids mixing ParentReport/Marketing into student-query dispatch.
+4. **Phase 2.1 scope** — agent stubs only. Full LLM integration deferred to Phase 4 (Mode Routing).
+5. **No intent classification in Phase 2.1** — that lives in Phase 4 and uses `config/cantonese_keyword_config.json`.
 
-### Agent Stubs (Phase 2.1)
+## Agent Inventory (`agents/subagents.py`)
 
-| Agent | File | Capabilities |
-|-------|------|-------------|
-| `TutorAgent` | `agents/tutor_agent.py` | `tutoring`, `homework_help`, `explain`, `quiz` |
-| `SafetyAgent` | `agents/safety_agent.py` | `safety`, `content_filter`, `kid_safe` |
-| `SearchAgent` | `agents/search_agent.py` | `search`, `research`, `web_lookup` |
-| `KnowledgeAgent` | `agents/knowledge_agent.py` | `knowledge_graph`, `curriculum`, `prerequisite` |
-| `FallbackAgent` | `agents/fallback_agent.py` | `catch_all` (lowest priority, always available) |
+### Student-Facing Agents
 
-## Agent Ownership Matrix
+| Agent | Stub Class | Modes | KB Ownership | Capabilities |
+|-------|-----------|-------|-------------|-------------|
+| `curriculum` | `CurriculumAgentStub` | CONTEXTUAL, HYBRID | dreamer-maths, dreamer-english, dreamer-computing, dreamer-science, dreamer-psd, dreamer-life_skills, dreamer-l2l, dreamer-history, dreamer-prerequisites | lesson_plan, curriculum_nav, topic_design, prerequisite_check |
+| `assessment` | `AssessmentAgentStub` | DIRECT, HYBRID | dreamer-rubrics | quiz_gen, rubric_gen, auto_marking, progress_track |
+| `portfolio` | `PortfolioAgentStub` | CONTEXTUAL | dreamer-portfolio | portfolio_mgmt, reflection_prompt, artifact_curate |
 
-### Dispatch Logic (Hermes → Registry → Agent)
+### Non-Student-Facing Agents
+
+| Agent | Stub Class | mode_allowlist | Purpose |
+|-------|-----------|---------------|---------|
+| `parent_report` | `ParentReportAgentStub` | None | Generates parent-facing progress reports. Queries Dreamer DB only (not DeepTutor). |
+| `marketing` | `MarketingAgentStub` | None | Generates social media / marketing content. |
+
+## KB Ownership Matrix
+
+| Knowledge Base | Owner Agent | Reader Agents |
+|---------------|------------|---------------|
+| `dreamer-maths` | curriculum | assessment |
+| `dreamer-english` | curriculum | assessment |
+| `dreamer-computing` | curriculum | assessment, marketing |
+| `dreamer-science` | curriculum | assessment, marketing |
+| `dreamer-psd` | curriculum | portfolio |
+| `dreamer-life_skills` | curriculum | portfolio |
+| `dreamer-l2l` | curriculum | assessment |
+| `dreamer-history` | curriculum | — |
+| `dreamer-prerequisites` | curriculum | — |
+| `dreamer-rubrics` | assessment | — |
+| `dreamer-portfolio` | portfolio | parent_report |
+
+## Query Modes
+
+| Mode | Description | Served By |
+|------|------------|-----------|
+| `DIRECT` | Exam prep, quiz, direct instruction | assessment |
+| `CONTEXTUAL` | Project-based, exploration, discovery | curriculum, portfolio |
+| `HYBRID` | Mix of direct instruction and exploration | curriculum, assessment |
+
+Non-student-facing agents (ParentReport, Marketing) have `mode_allowlist=None` and are excluded from `list_by_mode()`. They use separate invocation paths outside the student-query dispatch.
+
+## Kid-Safe Wrap (Phase 2.3)
+
+All agent output passes through `KidSafePipeline` before reaching the student:
 
 ```
-User Message → intent_classifier (mode_keywords from cantonese_keyword_config.json)
-                        │
-         ┌──────────────┼──────────────┐
-         ▼              ▼              ▼
-      DIRECT         CONTEXTUAL      EXPLORATORY
-         │              │              │
-         ▼              ▼              ▼
-    TutorAgent     TutorAgent      KnowledgeAgent
-    (priority 1)   (priority 1)    (priority 1)
-         │              │              │
-         ▼              ▼              ▼
-    SafetyAgent    SearchAgent     SearchAgent
-    (priority 2)   (priority 2)    (priority 2)
+Agent response → tone_rewrite → session_wrap → student output
 ```
 
-### Ownership by Intent
-
-| Intent | Primary Agent | Secondary | Rationale |
-|--------|--------------|-----------|-----------|
-| Homework help / exam prep | TutorAgent | SafetyAgent | Safety wraps output; tutor handles content |
-| Creative / project | TutorAgent | SearchAgent | Search enriches context; tutor guides |
-| "How does AI work?" / explore | KnowledgeAgent | SearchAgent | Knowledge graph first; web as supplement |
-| Toxic / unsafe input | SafetyAgent | FallbackAgent | Safety handles gracefully; fallback if confounded |
-
-### Kid-Safe Wrap (Phase 2.3)
-
-All agent output passes through `KidSafePipeline` **before** reaching the student:
-
-```
-Agent response → KidSafePipeline
-                   ├── error path? → error_templates (bypass all middleware)
-                   └── normal path? → tone_rewrite → session_wrap → label_soften → output
-```
-
-The pipeline is implemented in `agents/kid_safe/` and wired into `hermes_scheduler.py` via three static methods:
-- `inject_kb_query()` — enriches context with ethical_ai_kb lookup
-- `kid_safe_wrap()` — applies full pipeline to normal responses
-- `kid_safe_error()` — renders kid-friendly error messages
+Error path bypasses all middleware and uses `error_templates` directly. Implemented in `agents/kid_safe/`, wired into `hermes_scheduler.py` via `kid_safe_wrap()` and `kid_safe_error()` static methods.
 
 ## Related Files
 
-- `agents/registry.py` — SubagentRegistry implementation
-- `agents/hermes_scheduler.py` — wiring + kid-safe static methods
-- `config/cantonese_keyword_config.json` — intent keyword definitions
+- `agents/registry.py` — SubagentRegistry implementation (125 lines)
+- `agents/subagents.py` — 5 agent stubs + `register_all()` (179 lines)
+- `tests/test_registry.py` — 16 unit tests
+- `tests/test_subagents.py` — 15 unit tests
+- `config/cantonese_keyword_config.json` — intent keywords (Phase 4 use)
 - `docs/phase2-kidsafe.md` — kid-safe pipeline details

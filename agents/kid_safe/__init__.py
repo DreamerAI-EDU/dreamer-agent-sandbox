@@ -2,7 +2,7 @@
 Dreamer AI Phase 2.3 — KidSafePipeline
 
 Middleware that sits between DeepTutor response and student-facing output.
-Chains: ToneRewrite → LabelSoften → SessionWrap.
+Chains: ToneRewrite → SessionWrap (normal path) or ErrorTemplates (error path).
 
 Two paths:
   Normal: ToneRewrite → response goes to student

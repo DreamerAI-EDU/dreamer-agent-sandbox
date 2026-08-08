@@ -89,8 +89,9 @@ The `done` event signals turn completion. The `error` event can appear at any po
 
 | File | Cases | Status |
 |------|-------|--------|
-| `tests/test_ws_client.py` | 12 | 12/12 PASS |
+| `tests/test_ws_client.py` | 14 | 14/14 PASS |
 | `tests/test_session_manager.py` | 11 | 11/11 PASS |
+| `tests/test_concurrent.py` | 10 | 10/10 PASS |
 
 **SessionManager tests:**
 1. create_session basic — SessionInfo populated, client attached
@@ -107,6 +108,8 @@ The `done` event signals turn completion. The `error` event can appear at any po
 
 ### 6. Open Items
 
-- [ ] `test_concurrent.py` — 10 concurrent stress test (watch OpenRouter `limit_remaining`)
-- [ ] Trial WS re-run: verify `done` / `result` / `cost_summary` / UTF-8 round-trip
-- [ ] Day 10 gate materials: trial output, test pass log, this doc
+All items closed — Day 10 gate ✅ (2026-08-08).
+
+- [x] `test_concurrent.py` — 10 concurrent stress test, 10/10 PASS
+- [x] Trial WS re-run: verified `done` / `result` / `cost_summary` / UTF-8 round-trip
+- [x] Day 10 gate materials: trial output, test pass log, this doc

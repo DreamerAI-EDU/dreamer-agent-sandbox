@@ -326,6 +326,58 @@ class HermesScheduler:
         return inject_kb(content, age_band)
 
     @staticmethod
+    def kid_safe_input(
+        query: str,
+        age_band: str,
+        lang_code: str,
+        student_id: str = "",
+        session_id: str = "",
+    ) -> Optional[dict]:
+        """Phase 2.5 — Input safety gate. Run BEFORE inject_kb_query.
+
+        Order in pipeline:
+            student input → kid_safe_input() → inject_kb_query() → DeepTutor
+
+        If query is safe, returns None (pass-through).
+        If query is blocked, returns dict with:
+            - response_message: str  (student-facing friendly message)
+            - event: dict           (for safety_events DB insert)
+            - is_welfare: bool      (True = welfare alert needed)
+
+        Welfare events fire async webhook alert (fire-and-forget).
+
+        Args:
+            query: Raw student query text.
+            age_band: "P1-P3", "P4-P6", or "S1-S3".
+            lang_code: "en", "zh-hk", or "zh-cn".
+            student_id: Student identifier for audit trail.
+            session_id: Session identifier for audit trail.
+
+        Returns:
+            None if safe; block dict if unsafe.
+        """
+        from .kid_safe.input_guard import InputGuard, notify_welfare
+
+        guard = InputGuard()
+        verdict = guard.check(
+            query, age_band, lang_code,
+            student_id=student_id, session_id=session_id,
+        )
+
+        if verdict.is_safe:
+            return None
+
+        # Blocked — fire webhook for welfare events
+        if verdict.is_welfare and verdict.event is not None:
+            notify_welfare(verdict.event)
+
+        return {
+            "response_message": verdict.response_message,
+            "event": verdict.event,
+            "is_welfare": verdict.is_welfare,
+        }
+
+    @staticmethod
     def kid_safe_wrap(
         response_text: str,
         age_band: str,

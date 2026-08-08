@@ -1,4 +1,4 @@
-﻿# dreamer-agent-sandbox
+# dreamer-agent-sandbox
 
 Hermes × DeepTutor integration — multi-agent AI tutoring platform for Hong Kong students.
 
@@ -9,11 +9,6 @@ Hermes × DeepTutor integration — multi-agent AI tutoring platform for Hong Ko
                                │
                                ▼
                     ┌─────────────────────┐
-                    │   cantonese_kw.json │── intent classification (Direct / Contextual / Exploratory)
-                    └────────┬────────────┘
-                             │
-                             ▼
-                    ┌─────────────────────┐
                     │  Hermes Scheduler   │
                     │ hermes_scheduler.py │
                     └────────┬────────────┘
@@ -21,10 +16,15 @@ Hermes × DeepTutor integration — multi-agent AI tutoring platform for Hong Ko
               ┌──────────────┼──────────────┐
               ▼              ▼              ▼
         ┌──────────┐  ┌──────────┐  ┌──────────────┐
-        │TutorAgent│  │SafetyAgent│  │KnowledgeAgent│  ... SubagentRegistry
-        └────┬─────┘  └────┬─────┘  └──────┬───────┘
+        │curriculum│  │assessment│  │  portfolio   │  ... SubagentRegistry
+        └────┬─────┘  └────┬─────┘  └──────┬───────┘  (student-facing)
+             │              │               │         DIRECT / CONTEXTUAL / HYBRID
              │              │               │
-             └──────────────┼───────────────┘
+      ┌──────┴──────┐                              ┌──────────────┐
+      │parent_report│ (non-student-facing,         │  marketing   │
+      └─────────────┘  mode_allowlist=None)         └──────────────┘
+             │
+             └──────────────┼───────────────────────┘
                             │
                             ▼
                    ┌────────────────────┐
@@ -38,10 +38,10 @@ Hermes × DeepTutor integration — multi-agent AI tutoring platform for Hong Ko
                    │  agents/kid_safe/  │
                    │  ┌──────────────┐  │
                    │  │ tone_rewrite │  │  S1: sarcasm strip → S2: anxiety strip
-                   │  │ label_soften │  │  S3: keyword replace → S4: word trim
-                   │  │ session_wrap │  │  S5: encouragement inject
-                   │  │error_templates│ │
+                   │  │ session_wrap │  │  S3: keyword replace → S4: word trim
+                   │  │error_templates│ │  S5: encouragement inject
                    │  │ ethical_ai_kb│  │
+                   │  │ label_soften │  │  (standalone: assessment labels)
                    │  └──────────────┘  │
                    └────────┬───────────┘
                             │
@@ -57,6 +57,7 @@ Hermes × DeepTutor integration — multi-agent AI tutoring platform for Hong Ko
 | WebSocket for DeepTutor transport | True streaming, server-side session management, event-driven protocol. |
 | Lazy-load SubagentRegistry | Cold-start latency stays low; agents imported on first dispatch. |
 | All config externalized (JSON/YAML) | Tune tone rules, intent keywords, progress labels without code changes. |
+| Non-student-facing agents excluded from mode routing | ParentReport and Marketing use `mode_allowlist=None`, skipped by `list_by_mode()`. |
 
 ## Component Docs
 
@@ -73,7 +74,7 @@ Hermes × DeepTutor integration — multi-agent AI tutoring platform for Hong Ko
 |--------|---------|
 | `config/ws_client.yaml` | DeepTutor WebSocket connection pool, reconnect, health check |
 | `config/kid_safe_tone_rules.json` | Tone rewrite rules: keyword replacements, sarcasm/anxiety patterns, age bands |
-| `config/cantonese_keyword_config.json` | Intent classification keywords (Direct / Contextual / Exploratory) |
+| `config/cantonese_keyword_config.json` | Intent classification keywords (Phase 4 — mode routing) |
 | `config/dreamer_progress_levels.json` | 4D progress labels: kid-facing (by age band), parent-facing, mastery mapping |
 
 ## Test Suite
@@ -82,12 +83,13 @@ Hermes × DeepTutor integration — multi-agent AI tutoring platform for Hong Ko
 # All 253 tests (Phase 1 + Phase 2)
 pytest tests/ -q
 
-# Phase 2 specific (197 tests)
+# Phase 2 breakdown: 197 kid-safe + 25 ws/session + 31 registry/subagents = 253
 pytest tests/test_deeptutor_ws.py tests/test_session_manager.py \
        tests/test_kid_safe_pipeline.py tests/test_kid_safe_wiring.py \
        tests/test_tone_rewrite.py tests/test_label_soften.py \
        tests/test_session_wrap.py tests/test_error_templates.py \
-       tests/test_ethical_ai_kb.py -q
+       tests/test_ethical_ai_kb.py tests/test_registry.py \
+       tests/test_subagents.py -q
 ```
 
 ## CI

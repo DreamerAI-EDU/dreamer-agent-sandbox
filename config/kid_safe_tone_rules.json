@@ -1,0 +1,123 @@
+{
+    "_meta": {
+        "version": "v1-phase2",
+        "description": "Kid-safe tone rewrite rules. Zero LLM — all rule-based. Tune JSON, no code change required.",
+        "last_updated": "2026-08-08"
+    },
+    "age_bands": {
+        "P1-P3": {
+            "max_words": 10,
+            "encouragement_interval": 2,
+            "encouragement_pool": {
+                "en": ["Great try!", "You're doing well!", "Keep it up!", "Nice effort!"],
+                "zh-hk": ["做得好！", "繼續努力！", "你好叻呀！", "加油！"],
+                "zh-cn": ["做得好！", "继续努力！", "你很棒！", "加油！"]
+            }
+        },
+        "P4-P6": {
+            "max_words": 15,
+            "encouragement_interval": 3,
+            "encouragement_pool": {
+                "en": ["Good thinking!", "You're on the right track!", "Nice work!", "That's a solid attempt!"],
+                "zh-hk": ["諗得好好！", "方向正確！", "做得唔錯！", "好嘗試！"],
+                "zh-cn": ["想得很好！", "方向对了！", "做得不错！", "很好的尝试！"]
+            }
+        },
+        "S1-S3": {
+            "max_words": 0,
+            "encouragement_interval": 0,
+            "encouragement_pool": {
+                "en": [],
+                "zh-hk": [],
+                "zh-cn": []
+            }
+        }
+    },
+    "keyword_replacements": {
+        "en": {
+            "wrong": "not quite right",
+            "incorrect": "not quite right",
+            "bad": "needs improvement",
+            "terrible": "could use more work",
+            "stupid": "not the best approach",
+            "fail": "not yet",
+            "failure": "a step in the journey",
+            "you can't": "let's try a different way",
+            "you don't know": "let's explore this together",
+            "idiot": "friend",
+            "dumb": "needs a rethink",
+            "hopeless": "keep going"
+        },
+        "zh-hk": {
+            "錯": "未算啱",
+            "錯晒": "差少少就啱",
+            "好差": "仲有進步空間",
+            "唔識": "一齊學下",
+            "蠢": "未熟",
+            "失敗": "學習過程",
+            "唔得": "試下另一個方法",
+            "你好渣": "繼續努力就得",
+            "冇用": "再試下",
+            "垃圾": "未夠好"
+        },
+        "zh-cn": {
+            "错": "还差一点点",
+            "错了": "还差一点点",
+            "很差": "还有进步空间",
+            "不会": "一起学一学",
+            "笨": "还没熟练",
+            "失败": "学习过程的一部分",
+            "不行": "试试另一个方法",
+            "你很差": "继续努力就好",
+            "没用": "再试试",
+            "垃圾": "还不够好"
+        }
+    },
+    "sarcasm_patterns": {
+        "en": [
+            "yeah right",
+            "good luck with that",
+            "oh really",
+            "sure you did",
+            "whatever",
+            "as if",
+            "how clever"
+        ],
+        "zh-hk": [
+            "係咩",
+            "你話係就係",
+            "得啦得啦",
+            "好叻喎"
+        ],
+        "zh-cn": [
+            "是吗",
+            "你说啥就是啥",
+            "行了行了",
+            "厉害了"
+        ]
+    },
+    "grade_anxiety_patterns": {
+        "en": [
+            "you'll fail the exam",
+            "you'll get a bad grade",
+            "not good enough for",
+            "you should know this",
+            "everyone else gets it",
+            "why can't you"
+        ],
+        "zh-hk": [
+            "你會唔合格",
+            "你會考得差",
+            "你應該識㗎",
+            "人哋都識",
+            "點解你唔識"
+        ],
+        "zh-cn": [
+            "你会不及格",
+            "你会考砸",
+            "你应该会的",
+            "别人都会",
+            "你为什么不会"
+        ]
+    }
+}

@@ -304,6 +304,79 @@ class HermesScheduler:
                 }
         return locks
 
+    # ── Phase 2.3: Kid-Safe Output Layer wiring ─────────
+
+    @staticmethod
+    def inject_kb_query(
+        content: str,
+        age_band: Optional[str] = None,
+    ) -> str:
+        """Inject Ethical AI KB prefix into a student query.
+
+        Call this BEFORE sending content to DeepTutor.
+
+        Args:
+            content: Raw student query text.
+            age_band: "P1-P3", "P4-P6", "S1-S3", or None.
+
+        Returns:
+            Query with dreamer-ethical-ai KB prepended.
+        """
+        from .kid_safe.ethical_ai_kb import inject_kb
+        return inject_kb(content, age_band)
+
+    @staticmethod
+    def kid_safe_wrap(
+        response_text: str,
+        age_band: str,
+        lang_code: str,
+        session: Optional["SessionState"] = None,
+    ) -> str:
+        """Pipe a DeepTutor response through KidSafePipeline.
+
+        Middleware position: DeepTutor response → KidSafe → student.
+
+        Args:
+            response_text: Raw DeepTutor response.
+            age_band: "P1-P3", "P4-P6", or "S1-S3".
+            lang_code: "en", "zh-hk", or "zh-cn".
+            session: Optional SessionState for turn tracking.
+
+        Returns:
+            Kid-safe student-facing output.
+        """
+        from .kid_safe import KidSafePipeline
+        pipeline = KidSafePipeline()
+        return pipeline.process_response(
+            response_text, age_band, lang_code, session=session,
+        )
+
+    @staticmethod
+    def kid_safe_error(
+        raw_error: str,
+        error_type: str,
+        age_band: str,
+        lang_code: str,
+    ) -> str:
+        """Pipe an error through KidSafePipeline error path.
+
+        Errors bypass ToneRewrite/LabelSoften/SessionWrap.
+        Student sees only a friendly template-based message.
+
+        Args:
+            raw_error: Raw/internal error string.
+            error_type: "ws_error", "timeout", "server_error",
+                        "empty_response", "unknown".
+            age_band: "P1-P3", "P4-P6", or "S1-S3".
+            lang_code: "en", "zh-hk", or "zh-cn".
+
+        Returns:
+            Student-facing friendly error message.
+        """
+        from .kid_safe import KidSafePipeline
+        pipeline = KidSafePipeline()
+        return pipeline.process_error(raw_error, error_type, age_band, lang_code)
+
 
 # ── Phase 3: Security Gate ──────────────────────────────
 

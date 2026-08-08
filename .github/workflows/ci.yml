@@ -69,3 +69,20 @@ jobs:
           name: trial-outputs
           path: output_trials/
           retention-days: 7
+
+  phase2-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt && pip install pytest-asyncio pytest-mock
+
+      - name: Run Phase 2 tests
+        run: pytest tests/test_deeptutor_ws.py tests/test_session_manager.py tests/test_kid_safe_pipeline.py tests/test_kid_safe_wiring.py tests/test_tone_rewrite.py tests/test_label_soften.py tests/test_session_wrap.py tests/test_error_templates.py tests/test_ethical_ai_kb.py -v --tb=short

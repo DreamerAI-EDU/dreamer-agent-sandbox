@@ -394,7 +394,79 @@ async def main():
     # Cleanup
     await sandbox.cleanup()
 
-    return 0 if all(r["passed"] for r in results.criteria.values()) else 1
+    # ── Phase 2.1: Registry wiring check ──────────────
+    print("\n" + "=" * 60)
+    print("Phase 2.1 — Registry Wiring Verification")
+    print("=" * 60)
+
+    r_wire_ok = verify_registry_wiring()
+    r_ok_count = sum(1 for v in r_wire_ok.values() if v)
+    print(f"  Registry wiring: {r_ok_count}/{len(r_wire_ok)} checks passed")
+
+    all_ok = all(r["passed"] for r in results.criteria.values()) and all(r_wire_ok.values())
+    return 0 if all_ok else 1
+
+
+def verify_registry_wiring() -> dict:
+    """Verify SubagentRegistry -> HermesScheduler wiring.
+
+    Returns dict of check_name → bool.
+    """
+    from agents.registry import SubagentRegistry
+    from agents.subagents import register_all
+    from agents.hermes_scheduler import HermesScheduler
+
+    checks = {}
+
+    # Create registry + register all stubs
+    registry = SubagentRegistry()
+    register_all(registry)
+
+    # Inject into scheduler
+    scheduler = HermesScheduler(registry=registry)
+    checks["registry_injected"] = scheduler.registry is registry
+
+    # select_candidates by mode
+    direct = scheduler.select_candidates("DIRECT")
+    checks["direct_candidates_not_empty"] = len(direct) > 0
+    checks["direct_has_assessment"] = any(c["name"] == "assessment" for c in direct)
+
+    contextual = scheduler.select_candidates("CONTEXTUAL")
+    checks["contextual_has_curriculum"] = any(
+        c["name"] == "curriculum" for c in contextual
+    )
+    checks["contextual_has_portfolio"] = any(
+        c["name"] == "portfolio" for c in contextual
+    )
+
+    # Non-student agents excluded
+    all_modes = ("DIRECT", "CONTEXTUAL", "HYBRID")
+    non_student_names = {"parent_report", "marketing"}
+    for mode in all_modes:
+        candidates = scheduler.select_candidates(mode)
+        leaked = [c["name"] for c in candidates if c["name"] in non_student_names]
+        checks[f"non_student_excluded_from_{mode}"] = len(leaked) == 0
+
+    # route() delegation
+    result = scheduler.route("curriculum", "t_wire_001",
+                             {"mode": "CONTEXTUAL", "grade_level": 1})
+    checks["route_curriculum_ok"] = (
+        result["agent"] == "curriculum" and result["status"] == "ok"
+    )
+
+    result = scheduler.route("assessment", "t_wire_002",
+                             {"mode": "DIRECT", "grade_level": 5})
+    checks["route_assessment_ok"] = (
+        result["agent"] == "assessment" and result["status"] == "ok"
+    )
+
+    # route() with non-student agent
+    result = scheduler.route("parent_report", "t_wire_003", {"key": "val"})
+    checks["route_non_student_ok"] = (
+        result["agent"] == "parent_report" and result["status"] == "ok"
+    )
+
+    return checks
 
 
 if __name__ == "__main__":

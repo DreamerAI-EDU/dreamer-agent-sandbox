@@ -82,7 +82,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt && pip install pytest-asyncio pytest-mock
+        run: pip install -r requirements-dev.txt
 
       - name: Run Phase 2 tests
         # test_concurrent.py not included — requires real container + real token,

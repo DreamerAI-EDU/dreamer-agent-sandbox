@@ -218,3 +218,9 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 output_trials/
+
+# DeepTutor container runtime — may contain API keys / tokens
+deeptutor/model_catalog.json
+deeptutor/settings/
+deeptutor/temp_logs.txt
+temp/

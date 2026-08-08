@@ -1,4 +1,4 @@
-name: Phase 2 CI
+name: Phase 3 CI
 
 on:
   push:
@@ -84,7 +84,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
-      - name: Run Phase 2 tests
+      - name: Run Phase 2 + Phase 3 tests
         # test_concurrent.py not included — requires real container + real token,
         # managed via trial_ws.py end-to-end smoke test instead.
-        run: pytest tests/test_ws_client.py tests/test_session_manager.py tests/test_kid_safe_pipeline.py tests/test_kid_safe_wiring.py tests/test_tone_rewrite.py tests/test_label_soften.py tests/test_session_wrap.py tests/test_error_templates.py tests/test_ethical_ai_kb.py tests/test_registry.py tests/test_subagents.py tests/test_input_guard.py -v --tb=short
+        run: pytest tests/test_ws_client.py tests/test_session_manager.py tests/test_kid_safe_pipeline.py tests/test_kid_safe_wiring.py tests/test_tone_rewrite.py tests/test_label_soften.py tests/test_session_wrap.py tests/test_error_templates.py tests/test_ethical_ai_kb.py tests/test_registry.py tests/test_subagents.py tests/test_input_guard.py tests/test_assessment_agent.py tests/test_assessment_db.py -v --tb=short

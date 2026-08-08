@@ -201,6 +201,11 @@ class DeepTutorWSClient:
     def healthy(self) -> bool:
         return self._health.liveness and self._health.readiness
 
+    @property
+    def is_connected(self) -> bool:
+        """True if WS is currently connected and dispatcher is running."""
+        return self._state == ConnectionState.CONNECTED
+
     # ------------------------------------------------------------------
     # Connect / Disconnect
     # ------------------------------------------------------------------

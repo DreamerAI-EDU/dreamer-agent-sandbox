@@ -17,12 +17,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agents.registry import SubagentRegistry
 from agents.subagents import (
     CurriculumAgentStub,
-    AssessmentAgentStub,
     PortfolioAgentStub,
     ParentReportAgentStub,
     MarketingAgentStub,
     register_all,
 )
+from agents.assessment_agent import AssessmentAgent
 
 
 # ── Fixtures ────────────────────────────────────────────
@@ -50,12 +50,12 @@ def test_curriculum_stub_execute():
     assert "[CurriculumAgent stub]" in result["result"]
 
 
-def test_assessment_stub_execute():
-    agent = AssessmentAgentStub()
+def test_assessment_agent_execute():
+    agent = AssessmentAgent()
     result = agent.execute("t2", {"mode": "DIRECT", "grade_level": 5})
     assert result["agent"] == "assessment"
     assert result["status"] == "ok"
-    assert "[AssessmentAgent stub]" in result["result"]
+    assert "[AssessmentAgent]" in result["result"] or "AssessmentAgent" in str(result)
 
 
 def test_portfolio_stub_execute():
@@ -157,6 +157,10 @@ def test_non_student_agents_still_gettable(populated_registry):
     marketing = populated_registry.get("marketing")
     assert isinstance(marketing, MarketingAgentStub)
 
+    # Assessment now returns real AssessmentAgent
+    assessment = populated_registry.get("assessment")
+    assert isinstance(assessment, AssessmentAgent)
+
 
 def test_non_student_agents_have_no_ownership_or_empty(populated_registry):
     """Non-student agents either own nothing or only read."""
@@ -175,8 +179,8 @@ def test_agent_classes_have_correct_static_attrs():
     assert CurriculumAgentStub.MODE_ALLOWLIST == ["CONTEXTUAL", "HYBRID"]
     assert "dreamer-prerequisites" in CurriculumAgentStub.KB_OWNERSHIP
 
-    assert AssessmentAgentStub.AGENT_NAME == "assessment"
-    assert AssessmentAgentStub.MODE_ALLOWLIST == ["DIRECT", "HYBRID"]
+    assert AssessmentAgent.AGENT_NAME == "assessment"
+    assert AssessmentAgent.MODE_ALLOWLIST == ["DIRECT", "HYBRID"]
 
     assert PortfolioAgentStub.AGENT_NAME == "portfolio"
     assert PortfolioAgentStub.MODE_ALLOWLIST == ["CONTEXTUAL"]

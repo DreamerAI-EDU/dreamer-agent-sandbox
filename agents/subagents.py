@@ -1,7 +1,8 @@
 """
-Dreamer AI Phase 2.1 — Sub Agent Stubs
-Placeholder agent classes for registry wiring.
-Full LLM integration deferred to Phase 4 (Mode Routing).
+Dreamer AI Phase 2.1 → 3 — Sub Agent Registry Entries
+Phase 2.1: Curriculum/Portfolio/ParentReport/Marketing stubs (Phase 4 real).
+Phase 3:   AssessmentAgentStub replaced by real AssessmentAgent
+           (agents/assessment_agent.py), keeping stub execute() contract.
 
 Non-student-facing agents (ParentReport, Marketing) register with
 mode_allowlist=None and use different invocation paths.
@@ -34,34 +35,6 @@ class CurriculumAgentStub:
             "status": "ok",
             "result": f"[CurriculumAgent stub] params={params}",
             "mode": params.get("mode", "CONTEXTUAL"),
-            "grade_level": params.get("grade_level", 1),
-        }
-
-
-class AssessmentAgentStub:
-    """Student-facing: generates assessments, quizzes, and rubrics.
-
-    KB reader: dreamer-maths/english/computing/science/l2l
-    KB owner: dreamer-rubrics
-    Modes: DIRECT, HYBRID
-    """
-
-    AGENT_NAME = "assessment"
-    KB_OWNERSHIP = ["dreamer-rubrics"]
-    KBS_READ = [
-        "dreamer-maths", "dreamer-english", "dreamer-computing",
-        "dreamer-science", "dreamer-l2l",
-    ]
-    CAPABILITIES = ["quiz_gen", "rubric_gen", "auto_marking", "progress_track"]
-    MODE_ALLOWLIST = ["DIRECT", "HYBRID"]
-
-    def execute(self, task_id: str, params: Dict) -> Dict:
-        return {
-            "agent": self.AGENT_NAME,
-            "task_id": task_id,
-            "status": "ok",
-            "result": f"[AssessmentAgent stub] params={params}",
-            "mode": params.get("mode", "DIRECT"),
             "grade_level": params.get("grade_level", 1),
         }
 
@@ -140,7 +113,13 @@ class MarketingAgentStub:
 # ── Registry helper ────────────────────────────────────
 
 def register_all(registry) -> None:
-    """Register all Phase 2.1 agent stubs into the given registry."""
+    """Register all agent entries into the given registry.
+
+    Phase 3: Assessment uses real AssessmentAgent (agents/assessment_agent.py).
+    Phase 2.1 stubs remain for other agents.
+    """
+    from .assessment_agent import AssessmentAgent
+
     registry.register(
         CurriculumAgentStub.AGENT_NAME,
         CurriculumAgentStub,
@@ -149,11 +128,11 @@ def register_all(registry) -> None:
         mode_allowlist=CurriculumAgentStub.MODE_ALLOWLIST,
     )
     registry.register(
-        AssessmentAgentStub.AGENT_NAME,
-        AssessmentAgentStub,
-        kb_ownership=AssessmentAgentStub.KB_OWNERSHIP,
-        capabilities=AssessmentAgentStub.CAPABILITIES,
-        mode_allowlist=AssessmentAgentStub.MODE_ALLOWLIST,
+        AssessmentAgent.AGENT_NAME,
+        AssessmentAgent,
+        kb_ownership=AssessmentAgent.KB_OWNERSHIP,
+        capabilities=AssessmentAgent.CAPABILITIES,
+        mode_allowlist=AssessmentAgent.MODE_ALLOWLIST,
     )
     registry.register(
         PortfolioAgentStub.AGENT_NAME,

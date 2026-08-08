@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "services": {
+    "llm": {
+      "active_profile_id": "openrouter-default",
+      "active_model_id": "deepseek-chat",
+      "profiles": [
+        {
+          "id": "openrouter-default",
+          "name": "OpenRouter Default",
+          "provider": "openrouter",
+          "binding": "openrouter",
+          "api_key": "sk-or-v1-YOUR_OPENROUTER_API_KEY_HERE",
+          "base_url": "https://openrouter.ai/api/v1",
+          "models": [
+            {
+              "id": "deepseek-chat",
+              "model": "deepseek/deepseek-chat"
+            }
+          ]
+        }
+      ]
+    },
+    "embedding": {
+      "active_profile_id": null,
+      "active_model_id": null,
+      "profiles": []
+    },
+    "search": {
+      "active_profile_id": null,
+      "profiles": []
+    },
+    "tts": {
+      "active_profile_id": null,
+      "active_model_id": null,
+      "profiles": []
+    },
+    "stt": {
+      "active_profile_id": null,
+      "active_model_id": null,
+      "profiles": []
+    },
+    "imagegen": {
+      "active_profile_id": null,
+      "active_model_id": null,
+      "profiles": []
+    },
+    "videogen": {
+      "active_profile_id": null,
+      "active_model_id": null,
+      "profiles": []
+    }
+  }
+}

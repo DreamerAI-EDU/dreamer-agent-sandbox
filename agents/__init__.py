@@ -10,9 +10,9 @@ from .security_rules import Finding, RuleRegistry
 from .registry import SubagentRegistry
 from .subagents import (
     CurriculumAgentStub,
-    AssessmentAgentStub,
     PortfolioAgentStub,
     ParentReportAgentStub,
     MarketingAgentStub,
     register_all as register_all_subagents,
 )
+from .assessment_agent import AssessmentAgent

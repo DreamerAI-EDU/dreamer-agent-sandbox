@@ -6,6 +6,7 @@ deeptutor_ws:
   host: "127.0.0.1"
   port: 8001
   scheme: "ws"
+  path: "/api/v1/ws"                    # verified: unified_ws.router prefix /api/v1 + @router.websocket("/ws")
 
   # Connection pool
   pool:

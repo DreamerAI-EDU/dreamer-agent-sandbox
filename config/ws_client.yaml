@@ -1,0 +1,35 @@
+# Hermes → DeepTutor WebSocket Client Configuration
+# Phase 2.2 — ws_client.yaml
+# Reference: Hermes_Integration_Plan_v3.md §3.1
+
+deeptutor_ws:
+  host: "127.0.0.1"
+  port: 8001
+  scheme: "ws"
+
+  # Connection pool
+  pool:
+    max_connections: 50
+    overflow_policy: 503
+
+  # Reconnection
+  reconnect:
+    enabled: true
+    backoff_seconds: [1, 2, 4, 8]
+    max_retries: 3
+
+  # Health check
+  health_check:
+    path: "/"                            # liveness: backend process 存活即 200
+    interval_seconds: 30
+    failure_threshold: 3                 # 3 consecutive failures → alert
+    readiness_path: "/api/v1/knowledge/health"  # KB subsystem readiness
+
+  # Timeouts (seconds)
+  timeouts:
+    connect: 10
+    query: 30
+    idle: 300
+
+  # Encoding
+  encoding: "utf-8"

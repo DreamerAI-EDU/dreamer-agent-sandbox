@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 from enum import Enum
 from collections import defaultdict
+from .registry import SubagentRegistry
 
 
 class TaskStatus(Enum):
@@ -57,10 +58,11 @@ class HermesScheduler:
     and produces an ordered ExecutionPlan with parallel groups.
     """
 
-    def __init__(self):
+    def __init__(self, registry: Optional[SubagentRegistry] = None):
         self._tasks: Dict[str, TaskNode] = {}
         self._completed: Set[str] = set()
         self._failed: Set[str] = set()
+        self.registry = registry  # Phase 2.1: injected singleton
 
     def add_task(self, task: TaskNode) -> None:
         self._tasks[task.task_id] = task
@@ -258,6 +260,33 @@ class HermesScheduler:
         self._failed.add(task_id)
         if task_id in self._tasks:
             self._tasks[task_id].status = TaskStatus.FAILED
+
+    # ── Phase 2.1: Registry-based routing ──────────────
+
+    def route(self, agent_name: str, task_id: str, params: Dict) -> Dict:
+        """Delegate execution to a registered sub-agent via the registry.
+
+        Returns the agent's execute() result dict.
+        Raises RuntimeError if registry is not injected.
+        """
+        if self.registry is None:
+            raise RuntimeError(
+                "HermesScheduler.route() called without SubagentRegistry injected"
+            )
+        agent = self.registry.get(agent_name)
+        return agent.execute(task_id, params)
+
+    def select_candidates(self, mode: str) -> List[dict]:
+        """Return candidate agents for a given student-query mode.
+
+        Delegates to registry.list_by_mode(). Returns only student-facing agents.
+        Raises RuntimeError if registry is not injected.
+        """
+        if self.registry is None:
+            raise RuntimeError(
+                "HermesScheduler.select_candidates() called without SubagentRegistry injected"
+            )
+        return self.registry.list_by_mode(mode)
 
     def get_task(self, task_id: str) -> Optional[TaskNode]:
         return self._tasks.get(task_id)

@@ -7,3 +7,12 @@ from .otel_exporter import SQLiteSpanExporter
 from .codex_cli import generate_code, is_available
 from .security_agent import SecurityAgent, MAX_RETRIES
 from .security_rules import Finding, RuleRegistry
+from .registry import SubagentRegistry
+from .subagents import (
+    CurriculumAgentStub,
+    AssessmentAgentStub,
+    PortfolioAgentStub,
+    ParentReportAgentStub,
+    MarketingAgentStub,
+    register_all as register_all_subagents,
+)

@@ -224,3 +224,6 @@ deeptutor/model_catalog.json
 deeptutor/settings/
 deeptutor/temp_logs.txt
 temp/
+
+# Local agent runtime junk (browser profiles, debug logs)
+.agent-browser/

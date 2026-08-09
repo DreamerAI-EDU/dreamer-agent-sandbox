@@ -4,7 +4,7 @@ DAG builder, parallel scheduler, lock conflict resolver.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 from enum import Enum
 from collections import defaultdict
 from .registry import SubagentRegistry
@@ -428,6 +428,111 @@ class HermesScheduler:
         from .kid_safe import KidSafePipeline
         pipeline = KidSafePipeline()
         return pipeline.process_error(raw_error, error_type, age_band, lang_code)
+
+
+# ═══════════════════════════════════════════════════════════
+# Phase 4: Student Query Routing Plan
+# ═══════════════════════════════════════════════════════════
+
+@dataclass
+class PlanContext:
+    """Output of build_plan(): complete context for student query routing.
+
+    Fields:
+        mode:       DIRECT | CONTEXTUAL | HYBRID
+        lang_code:  en | zh-hk | zh-cn
+        age_band:   P1-P3 | P4-P6 | S1-S3 (validated)
+        agent_list: eligible agent names for this mode
+        kb_list:    knowledge bases to query (includes ethical-ai)
+        prereq_gaps: prerequisite gaps (empty if no topic_id provided)
+    """
+    mode: str
+    lang_code: str
+    age_band: str
+    agent_list: List[str]
+    kb_list: List[str]
+    prereq_gaps: List[Dict[str, Any]] = field(default_factory=list)
+
+    def __post_init__(self):
+        if self.mode not in ("DIRECT", "CONTEXTUAL", "HYBRID"):
+            raise ValueError(f"Invalid mode: {self.mode}")
+        if self.lang_code not in ("en", "zh-hk", "zh-cn"):
+            raise ValueError(f"Invalid lang_code: {self.lang_code}")
+        from .curriculum_navigator import validate_age_band
+        self.age_band = validate_age_band(self.age_band)
+
+
+def build_plan(
+    text: str,
+    student_id: str,
+    age_band: str,
+    *,
+    topic_id: Optional[str] = None,
+    registry: Optional[SubagentRegistry] = None,
+    mode_router: Optional[Any] = None,
+    navigator: Optional[Any] = None,
+) -> PlanContext:
+    """Build a PlanContext from a student query.
+
+    Deterministic pipeline:
+      1. Validate age_band
+      2. ModeRouter.detect_language + route → mode + lang_code
+      3. registry.list_by_mode → agent_list
+      4. If topic_id: navigator.resolve_kb_list, check_prereq_gaps
+
+    Args:
+        text:       Raw student query text.
+        student_id: Student identifier.
+        age_band:   P1-P3 | P4-P6 | S1-S3.
+        topic_id:   Optional topic context.
+        registry:   SubagentRegistry for agent lookups.
+        mode_router: ModeRouter instance (default: lazy init).
+        navigator:  CurriculumNavigator instance (default: lazy init).
+
+    Returns:
+        PlanContext with mode, lang_code, agent_list, kb_list, prereq_gaps.
+
+    Raises:
+        ValueError: if age_band is invalid.
+        RuntimeError: if registry is None and agent list is needed.
+    """
+    from .curriculum_navigator import (
+        CurriculumNavigator,
+        ETHICAL_AI_KB,
+        validate_age_band,
+    )
+    from .mode_router import ModeRouter
+
+    # Step 1: Validate age_band
+    age_band = validate_age_band(age_band)
+
+    # Step 2: Route mode + language
+    router = mode_router if mode_router is not None else ModeRouter()
+    mode_val, lang_code = router.route(text)
+
+    # Step 3: Agent list from registry
+    if registry is None:
+        raise RuntimeError("build_plan() requires SubagentRegistry for agent list")
+    candidates = registry.list_by_mode(mode_val.value)
+    agent_list = [c["name"] for c in candidates]
+
+    # Step 4: KB list + prereq gaps (topic-dependent)
+    if topic_id:
+        nav = navigator if navigator is not None else CurriculumNavigator()
+        kb_list = nav.resolve_kb_list(mode_val.value, topic_id)
+        prereq_gaps = nav.check_prereq_gaps(student_id, topic_id)
+    else:
+        kb_list = [ETHICAL_AI_KB]
+        prereq_gaps = []
+
+    return PlanContext(
+        mode=mode_val.value,
+        lang_code=lang_code,
+        age_band=age_band,
+        agent_list=agent_list,
+        kb_list=kb_list,
+        prereq_gaps=prereq_gaps,
+    )
 
 
 # ── Phase 3: Security Gate ──────────────────────────────

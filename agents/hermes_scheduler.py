@@ -7,6 +7,9 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 from enum import Enum
 from collections import defaultdict
+import logging
+import os
+import sqlite3
 from .registry import SubagentRegistry
 
 
@@ -533,6 +536,393 @@ def build_plan(
         kb_list=kb_list,
         prereq_gaps=prereq_gaps,
     )
+
+
+# ═══════════════════════════════════════════════════════════
+# Phase 4 Day 21: execute() — Real Dispatch Pipeline
+# ═══════════════════════════════════════════════════════════
+
+def execute(
+    text: str,
+    student_id: str,
+    age_band: str,
+    *,
+    topic_id: Optional[str] = None,
+    capability: Optional[str] = None,
+    registry: Optional[SubagentRegistry] = None,
+    mode_router: Optional[Any] = None,
+    navigator: Optional[Any] = None,
+    session_id: str = "",
+) -> Dict[str, Any]:
+    """Real dispatch pipeline for student queries.
+
+    Pipeline order (do not reorder):
+      student query → kid_safe_input() → build_plan()
+        → dispatch by mode → kid_safe_wrap() → session_logs → structured JSON
+
+    DIRECT / HYBRID → Assessment Agent (quiz_gen by default).
+    DIRECT no topic_id → Kid-Safe clarifying template.
+    CONTEXTUAL → WS DeepTutor chat → kid_safe_wrap().
+
+    Args:
+        text:       Raw student query text.
+        student_id: Student identifier.
+        age_band:   P1-P3 | P4-P6 | S1-S3.
+        topic_id:   Optional topic context for DIRECT/HYBRID routing.
+        capability: Assessment capability override (default: quiz_gen).
+        registry:   SubagentRegistry for agent lookups.
+        mode_router: ModeRouter instance.
+        navigator:  CurriculumNavigator instance.
+        session_id: Session identifier for audit trail.
+
+    Returns:
+        Structured JSON dict:
+        {
+            content, mode, lang_code, age_band, kid_label,
+            citations, cost_summary
+        }
+    """
+    import uuid
+    import time
+
+    sid = session_id or f"stu_{student_id}_{uuid.uuid4().hex[:8]}"
+    start_time = time.perf_counter()
+
+    # ── Step 1: kid_safe_input (must run first) ──────
+    lang_code_hint = "zh-hk"  # default; overridden after build_plan
+    block = HermesScheduler.kid_safe_input(
+        text, age_band, lang_code_hint,
+        student_id=student_id, session_id=sid,
+    )
+    if block is not None:
+        # Safety-triggered block — return immediately, no further routing
+        _write_session_log(
+            session_id=sid, student_id=student_id,
+            mode="BLOCKED", lang_code=lang_code_hint,
+            age_band=age_band, agent_list=[],
+            topic_ids=[topic_id] if topic_id else [],
+            cost_summary={"input_safety_blocked": True},
+        )
+        return {
+            "content": block["response_message"],
+            "mode": "BLOCKED",
+            "lang_code": lang_code_hint,
+            "age_band": age_band,
+            "kid_label": "blocked",
+            "citations": [],
+            "cost_summary": {"input_safety_blocked": True},
+        }
+
+    # ── Step 2: build_plan() ─────────────────────────
+    reg = registry if registry is not None else _default_registry()
+    plan = build_plan(
+        text, student_id, age_band,
+        topic_id=topic_id, registry=reg,
+        mode_router=mode_router, navigator=navigator,
+    )
+
+    # ── Step 3: dispatch by mode ────────────────────
+    mode_val = plan.mode
+    lang_code = plan.lang_code
+    agent_list = plan.agent_list
+
+    if mode_val == "DIRECT":
+        if not topic_id:
+            # No topic — clarifying template instead of quiz_gen
+            result = _direct_clarifying_response(lang_code, plan.age_band)
+            mode_label = "DIRECT_clarifying"
+        else:
+            actual_cap = capability or "quiz_gen"
+            result = _call_assessment(plan, topic_id, actual_cap, student_id, sid)
+            mode_label = "DIRECT"
+    elif mode_val == "HYBRID":
+        actual_cap = capability or "quiz_gen"
+        result = _call_assessment(plan, topic_id, actual_cap, student_id, sid)
+        mode_label = "HYBRID"
+    elif mode_val == "CONTEXTUAL":
+        result = _run_contextual(text, plan, student_id, sid)
+        mode_label = "CONTEXTUAL"
+    else:
+        result = {
+            "content": "I'm not sure how to help with that.",
+            "kid_label": "unknown",
+            "citations": [],
+            "cost_summary": {},
+        }
+        mode_label = mode_val
+
+    # ── Step 4: session_logs ─────────────────────────
+    elapsed_ms = (time.perf_counter() - start_time) * 1000
+    cost = result.get("cost_summary", {})
+    cost["elapsed_ms"] = round(elapsed_ms, 1)
+
+    _write_session_log(
+        session_id=sid, student_id=student_id,
+        mode=mode_label, lang_code=lang_code,
+        age_band=plan.age_band, agent_list=agent_list,
+        topic_ids=[topic_id] if topic_id else [],
+        cost_summary=cost,
+    )
+
+    # ── Step 5: structured JSON ─────────────────────
+    return {
+        "content": result.get("content", ""),
+        "mode": mode_label,
+        "lang_code": lang_code,
+        "age_band": plan.age_band,
+        "kid_label": result.get("kid_label", "ok"),
+        "citations": result.get("citations", []),
+        "cost_summary": cost,
+    }
+
+
+# ── execute() helper: default registry ───────────────────
+
+_registry_cache: Optional[SubagentRegistry] = None
+
+
+def _default_registry() -> SubagentRegistry:
+    """Lazy singleton registry with all agents registered."""
+    global _registry_cache
+    if _registry_cache is None:
+        from .subagents import register_all
+        reg = SubagentRegistry()
+        register_all(reg)
+        _registry_cache = reg
+    return _registry_cache
+
+
+# ── execute() helper: DIRECT clarifying response ─────────
+
+def _direct_clarifying_response(lang_code: str, age_band: str) -> dict:
+    """Return a Kid-Safe clarifying message for DIRECT mode without topic_id."""
+    from .kid_safe.clarifying_templates import get_clarifying_message
+    content = get_clarifying_message(age_band, lang_code)
+    return {
+        "content": content,
+        "kid_label": "clarifying",
+        "citations": [],
+        "cost_summary": {"direct_clarifying": True},
+    }
+
+
+# ── execute() helper: Assessment Agent dispatch ──────────
+
+def _call_assessment(
+    plan: PlanContext,
+    topic_id: str,
+    capability: str,
+    student_id: str,
+    session_id: str,
+) -> dict:
+    """Call AssessmentAgent.quiz_gen (or specified capability) for DIRECT/HYBRID."""
+    from .assessment_agent import AssessmentAgent
+    agent = AssessmentAgent()
+    params = {
+        "capability": capability,
+        "topic": topic_id,
+        "mode": plan.mode,
+        "grade_level": 1,
+        "count": 3,
+        "question_type": "short_answer",
+        "lang_code": plan.lang_code,
+        "age_band": plan.age_band,
+        "student_id": student_id,
+        "session_id": session_id,
+    }
+    raw = agent.execute(task_id=session_id, params=params)
+
+    if raw.get("status") in ("ok", "ok_stub"):
+        questions = raw.get("questions", [])
+        content = _format_questions(questions, plan.lang_code, plan.age_band)
+        cost = {
+            "agent": "assessment",
+            "capability": capability,
+            "status": raw.get("status", "ok"),
+            "questions_count": len(questions),
+        }
+        return {
+            "content": content,
+            "kid_label": "ok",
+            "citations": [],
+            "cost_summary": cost,
+        }
+    # Fallback: return raw stub content
+    return {
+        "content": str(raw.get("result", "")),
+        "kid_label": "ok",
+        "citations": [],
+        "cost_summary": {"agent": "assessment", "status": raw.get("status", "error")},
+    }
+
+
+def _format_questions(questions: list, lang_code: str, age_band: str) -> str:
+    """Format quiz questions as student-facing text."""
+    if not questions:
+        from .kid_safe.error_templates import get_error_message
+        return get_error_message(age_band, lang_code)
+
+    lines = []
+    for i, q in enumerate(questions, 1):
+        text = q.get("question", q.get("id", f"Q{i}"))
+        lines.append(f"{i}. {text}")
+    return "\n\n".join(lines)
+
+
+# ── execute() helper: CONTEXTUAL WS chat ─────────────────
+
+def _run_contextual(
+    text: str,
+    plan: PlanContext,
+    student_id: str,
+    session_id: str,
+) -> dict:
+    """Run CONTEXTUAL mode: WS DeepTutor chat → kid_safe_wrap."""
+    import asyncio
+
+    # Inject ethical-ai KB into query
+    injected = HermesScheduler.inject_kb_query(text, plan.age_band)
+
+    async def _do_ws():
+        from .deeptutor_ws import DeepTutorWSClient
+        client = DeepTutorWSClient()
+        try:
+            if not client.is_connected:
+                await client.wait_until_ready(max_retries=5, interval=2.0)
+            # Build WS config: max_tokens from env if available
+            ws_config: dict = {}
+            raw_max = os.environ.get("DREAMER_MAX_TOKENS", "")
+            if raw_max and raw_max.isdigit():
+                ws_config["max_tokens"] = int(raw_max)
+            result = await client.query(
+                session_id=session_id,
+                content=injected,
+                capability="chat",
+                config=ws_config if ws_config else None,
+            )
+            return result
+        finally:
+            if client.is_connected:
+                await client.disconnect()
+
+    try:
+        try:
+            loop = asyncio.get_running_loop()
+            # Running loop — use ThreadPoolExecutor
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                ws_result = pool.submit(lambda: asyncio.run(_do_ws())).result(timeout=60)
+        except RuntimeError:
+            # No running loop — use asyncio.run directly
+            ws_result = asyncio.run(_do_ws())
+    except Exception as exc:
+        _log = logging.getLogger(__name__)
+        _log.warning("CONTEXTUAL WS failed (%s), falling back to stub", exc)
+        from .kid_safe.error_templates import get_error_message
+        return {
+            "content": get_error_message(plan.age_band, plan.lang_code),
+            "kid_label": "ws_error",
+            "citations": [],
+            "cost_summary": {"ws_fallback": "stub", "error": str(exc)},
+        }
+
+    # kid_safe_wrap the WS response
+    wrapped = HermesScheduler.kid_safe_wrap(
+        ws_result.content, plan.age_band, plan.lang_code,
+    )
+    return {
+        "content": wrapped,
+        "kid_label": "ok",
+        "citations": ws_result.citations,
+        "cost_summary": ws_result.cost_summary,
+    }
+
+
+# ── execute() helper: session_logs persistence ───────────
+
+_SESSION_LOGS_TABLE_ENSURED = False
+
+
+def _ensure_session_logs_table() -> None:
+    """Create session_logs table if not exists."""
+    global _SESSION_LOGS_TABLE_ENSURED
+    if _SESSION_LOGS_TABLE_ENSURED:
+        return
+    import os as _os
+    db_path = _os.environ.get(
+        "DREAMER_DB_PATH",
+        _os.path.join(_os.path.dirname(__file__), "..", "dreamer.db"),
+    )
+    db_path = _os.path.abspath(db_path)
+    _os.makedirs(_os.path.dirname(db_path), exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executescript("""
+            PRAGMA journal_mode=WAL;
+
+            CREATE TABLE IF NOT EXISTS session_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                student_id TEXT NOT NULL,
+                mode TEXT NOT NULL DEFAULT '',
+                lang_code TEXT NOT NULL DEFAULT '',
+                age_band TEXT NOT NULL DEFAULT '',
+                agent_list TEXT NOT NULL DEFAULT '[]',
+                topic_ids TEXT NOT NULL DEFAULT '[]',
+                cost_summary TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_session_logs_sid
+                ON session_logs(session_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_session_logs_student
+                ON session_logs(student_id, created_at);
+        """)
+    finally:
+        conn.close()
+    _SESSION_LOGS_TABLE_ENSURED = True
+
+
+def _write_session_log(
+    session_id: str,
+    student_id: str,
+    mode: str,
+    lang_code: str,
+    age_band: str,
+    agent_list: list,
+    topic_ids: list,
+    cost_summary: dict,
+) -> None:
+    """Write a session_logs row."""
+    import json
+    import datetime
+
+    _ensure_session_logs_table()
+
+    db_path = os.environ.get(
+        "DREAMER_DB_PATH",
+        os.path.join(os.path.dirname(__file__), "..", "dreamer.db"),
+    )
+    db_path = os.path.abspath(db_path)
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(
+            """INSERT INTO session_logs
+               (session_id, student_id, mode, lang_code, age_band,
+                agent_list, topic_ids, cost_summary, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                session_id, student_id, mode, lang_code, age_band,
+                json.dumps(agent_list, ensure_ascii=False),
+                json.dumps(topic_ids, ensure_ascii=False),
+                json.dumps(cost_summary, ensure_ascii=False),
+                datetime.datetime.utcnow().isoformat() + "Z",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 # ── Phase 3: Security Gate ──────────────────────────────

@@ -92,7 +92,7 @@ def print_result(label: str, result: dict, session_id: str):
 
 # ── Case runners ────────────────────────────────────────
 
-def run_case_1():
+async def run_case_1():
     """Case 1: DIRECT + quiz_gen + kb_list filtered.
 
     Topic: computing-game-design-01
@@ -103,7 +103,7 @@ def run_case_1():
     session_id = f"trial_c1_{int(time.time())}"
     reg = get_registry()
 
-    result = execute(
+    result = await execute(
         "我要做練習題準備測驗",
         student_id="trial_stu_c1",
         age_band="P4-P6",
@@ -133,7 +133,7 @@ def run_case_1():
     return result
 
 
-def run_case_2():
+async def run_case_2():
     """Case 2: CONTEXTUAL + WS DeepTutor + kid_safe_wrap.
 
     Topic: computing-game-design-01
@@ -143,7 +143,7 @@ def run_case_2():
     session_id = f"trial_c2_{int(time.time())}"
     reg = get_registry()
 
-    result = execute(
+    result = await execute(
         "我想整個遊戲",
         student_id="trial_stu_c2",
         age_band="S1-S3",
@@ -165,7 +165,7 @@ def run_case_2():
     return result
 
 
-def run_case_3():
+async def run_case_3():
     """Case 3: HYBRID + agent_list has curriculum + assessment.
 
     Query: 「用AI幫我溫書」
@@ -174,7 +174,7 @@ def run_case_3():
     session_id = f"trial_c3_{int(time.time())}"
     reg = get_registry()
 
-    result = execute(
+    result = await execute(
         "用AI幫我溫書",
         student_id="trial_stu_c3",
         age_band="P4-P6",
@@ -202,7 +202,7 @@ def run_case_3():
     return result
 
 
-def run_case_4():
+async def run_case_4():
     """Case 4: "project mode" override → CONTEXTUAL.
 
     Query: "project mode, I want to revise for exam"
@@ -211,7 +211,7 @@ def run_case_4():
     session_id = f"trial_c4_{int(time.time())}"
     reg = get_registry()
 
-    result = execute(
+    result = await execute(
         "project mode, I want to revise for exam",
         student_id="trial_stu_c4",
         age_band="S1-S3",
@@ -235,7 +235,7 @@ def run_case_4():
 
 # ── Main ────────────────────────────────────────────────
 
-def main():
+async def main():
     print("=" * 60)
     print("Phase 4 Day 21 — Trial Routing (4 cases)")
     print("=" * 60)
@@ -244,25 +244,25 @@ def main():
 
     # Case 1
     try:
-        results["c1"] = run_case_1()
+        results["c1"] = await run_case_1()
     except Exception as e:
         print(f"\n  Case 1 FAILED: {e}")
 
     # Case 2
     try:
-        results["c2"] = run_case_2()
+        results["c2"] = await run_case_2()
     except Exception as e:
         print(f"\n  Case 2 FAILED: {e}")
 
     # Case 3
     try:
-        results["c3"] = run_case_3()
+        results["c3"] = await run_case_3()
     except Exception as e:
         print(f"\n  Case 3 FAILED: {e}")
 
     # Case 4
     try:
-        results["c4"] = run_case_4()
+        results["c4"] = await run_case_4()
     except Exception as e:
         print(f"\n  Case 4 FAILED: {e}")
 
@@ -280,4 +280,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

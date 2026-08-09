@@ -542,7 +542,7 @@ def build_plan(
 # Phase 4 Day 21: execute() — Real Dispatch Pipeline
 # ═══════════════════════════════════════════════════════════
 
-def execute(
+async def execute(
     text: str,
     student_id: str,
     age_band: str,
@@ -555,6 +555,8 @@ def execute(
     session_id: str = "",
 ) -> Dict[str, Any]:
     """Real dispatch pipeline for student queries.
+
+    Async — callers must await this function.
 
     Pipeline order (do not reorder):
       student query → kid_safe_input() → build_plan()
@@ -589,7 +591,12 @@ def execute(
     start_time = time.perf_counter()
 
     # ── Step 1: kid_safe_input (must run first) ──────
-    lang_code_hint = "zh-hk"  # default; overridden after build_plan
+    # Use ModeRouter.detect_language() for correct guard rule table matching
+    router = mode_router
+    if router is None:
+        from .mode_router import ModeRouter
+        router = ModeRouter()
+    lang_code_hint = router.detect_language(text)
     block = HermesScheduler.kid_safe_input(
         text, age_band, lang_code_hint,
         student_id=student_id, session_id=sid,
@@ -618,30 +625,41 @@ def execute(
     plan = build_plan(
         text, student_id, age_band,
         topic_id=topic_id, registry=reg,
-        mode_router=mode_router, navigator=navigator,
+        mode_router=router, navigator=navigator,
     )
 
     # ── Step 3: dispatch by mode ────────────────────
     mode_val = plan.mode
     lang_code = plan.lang_code
-    agent_list = plan.agent_list
 
     if mode_val == "DIRECT":
         if not topic_id:
             # No topic — clarifying template instead of quiz_gen
             result = _direct_clarifying_response(lang_code, plan.age_band)
             mode_label = "DIRECT_clarifying"
+            agent_list: list = []
         else:
             actual_cap = capability or "quiz_gen"
-            result = _call_assessment(plan, topic_id, actual_cap, student_id, sid)
+            result = await _call_assessment(plan, topic_id, actual_cap, student_id, sid)
             mode_label = "DIRECT"
+            agent_list = ["assessment"]
     elif mode_val == "HYBRID":
-        actual_cap = capability or "quiz_gen"
-        result = _call_assessment(plan, topic_id, actual_cap, student_id, sid)
-        mode_label = "HYBRID"
+        if not topic_id:
+            # No topic — clarifying template instead of quiz_gen
+            # HYBRID requires topic_id for Curriculum context; without it,
+            # quiz_gen(topic=None) would produce garbage
+            result = _direct_clarifying_response(lang_code, plan.age_band)
+            mode_label = "HYBRID_clarifying"
+            agent_list = []
+        else:
+            actual_cap = capability or "quiz_gen"
+            result = await _call_assessment(plan, topic_id, actual_cap, student_id, sid)
+            mode_label = "HYBRID"
+            agent_list = ["assessment"]  # v1: only assessment runs here
     elif mode_val == "CONTEXTUAL":
-        result = _run_contextual(text, plan, student_id, sid)
+        result = await _run_contextual(text, plan, student_id, sid)
         mode_label = "CONTEXTUAL"
+        agent_list = ["deeptutor"]
     else:
         result = {
             "content": "I'm not sure how to help with that.",
@@ -650,6 +668,7 @@ def execute(
             "cost_summary": {},
         }
         mode_label = mode_val
+        agent_list = []
 
     # ── Step 4: session_logs ─────────────────────────
     elapsed_ms = (time.perf_counter() - start_time) * 1000
@@ -708,21 +727,28 @@ def _direct_clarifying_response(lang_code: str, age_band: str) -> dict:
 
 # ── execute() helper: Assessment Agent dispatch ──────────
 
-def _call_assessment(
+async def _call_assessment(
     plan: PlanContext,
     topic_id: str,
     capability: str,
     student_id: str,
     session_id: str,
 ) -> dict:
-    """Call AssessmentAgent.quiz_gen (or specified capability) for DIRECT/HYBRID."""
+    """Call AssessmentAgent.quiz_gen (or specified capability) for DIRECT/HYBRID.
+
+    Uses async agent.quiz_gen() for real LLM assessment.
+    Falls back to stub if container is unreachable.
+    """
     from .assessment_agent import AssessmentAgent
     agent = AssessmentAgent()
+    # Map age_band to grade_level: P1-P3→1, P4-P6→4, S1-S3→7
+    _age_grade_map = {"P1": 1, "P2": 1, "P3": 1, "P4": 4, "P5": 4, "P6": 4, "S1": 7, "S2": 7, "S3": 7}
+    grade_level = _age_grade_map.get(plan.age_band, 1)
     params = {
         "capability": capability,
         "topic": topic_id,
         "mode": plan.mode,
-        "grade_level": 1,
+        "grade_level": grade_level,
         "count": 3,
         "question_type": "short_answer",
         "lang_code": plan.lang_code,
@@ -730,11 +756,23 @@ def _call_assessment(
         "student_id": student_id,
         "session_id": session_id,
     }
-    raw = agent.execute(task_id=session_id, params=params)
+
+    if capability == "quiz_gen":
+        raw = await agent.quiz_gen(params)
+    elif capability == "rubric_gen":
+        raw = await agent.rubric_gen(params)
+    elif capability == "auto_marking":
+        raw = await agent.auto_marking(params)
+    elif capability == "progress_track":
+        raw = await agent.progress_track(params)
+    else:
+        raw = agent.execute(task_id=session_id, params=params)
 
     if raw.get("status") in ("ok", "ok_stub"):
         questions = raw.get("questions", [])
         content = _format_questions(questions, plan.lang_code, plan.age_band)
+        # Kid-Safe Output Layer: all outputs pass through kid_safe_wrap
+        content = HermesScheduler.kid_safe_wrap(content, plan.age_band, plan.lang_code)
         cost = {
             "agent": "assessment",
             "capability": capability,
@@ -771,7 +809,7 @@ def _format_questions(questions: list, lang_code: str, age_band: str) -> str:
 
 # ── execute() helper: CONTEXTUAL WS chat ─────────────────
 
-def _run_contextual(
+async def _run_contextual(
     text: str,
     plan: PlanContext,
     student_id: str,
@@ -783,38 +821,21 @@ def _run_contextual(
     # Inject ethical-ai KB into query
     injected = HermesScheduler.inject_kb_query(text, plan.age_band)
 
-    async def _do_ws():
-        from .deeptutor_ws import DeepTutorWSClient
-        client = DeepTutorWSClient()
-        try:
-            if not client.is_connected:
-                await client.wait_until_ready(max_retries=5, interval=2.0)
-            # Build WS config: max_tokens from env if available
-            ws_config: dict = {}
-            raw_max = os.environ.get("DREAMER_MAX_TOKENS", "")
-            if raw_max and raw_max.isdigit():
-                ws_config["max_tokens"] = int(raw_max)
-            result = await client.query(
-                session_id=session_id,
-                content=injected,
-                capability="chat",
-                config=ws_config if ws_config else None,
-            )
-            return result
-        finally:
-            if client.is_connected:
-                await client.disconnect()
-
+    from .deeptutor_ws import DeepTutorWSClient
+    client = DeepTutorWSClient()
     try:
-        try:
-            loop = asyncio.get_running_loop()
-            # Running loop — use ThreadPoolExecutor
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                ws_result = pool.submit(lambda: asyncio.run(_do_ws())).result(timeout=60)
-        except RuntimeError:
-            # No running loop — use asyncio.run directly
-            ws_result = asyncio.run(_do_ws())
+        if not client.is_connected:
+            await client.wait_until_ready(max_retries=5, interval=2.0)
+        ws_config: dict = {}
+        raw_max = os.environ.get("DREAMER_MAX_TOKENS", "")
+        if raw_max and raw_max.isdigit():
+            ws_config["max_tokens"] = int(raw_max)
+        ws_result = await client.query(
+            session_id=session_id,
+            content=injected,
+            capability="chat",
+            config=ws_config if ws_config else None,
+        )
     except Exception as exc:
         _log = logging.getLogger(__name__)
         _log.warning("CONTEXTUAL WS failed (%s), falling back to stub", exc)
@@ -825,6 +846,9 @@ def _run_contextual(
             "citations": [],
             "cost_summary": {"ws_fallback": "stub", "error": str(exc)},
         }
+    finally:
+        if client.is_connected:
+            await client.disconnect()
 
     # kid_safe_wrap the WS response
     wrapped = HermesScheduler.kid_safe_wrap(

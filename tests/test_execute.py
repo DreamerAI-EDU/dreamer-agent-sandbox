@@ -10,6 +10,7 @@ import json
 import os
 import sqlite3
 import sys
+import asyncio
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -63,10 +64,11 @@ def test_execute_blocked(monkeypatch, tmp_db, registry):
 
     monkeypatch.setattr(HermesScheduler, "kid_safe_input", mock_block)
 
-    result = execute(
+    result = asyncio.run(execute(
         "harmful query", "stu_001", "P4-P6",
         registry=registry,
     )
+)
     assert result["mode"] == "BLOCKED"
     assert result["kid_label"] == "blocked"
     assert "talk about something else" in result["content"]
@@ -83,15 +85,18 @@ def test_execute_direct_clarifying(monkeypatch, tmp_db, registry):
 
     # Force DIRECT mode
     class FakeRouter:
+        def detect_language(self, text=None):
+            return "zh-hk"
         def route(self, text):
             from agents.mode_router import Mode
             return Mode.DIRECT, "zh-hk"
 
-    result = execute(
+    result = asyncio.run(execute(
         "我想溫書", "stu_001", "P4-P6",
         registry=registry,
         mode_router=FakeRouter(),
     )
+)
     assert result["mode"] == "DIRECT_clarifying"
     assert result["kid_label"] == "clarifying"
     assert "溫邊科" in result["content"]
@@ -106,18 +111,29 @@ def test_execute_direct_quiz(monkeypatch, tmp_db, registry):
     from agents.assessment_agent import AssessmentAgent
 
     monkeypatch.setattr(HermesScheduler, "kid_safe_input", lambda *a, **k: None)
+    monkeypatch.setattr(HermesScheduler, "kid_safe_wrap", lambda content, *a, **k: content)
+# Mock quiz_gen to avoid real WS connection
+    from agents import assessment_agent as _aa
+    async def _mock_quiz(self, params):
+        return {"agent": "assessment", "capability": "quiz_gen", "status": "ok",
+                "questions": [{"id": "q1", "question": "Mock Q1", "type": "short_answer", "grade_level": 4}],
+                "topic": params.get("topic", ""), "grade_level": 1, "rubric_id": "", "cost_tokens": 150}
+    monkeypatch.setattr(_aa.AssessmentAgent, "quiz_gen", _mock_quiz)
 
     class FakeRouter:
+        def detect_language(self, text=None):
+            return "zh-hk"
         def route(self, text):
             from agents.mode_router import Mode
             return Mode.DIRECT, "zh-hk"
 
-    result = execute(
+    result = asyncio.run(execute(
         "我要考試溫習整遊戲嘅課題", "stu_001", "P4-P6",
         topic_id="computing-game-design-01",
         registry=registry,
         mode_router=FakeRouter(),
     )
+)
     assert result["mode"] == "DIRECT"
     assert result["kid_label"] == "ok"
     assert "content" in result
@@ -132,18 +148,29 @@ def test_execute_hybrid_quiz(monkeypatch, tmp_db, registry):
     from agents.hermes_scheduler import HermesScheduler
 
     monkeypatch.setattr(HermesScheduler, "kid_safe_input", lambda *a, **k: None)
+    monkeypatch.setattr(HermesScheduler, "kid_safe_wrap", lambda content, *a, **k: content)
+# Mock quiz_gen to avoid real WS connection
+    from agents import assessment_agent as _aa
+    async def _mock_quiz(self, params):
+        return {"agent": "assessment", "capability": "quiz_gen", "status": "ok",
+                "questions": [{"id": "q1", "question": "Mock Q1", "type": "short_answer", "grade_level": 4}],
+                "topic": params.get("topic", ""), "grade_level": 1, "rubric_id": "", "cost_tokens": 150}
+    monkeypatch.setattr(_aa.AssessmentAgent, "quiz_gen", _mock_quiz)
 
     class FakeRouter:
+        def detect_language(self, text=None):
+            return "zh-hk"
         def route(self, text):
             from agents.mode_router import Mode
             return Mode.HYBRID, "zh-hk"
 
-    result = execute(
+    result = asyncio.run(execute(
         "用AI幫我溫書", "stu_001", "P4-P6",
         topic_id="computing-game-design-01",
         registry=registry,
         mode_router=FakeRouter(),
     )
+)
     assert result["mode"] == "HYBRID"
     assert result["kid_label"] == "ok"
     assert result["lang_code"] == "zh-hk"
@@ -156,19 +183,29 @@ def test_execute_direct_capability_override(monkeypatch, tmp_db, registry):
     from agents.hermes_scheduler import HermesScheduler
 
     monkeypatch.setattr(HermesScheduler, "kid_safe_input", lambda *a, **k: None)
+# Mock rubric_gen to avoid real WS connection
+    from agents import assessment_agent as _aa
+    async def _mock_rubric(self, params):
+        return {"agent": "assessment", "capability": "rubric_gen", "status": "ok",
+                "rubric_id": "rubric_test_001", "criteria": params.get("criteria", []),
+                "topic": params.get("topic", ""), "grade_level": 1, "cost_tokens": 100}
+    monkeypatch.setattr(_aa.AssessmentAgent, "rubric_gen", _mock_rubric)
 
     class FakeRouter:
+        def detect_language(self, text=None):
+            return "zh-hk"
         def route(self, text):
             from agents.mode_router import Mode
             return Mode.DIRECT, "zh-hk"
 
-    result = execute(
+    result = asyncio.run(execute(
         "test", "stu_001", "P4-P6",
         topic_id="computing-game-design-01",
         capability="rubric_gen",
         registry=registry,
         mode_router=FakeRouter(),
     )
+)
     assert result["mode"] == "DIRECT"
     # rubric_gen returns stub with rubric_id
     assert "cost_summary" in result
@@ -183,16 +220,19 @@ def test_execute_contextual_stub(monkeypatch, tmp_db, registry):
     monkeypatch.setattr(HermesScheduler, "kid_safe_input", lambda *a, **k: None)
 
     class FakeRouter:
+        def detect_language(self, text=None):
+            return "en"
         def route(self, text):
             from agents.mode_router import Mode
             return Mode.CONTEXTUAL, "en"
 
     # WS unavailable → stub fallback
-    result = execute(
+    result = asyncio.run(execute(
         "Tell me about game design", "stu_001", "S1-S3",
         registry=registry,
         mode_router=FakeRouter(),
     )
+)
     assert result["mode"] == "CONTEXTUAL"
     # Should get stub error message when WS is unavailable
     assert "content" in result
@@ -206,18 +246,29 @@ def test_execute_session_logs_written(monkeypatch, tmp_db, registry):
     from agents.hermes_scheduler import HermesScheduler
 
     monkeypatch.setattr(HermesScheduler, "kid_safe_input", lambda *a, **k: None)
+    monkeypatch.setattr(HermesScheduler, "kid_safe_wrap", lambda content, *a, **k: content)
+# Mock quiz_gen to avoid real WS connection
+    from agents import assessment_agent as _aa
+    async def _mock_quiz(self, params):
+        return {"agent": "assessment", "capability": "quiz_gen", "status": "ok",
+                "questions": [{"id": "q1", "question": "Mock Q1", "type": "short_answer", "grade_level": 4}],
+                "topic": params.get("topic", ""), "grade_level": 1, "rubric_id": "", "cost_tokens": 150}
+    monkeypatch.setattr(_aa.AssessmentAgent, "quiz_gen", _mock_quiz)
 
     class FakeRouter:
+        def detect_language(self, text=None):
+            return "zh-hk"
         def route(self, text):
             from agents.mode_router import Mode
             return Mode.DIRECT, "zh-hk"
 
-    result = execute(
+    result = asyncio.run(execute(
         "hello", "stu_001", "P1-P3",
         topic_id="computing-game-design-01",
         registry=registry,
         mode_router=FakeRouter(),
     )
+)
     assert result["mode"] == "DIRECT"
 
     # Verify session_logs row exists
@@ -246,18 +297,29 @@ def test_execute_structured_json_fields(monkeypatch, tmp_db, registry):
     from agents.hermes_scheduler import HermesScheduler
 
     monkeypatch.setattr(HermesScheduler, "kid_safe_input", lambda *a, **k: None)
+    monkeypatch.setattr(HermesScheduler, "kid_safe_wrap", lambda content, *a, **k: content)
+# Mock quiz_gen to avoid real WS connection
+    from agents import assessment_agent as _aa
+    async def _mock_quiz(self, params):
+        return {"agent": "assessment", "capability": "quiz_gen", "status": "ok",
+                "questions": [{"id": "q1", "question": "Mock Q1", "type": "short_answer", "grade_level": 4}],
+                "topic": params.get("topic", ""), "grade_level": 1, "rubric_id": "", "cost_tokens": 150}
+    monkeypatch.setattr(_aa.AssessmentAgent, "quiz_gen", _mock_quiz)
 
     class FakeRouter:
+        def detect_language(self, text=None):
+            return "zh-hk"
         def route(self, text):
             from agents.mode_router import Mode
             return Mode.DIRECT, "zh-hk"
 
-    result = execute(
+    result = asyncio.run(execute(
         "test", "stu_001", "P4-P6",
         topic_id="computing-game-design-01",
         registry=registry,
         mode_router=FakeRouter(),
     )
+)
 
     required_fields = [
         "content", "mode", "lang_code", "age_band",
@@ -279,18 +341,28 @@ def test_max_tokens_config(monkeypatch, tmp_db, registry):
 
     monkeypatch.setattr(HermesScheduler, "kid_safe_input", lambda *a, **k: None)
     monkeypatch.setenv("DREAMER_MAX_TOKENS", "2000")
+# Mock quiz_gen to avoid real WS connection
+    from agents import assessment_agent as _aa
+    async def _mock_quiz(self, params):
+        return {"agent": "assessment", "capability": "quiz_gen", "status": "ok",
+                "questions": [{"id": "q1", "question": "Mock Q1", "type": "short_answer", "grade_level": 4}],
+                "topic": params.get("topic", ""), "grade_level": 1, "rubric_id": "", "cost_tokens": 150}
+    monkeypatch.setattr(_aa.AssessmentAgent, "quiz_gen", _mock_quiz)
 
     class FakeRouter:
+        def detect_language(self, text=None):
+            return "zh-hk"
         def route(self, text):
             from agents.mode_router import Mode
             return Mode.DIRECT, "zh-hk"
 
-    result = execute(
+    result = asyncio.run(execute(
         "test", "stu_001", "P4-P6",
         topic_id="computing-game-design-01",
         registry=registry,
         mode_router=FakeRouter(),
     )
+)
     assert result["mode"] == "DIRECT"
     # Env var is consumed; cost_summary should have elapsed_ms
     assert "elapsed_ms" in result["cost_summary"]

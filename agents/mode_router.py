@@ -245,6 +245,52 @@ class ModeRouter:
 
         return Mode.CONTEXTUAL  # fallback
 
+    def route_with_trace(
+        self,
+        text: str,
+        *,
+        student_id: str = "",
+        session_id: str = "",
+    ) -> Tuple[Mode, str]:
+        """Route with observability trace.
+
+        Identical behaviour to route(), plus writes an obs_events row
+        of type 'routing'. Per Phase 5 red-line: event_data only contains
+        the matched keyword, never the raw student query text.
+        """
+        mode_val, lang_code = self.route(text)
+
+        # Extract the first matched keyword (without storing raw text)
+        matched_keyword = None
+        if text and text.strip():
+            mode_kw = self.config.get("mode_keywords", {})
+            all_kws: List[str] = []
+            for cat in ("direct", "contextual", "hybrid"):
+                for lc in (lang_code, "en"):
+                    all_kws.extend(mode_kw.get(cat, {}).get(lc, []))
+            for kw in all_kws:
+                if kw.lower() in text.lower():
+                    matched_keyword = kw
+                    break
+
+        try:
+            from .observability import emit_event, EVENT_ROUTING
+            emit_event(
+                EVENT_ROUTING,
+                {
+                    "mode": mode_val.value,
+                    "lang_code": lang_code,
+                    "matched_keyword": matched_keyword,
+                },
+                student_id=student_id,
+                session_id=session_id,
+            )
+        except Exception:
+            pass  # observability is non-critical
+
+        return mode_val, lang_code
+
+
     # ── Full Route ───────────────────────────────────
 
     def route(self, text: str) -> Tuple[Mode, str]:

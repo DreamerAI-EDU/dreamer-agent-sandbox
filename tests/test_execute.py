@@ -87,6 +87,9 @@ def test_execute_direct_clarifying(monkeypatch, tmp_db, registry):
     class FakeRouter:
         def detect_language(self, text=None):
             return "zh-hk"
+        def route_with_trace(self, text, *, student_id="", session_id=""):
+            return self.route(text)
+
         def route(self, text):
             from agents.mode_router import Mode
             return Mode.DIRECT, "zh-hk"
@@ -123,6 +126,9 @@ def test_execute_direct_quiz(monkeypatch, tmp_db, registry):
     class FakeRouter:
         def detect_language(self, text=None):
             return "zh-hk"
+        def route_with_trace(self, text, *, student_id="", session_id=""):
+            return self.route(text)
+
         def route(self, text):
             from agents.mode_router import Mode
             return Mode.DIRECT, "zh-hk"
@@ -160,6 +166,9 @@ def test_execute_hybrid_quiz(monkeypatch, tmp_db, registry):
     class FakeRouter:
         def detect_language(self, text=None):
             return "zh-hk"
+        def route_with_trace(self, text, *, student_id="", session_id=""):
+            return self.route(text)
+
         def route(self, text):
             from agents.mode_router import Mode
             return Mode.HYBRID, "zh-hk"
@@ -194,6 +203,9 @@ def test_execute_direct_capability_override(monkeypatch, tmp_db, registry):
     class FakeRouter:
         def detect_language(self, text=None):
             return "zh-hk"
+        def route_with_trace(self, text, *, student_id="", session_id=""):
+            return self.route(text)
+
         def route(self, text):
             from agents.mode_router import Mode
             return Mode.DIRECT, "zh-hk"
@@ -222,6 +234,9 @@ def test_execute_contextual_stub(monkeypatch, tmp_db, registry):
     class FakeRouter:
         def detect_language(self, text=None):
             return "en"
+        def route_with_trace(self, text, *, student_id="", session_id=""):
+            return self.route(text)
+
         def route(self, text):
             from agents.mode_router import Mode
             return Mode.CONTEXTUAL, "en"
@@ -258,6 +273,9 @@ def test_execute_session_logs_written(monkeypatch, tmp_db, registry):
     class FakeRouter:
         def detect_language(self, text=None):
             return "zh-hk"
+        def route_with_trace(self, text, *, student_id="", session_id=""):
+            return self.route(text)
+
         def route(self, text):
             from agents.mode_router import Mode
             return Mode.DIRECT, "zh-hk"
@@ -309,6 +327,9 @@ def test_execute_structured_json_fields(monkeypatch, tmp_db, registry):
     class FakeRouter:
         def detect_language(self, text=None):
             return "zh-hk"
+        def route_with_trace(self, text, *, student_id="", session_id=""):
+            return self.route(text)
+
         def route(self, text):
             from agents.mode_router import Mode
             return Mode.DIRECT, "zh-hk"
@@ -352,6 +373,9 @@ def test_max_tokens_config(monkeypatch, tmp_db, registry):
     class FakeRouter:
         def detect_language(self, text=None):
             return "zh-hk"
+        def route_with_trace(self, text, *, student_id="", session_id=""):
+            return self.route(text)
+
         def route(self, text):
             from agents.mode_router import Mode
             return Mode.DIRECT, "zh-hk"

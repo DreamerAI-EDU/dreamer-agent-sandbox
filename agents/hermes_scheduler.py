@@ -481,6 +481,7 @@ def build_plan(
     registry: Optional[SubagentRegistry] = None,
     mode_router: Optional[Any] = None,
     navigator: Optional[Any] = None,
+    session_id: str = "",
 ) -> PlanContext:
     """Build a PlanContext from a student query.
 
@@ -518,7 +519,9 @@ def build_plan(
 
     # Step 2: Route mode + language
     router = mode_router if mode_router is not None else ModeRouter()
-    mode_val, lang_code = router.route(text)
+    mode_val, lang_code = router.route_with_trace(
+        text, student_id=student_id, session_id=session_id,
+    )
 
     # Step 3: Agent list from registry
     if registry is None:
@@ -597,6 +600,13 @@ async def execute(
     sid = session_id or f"stu_{student_id}_{uuid.uuid4().hex[:8]}"
     start_time = time.perf_counter()
 
+    # ── emit session_start ───────────────────────────
+    try:
+        from .observability import emit_event, EVENT_SESSION_START
+        emit_event(EVENT_SESSION_START, {}, student_id=student_id, session_id=sid)
+    except Exception:
+        pass
+
     # ── Step 1: kid_safe_input (must run first) ──────
     # Use ModeRouter.detect_language() for correct guard rule table matching
     router = mode_router
@@ -617,6 +627,32 @@ async def execute(
             topic_ids=[topic_id] if topic_id else [],
             cost_summary={"input_safety_blocked": True},
         )
+        # Emit safety_block with pointer only (no raw text)
+        try:
+            from .observability import emit_event, EVENT_SAFETY_BLOCK
+            ev = block.get("event", {}) if isinstance(block, dict) else {}
+            emit_event(
+                EVENT_SAFETY_BLOCK,
+                {
+                    "safety_event_id": ev.get("id") if isinstance(ev, dict) else None,
+                    "block_type": ev.get("event_type") if isinstance(ev, dict) else None,
+                },
+                student_id=student_id,
+                session_id=sid,
+            )
+        except Exception:
+            pass
+        # emit session_end even for blocked sessions
+        try:
+            from .observability import emit_event, EVENT_SESSION_END
+            emit_event(
+                EVENT_SESSION_END,
+                {"mode": "BLOCKED", "kid_label": "blocked"},
+                student_id=student_id,
+                session_id=sid,
+            )
+        except Exception:
+            pass
         return {
             "content": block["response_message"],
             "mode": "BLOCKED",
@@ -633,6 +669,7 @@ async def execute(
         text, student_id, age_band,
         topic_id=topic_id, registry=reg,
         mode_router=router, navigator=navigator,
+        session_id=session_id,
     )
 
     # ── Step 3: dispatch by mode ────────────────────
@@ -689,6 +726,18 @@ async def execute(
         topic_ids=[topic_id] if topic_id else [],
         cost_summary=cost,
     )
+
+    # ── emit session_end ────────────────────────────
+    try:
+        from .observability import emit_event, EVENT_SESSION_END
+        emit_event(
+            EVENT_SESSION_END,
+            {"mode": mode_label, "kid_label": result.get("kid_label", "ok")},
+            student_id=student_id,
+            session_id=sid,
+        )
+    except Exception:
+        pass
 
     # ── Step 5: structured JSON ─────────────────────
     return {

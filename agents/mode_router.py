@@ -245,13 +245,7 @@ class ModeRouter:
 
         return Mode.CONTEXTUAL  # fallback
 
-    def route_with_trace(
-        self,
-        text: str,
-        *,
-        student_id: str = "",
-        session_id: str = "",
-    ) -> Tuple[Mode, str, Optional[str]]:
+    def route_with_trace(self, text: str) -> Tuple[Mode, str, Optional[str]]:
         """Route with observability trace — returns matched keyword.
 
         Pure function: no DB side-effects, no instance attribute mutation.

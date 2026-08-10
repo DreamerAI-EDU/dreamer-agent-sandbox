@@ -521,9 +521,7 @@ def build_plan(
 
     # Step 2: Route mode + language
     router = mode_router if mode_router is not None else ModeRouter()
-    mode_val, lang_code, matched_kw = router.route_with_trace(
-        text, student_id=student_id, session_id=session_id,
-    )
+    mode_val, lang_code, matched_kw = router.route_with_trace(text)
 
     # Step 3: Agent list from registry
     if registry is None:

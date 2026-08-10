@@ -92,4 +92,4 @@ def emit_event(
         finally:
             conn.close()
     except Exception as exc:
-        _log.debug("obs_events write skipped (non-critical): %s", exc)
+        _log.warning("obs_events write skipped (non-critical): %s", exc)

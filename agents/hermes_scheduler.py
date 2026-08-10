@@ -455,6 +455,7 @@ class PlanContext:
         agent_list: eligible agent names for this mode
         kb_list:    knowledge bases to query (includes ethical-ai)
         prereq_gaps: prerequisite gaps (empty if no topic_id provided)
+        matched_keyword: first keyword that triggered mode match (None if no hit)
     """
     mode: str
     lang_code: str
@@ -462,6 +463,7 @@ class PlanContext:
     agent_list: List[str]
     kb_list: List[str]
     prereq_gaps: List[Dict[str, Any]] = field(default_factory=list)
+    matched_keyword: Optional[str] = None
 
     def __post_init__(self):
         if self.mode not in ("DIRECT", "CONTEXTUAL", "HYBRID"):
@@ -519,7 +521,7 @@ def build_plan(
 
     # Step 2: Route mode + language
     router = mode_router if mode_router is not None else ModeRouter()
-    mode_val, lang_code = router.route_with_trace(
+    mode_val, lang_code, matched_kw = router.route_with_trace(
         text, student_id=student_id, session_id=session_id,
     )
 
@@ -545,6 +547,7 @@ def build_plan(
         agent_list=agent_list,
         kb_list=kb_list,
         prereq_gaps=prereq_gaps,
+        matched_keyword=matched_kw,
     )
 
 
@@ -659,7 +662,7 @@ async def execute(
     lang_code = plan.lang_code
 
     # ── emit routing event ──────────────────────────
-    matched_kw = getattr(router, "_last_matched_keyword", None)
+    matched_kw = plan.matched_keyword
     try:
         from .observability import emit_event, EVENT_ROUTING
         emit_event(
@@ -674,19 +677,6 @@ async def execute(
         )
     except Exception:
         pass
-
-    # ── emit fallback if no keyword matched ─────────
-    if matched_kw is None:
-        try:
-            from .observability import emit_event, EVENT_FALLBACK
-            emit_event(
-                EVENT_FALLBACK,
-                {"mode": mode_val, "lang_code": lang_code},
-                student_id=student_id,
-                session_id=sid,
-            )
-        except Exception:
-            pass
 
     if mode_val == "DIRECT":
         if not topic_id:
@@ -880,6 +870,22 @@ async def _call_assessment(
             "status": raw.get("status", "ok"),
             "questions_count": len(questions),
         }
+        # Emit fallback if LLM fell to stub
+        if raw.get("status") == "ok_stub":
+            try:
+                from .observability import emit_event, EVENT_FALLBACK
+                emit_event(
+                    EVENT_FALLBACK,
+                    {
+                        "component": "assessment",
+                        "reason": "ok_stub",
+                        "capability": capability,
+                    },
+                    student_id=student_id,
+                    session_id=session_id,
+                )
+            except Exception:
+                pass
         return {
             "content": content,
             "kid_label": "ok",
@@ -940,6 +946,21 @@ async def _run_contextual(
     except Exception as exc:
         _log = logging.getLogger(__name__)
         _log.warning("CONTEXTUAL WS failed (%s), falling back to stub", exc)
+        # Emit fallback event for WS error
+        try:
+            from .observability import emit_event, EVENT_FALLBACK
+            emit_event(
+                EVENT_FALLBACK,
+                {
+                    "component": "ws",
+                    "reason": str(exc),
+                    "mode": plan.mode,
+                },
+                student_id=student_id,
+                session_id=session_id,
+            )
+        except Exception:
+            pass
         from .kid_safe.error_templates import get_error_message
         return {
             "content": get_error_message(plan.age_band, plan.lang_code),

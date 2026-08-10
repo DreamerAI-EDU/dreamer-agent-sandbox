@@ -88,7 +88,8 @@ def test_execute_direct_clarifying(monkeypatch, tmp_db, registry):
         def detect_language(self, text=None):
             return "zh-hk"
         def route_with_trace(self, text, *, student_id="", session_id=""):
-            return self.route(text)
+            mode, lang = self.route(text)
+            return mode, lang, None
 
         def route(self, text):
             from agents.mode_router import Mode
@@ -127,7 +128,8 @@ def test_execute_direct_quiz(monkeypatch, tmp_db, registry):
         def detect_language(self, text=None):
             return "zh-hk"
         def route_with_trace(self, text, *, student_id="", session_id=""):
-            return self.route(text)
+            mode, lang = self.route(text)
+            return mode, lang, None
 
         def route(self, text):
             from agents.mode_router import Mode
@@ -167,7 +169,8 @@ def test_execute_hybrid_quiz(monkeypatch, tmp_db, registry):
         def detect_language(self, text=None):
             return "zh-hk"
         def route_with_trace(self, text, *, student_id="", session_id=""):
-            return self.route(text)
+            mode, lang = self.route(text)
+            return mode, lang, None
 
         def route(self, text):
             from agents.mode_router import Mode
@@ -204,7 +207,8 @@ def test_execute_direct_capability_override(monkeypatch, tmp_db, registry):
         def detect_language(self, text=None):
             return "zh-hk"
         def route_with_trace(self, text, *, student_id="", session_id=""):
-            return self.route(text)
+            mode, lang = self.route(text)
+            return mode, lang, None
 
         def route(self, text):
             from agents.mode_router import Mode
@@ -235,7 +239,8 @@ def test_execute_contextual_stub(monkeypatch, tmp_db, registry):
         def detect_language(self, text=None):
             return "en"
         def route_with_trace(self, text, *, student_id="", session_id=""):
-            return self.route(text)
+            mode, lang = self.route(text)
+            return mode, lang, None
 
         def route(self, text):
             from agents.mode_router import Mode
@@ -274,7 +279,8 @@ def test_execute_session_logs_written(monkeypatch, tmp_db, registry):
         def detect_language(self, text=None):
             return "zh-hk"
         def route_with_trace(self, text, *, student_id="", session_id=""):
-            return self.route(text)
+            mode, lang = self.route(text)
+            return mode, lang, None
 
         def route(self, text):
             from agents.mode_router import Mode
@@ -328,7 +334,8 @@ def test_execute_structured_json_fields(monkeypatch, tmp_db, registry):
         def detect_language(self, text=None):
             return "zh-hk"
         def route_with_trace(self, text, *, student_id="", session_id=""):
-            return self.route(text)
+            mode, lang = self.route(text)
+            return mode, lang, None
 
         def route(self, text):
             from agents.mode_router import Mode
@@ -374,7 +381,8 @@ def test_max_tokens_config(monkeypatch, tmp_db, registry):
         def detect_language(self, text=None):
             return "zh-hk"
         def route_with_trace(self, text, *, student_id="", session_id=""):
-            return self.route(text)
+            mode, lang = self.route(text)
+            return mode, lang, None
 
         def route(self, text):
             from agents.mode_router import Mode

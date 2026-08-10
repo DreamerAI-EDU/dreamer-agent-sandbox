@@ -334,26 +334,44 @@ def test_emit_event_multiple_rows_preserved(clean_env):
 # ── mode_router.route_with_trace() integration ──────────
 
 
-def test_route_with_trace_stores_matched_keyword():
-    """route_with_trace does not emit to DB; stores keyword in instance state."""
+def test_route_with_trace_returns_matched_keyword():
+    """route_with_trace does not emit to DB; returns keyword in 3rd tuple element."""
     from agents.mode_router import Mode, ModeRouter
 
     router = ModeRouter()
-    mode_val, lang_code = router.route_with_trace("我想溫書準備測驗")
+    mode_val, lang_code, kw = router.route_with_trace("我想溫書準備測驗")
     assert mode_val in (Mode.DIRECT, Mode.HYBRID, Mode.CONTEXTUAL)
     assert lang_code in ("zh-hk", "zh-cn", "en")
-    assert router._last_matched_keyword is not None
+    assert kw is not None
 
 
-def test_route_with_trace_no_match_no_db_write():
+def test_route_with_trace_no_match_returns_none():
     """When no keyword matches, route_with_trace returns CONTEXTUAL,
-    _last_matched_keyword is None, and no DB write happens."""
+    matched_keyword=None, and no DB write happens."""
     from agents.mode_router import Mode, ModeRouter
 
     router = ModeRouter()
-    mode_val, lang_code = router.route_with_trace("hello good morning")
+    mode_val, lang_code, kw = router.route_with_trace("hello good morning")
     assert mode_val == Mode.CONTEXTUAL
-    assert router._last_matched_keyword is None
+    assert kw is None
+
+
+def test_route_with_trace_no_instance_mutation():
+    """route_with_trace must not mutate any instance attribute of router.
+
+    Note: _config is lazy-loaded on first config access (not a mutation).
+    We check that no new attributes are added and no existing ones change value.
+    """
+    from agents.mode_router import ModeRouter
+
+    router = ModeRouter()
+    before = {k: v for k, v in vars(router).items() if k != "_config"}
+    router.route_with_trace("我想溫書準備測驗")
+    after = {k: v for k, v in vars(router).items() if k != "_config"}
+    assert before == after, (
+        f"route_with_trace mutated router: added={after.keys() - before.keys()}, "
+        f"removed={before.keys() - after.keys()}"
+    )
 
 
 def test_route_with_trace_no_observability_sys_modules():
@@ -492,13 +510,50 @@ async def test_execute_contextual_emits_ws(clean_env):
     event_types = {r[0] for r in events}
     assert "ws" in event_types
     assert "routing" in event_types
-    assert "fallback" in event_types  # "hello good morning" has no keyword match
+    assert "fallback" not in event_types  # no keyword match is normal, not a failure
     assert "cost" in event_types
 
 
 @pytest.mark.asyncio
-async def test_execute_fallback_on_no_keyword(clean_env):
-    """When no keyword matches, fallback event is emitted."""
+async def test_execute_fallback_on_ok_stub(clean_env):
+    """When assessment agent returns ok_stub, fallback event is emitted."""
+    from agents.hermes_scheduler import execute
+    from unittest.mock import AsyncMock
+
+    mock_stub = {
+        "status": "ok_stub",
+        "questions": [{"question": "Stub question"}],
+    }
+
+    # Patch the AssessmentAgent method used by _call_assessment
+    with patch("agents.assessment_agent.AssessmentAgent.quiz_gen", new=AsyncMock(return_value=mock_stub)):
+        await execute(
+            "我想做數學測驗",
+            student_id="stu_019",
+            age_band="S1-S3",
+            topic_id="secondary-maths-s1-algebra",
+            session_id="ses_019",
+        )
+    conn = sqlite3.connect(clean_env)
+    events = conn.execute(
+        "SELECT event_type, event_data FROM obs_events WHERE session_id = 'ses_019'"
+    ).fetchall()
+    conn.close()
+    event_types = {r[0] for r in events}
+    assert "fallback" in event_types
+    assert "routing" in event_types
+    # Verify fallback payload
+    fallback_rows = [r for r in events if r[0] == "fallback"]
+    assert len(fallback_rows) == 1
+    fb_data = json.loads(fallback_rows[0][1])
+    assert fb_data["component"] == "assessment"
+    assert fb_data["reason"] == "ok_stub"
+
+
+@pytest.mark.asyncio
+async def test_execute_routing_zero_match_no_fallback(clean_env):
+    """Zero keyword match emits routing (keyword=None) but NOT fallback.
+    Zero match is the normal default path, not a failure."""
     from agents.hermes_scheduler import execute
     from unittest.mock import AsyncMock
 
@@ -512,18 +567,23 @@ async def test_execute_fallback_on_no_keyword(clean_env):
     with patch("agents.hermes_scheduler._run_contextual", new=AsyncMock(return_value=mock_ws_result)):
         await execute(
             "random gibberish xyz123",
-            student_id="stu_019",
+            student_id="stu_030",
             age_band="S1-S3",
-            session_id="ses_019",
+            session_id="ses_030",
         )
     conn = sqlite3.connect(clean_env)
     events = conn.execute(
-        "SELECT event_type, event_data FROM obs_events WHERE session_id = 'ses_019'"
+        "SELECT event_type, event_data FROM obs_events WHERE session_id = 'ses_030'"
     ).fetchall()
     conn.close()
     event_types = {r[0] for r in events}
-    assert "fallback" in event_types
-    assert "routing" in event_types
+    assert "routing" in event_types, "zero-match must emit routing (keyword=None)"
+    assert "fallback" not in event_types, "zero-match is normal, not fallback"
+    # Verify routing data has keyword=None
+    routing_rows = [r for r in events if r[0] == "routing"]
+    assert len(routing_rows) == 1
+    rt_data = json.loads(routing_rows[0][1])
+    assert rt_data["matched_keyword"] is None
 
 
 @pytest.mark.asyncio

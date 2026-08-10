@@ -104,7 +104,6 @@ class ModeRouter:
     def __init__(self, config_path: Optional[str] = None):
         self._config_path = config_path or self._default_config_path()
         self._config: Optional[dict] = None
-        self._last_matched_keyword: Optional[str] = None
 
     @staticmethod
     def _default_config_path() -> str:
@@ -252,65 +251,59 @@ class ModeRouter:
         *,
         student_id: str = "",
         session_id: str = "",
-    ) -> Tuple[Mode, str]:
-        """Route with observability trace — stores matched keyword in instance state.
+    ) -> Tuple[Mode, str, Optional[str]]:
+        """Route with observability trace — returns matched keyword.
 
-        Pure function: no DB side-effects. The caller (execute()) is
-        responsible for emitting the routing event, not this router.
+        Pure function: no DB side-effects, no instance attribute mutation.
+        The caller (build_plan() → execute()) is responsible for emitting
+        the routing event, not this router.
         Per Phase 5 red-line: route() behaviour is zero-change.
 
         Returns:
-            (mode, lang_code) — identical to route().
-        """
-        self._last_matched_keyword = None
-        mode_val, lang_code = self.route(text)
-
-        # Extract the first matched keyword (without storing raw text)
-        if text and text.strip():
-            mode_kw = self.config.get("mode_keywords", {})
-            all_kws: List[str] = []
-            for cat in ("direct", "contextual", "hybrid"):
-                for lc in (lang_code, "en"):
-                    all_kws.extend(mode_kw.get(cat, {}).get(lc, []))
-            for kw in all_kws:
-                if kw.lower() in text.lower():
-                    self._last_matched_keyword = kw
-                    break
-
-        return mode_val, lang_code
-
-
-    # ── Full Route ───────────────────────────────────
-
-    def route(self, text: str) -> Tuple[Mode, str]:
-        """Full routing pipeline.
-
-        1. Detect language
-        2. Check explicit override (highest priority)
-        3. Match keywords
-        4. Return (mode, lang_code)
-
-        Returns:
-            Tuple of (Mode enum, language code string).
+            (mode, lang_code, matched_keyword) — matched_keyword is None if
+            no keyword matched (normal default path, not a failure).
         """
         if not text or not text.strip():
-            return Mode.CONTEXTUAL, "zh-hk"
+            return Mode.CONTEXTUAL, "zh-hk", None
 
         lang = self.detect_language(text)
 
         # Explicit override wins everything
         override = self.check_override(text, lang)
         if override is not None:
-            # For override, also check en overrides if CJK text
-            if lang.startswith("zh") and override is None:
-                override = self.check_override(text, "en")
-            return override, lang
+            return override, lang, None  # override is explicit, no keyword trace
 
         # For CJK text, also try en override keywords
         if lang.startswith("zh"):
             en_override = self.check_override(text, "en")
             if en_override is not None:
-                return en_override, lang
+                return en_override, lang, None
 
         mode = self.match_mode(text, lang)
+
+        # Extract first matched keyword (without storing raw text)
+        matched_keyword: Optional[str] = None
+        mode_kw = self.config.get("mode_keywords", {})
+        all_kws: List[str] = []
+        for cat in ("direct", "contextual", "hybrid"):
+            for lc in (lang, "en"):
+                all_kws.extend(mode_kw.get(cat, {}).get(lc, []))
+        for kw in all_kws:
+            if kw.lower() in text.lower():
+                matched_keyword = kw
+                break
+
+        return mode, lang, matched_keyword
+
+    # ── Full Route ───────────────────────────────────
+
+    def route(self, text: str) -> Tuple[Mode, str]:
+        """Full routing pipeline. Zero-change wrapper around route_with_trace().
+
+        1. Detect language
+        2. Check explicit override (highest priority)
+        3. Match keywords
+        4. Return (mode, lang_code)
+        """
+        mode, lang, _keyw = self.route_with_trace(text)
         return mode, lang

@@ -6,6 +6,15 @@ Per Phase 5 red-line:
   - No module-level _TABLE_ENSURED global (inline CREATE IF NOT EXISTS only)
   - routing events only store matched keyword (never raw student query)
   - safety events only store pointer (safety_event_id + block_type)
+  - cost events store token usage + elapsed_ms (never raw student query)
+
+Event taxonomy (spec §2.1, frozen):
+  routing    — after mode resolution, records matched keyword
+  fallback   — when LLM mode selection falls back (no keyword match)
+  ws         — when dispatch goes to workspace agent (CONTEXTUAL)
+  cost       — at end of execute(), records elapsed_ms + token_usage
+  clarifying — when DIRECT mode triggers clarifying template
+  safety     — when safety guard blocks a student query
 """
 
 from __future__ import annotations
@@ -20,12 +29,12 @@ _log = logging.getLogger(__name__)
 
 # ── Event type constants ─────────────────────────────────
 
-EVENT_ROUTING       = "routing"
-EVENT_SAFETY_BLOCK  = "safety_block"
-EVENT_LLM_CALL      = "llm_call"
-EVENT_SESSION_START = "session_start"
-EVENT_SESSION_END   = "session_end"
-EVENT_ERROR         = "error"
+EVENT_ROUTING     = "routing"
+EVENT_FALLBACK    = "fallback"
+EVENT_WS          = "ws"
+EVENT_COST        = "cost"
+EVENT_CLARIFYING  = "clarifying"
+EVENT_SAFETY      = "safety"
 
 
 # ── emit_event ───────────────────────────────────────────

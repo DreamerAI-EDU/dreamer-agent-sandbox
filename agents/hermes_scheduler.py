@@ -600,13 +600,6 @@ async def execute(
     sid = session_id or f"stu_{student_id}_{uuid.uuid4().hex[:8]}"
     start_time = time.perf_counter()
 
-    # ── emit session_start ───────────────────────────
-    try:
-        from .observability import emit_event, EVENT_SESSION_START
-        emit_event(EVENT_SESSION_START, {}, student_id=student_id, session_id=sid)
-    except Exception:
-        pass
-
     # ── Step 1: kid_safe_input (must run first) ──────
     # Use ModeRouter.detect_language() for correct guard rule table matching
     router = mode_router
@@ -627,27 +620,16 @@ async def execute(
             topic_ids=[topic_id] if topic_id else [],
             cost_summary={"input_safety_blocked": True},
         )
-        # Emit safety_block with pointer only (no raw text)
+        # Emit safety event with pointer only (no raw text)
         try:
-            from .observability import emit_event, EVENT_SAFETY_BLOCK
+            from .observability import emit_event, EVENT_SAFETY
             ev = block.get("event", {}) if isinstance(block, dict) else {}
             emit_event(
-                EVENT_SAFETY_BLOCK,
+                EVENT_SAFETY,
                 {
                     "safety_event_id": ev.get("id") if isinstance(ev, dict) else None,
                     "block_type": ev.get("event_type") if isinstance(ev, dict) else None,
                 },
-                student_id=student_id,
-                session_id=sid,
-            )
-        except Exception:
-            pass
-        # emit session_end even for blocked sessions
-        try:
-            from .observability import emit_event, EVENT_SESSION_END
-            emit_event(
-                EVENT_SESSION_END,
-                {"mode": "BLOCKED", "kid_label": "blocked"},
                 student_id=student_id,
                 session_id=sid,
             )
@@ -676,12 +658,53 @@ async def execute(
     mode_val = plan.mode
     lang_code = plan.lang_code
 
+    # ── emit routing event ──────────────────────────
+    matched_kw = getattr(router, "_last_matched_keyword", None)
+    try:
+        from .observability import emit_event, EVENT_ROUTING
+        emit_event(
+            EVENT_ROUTING,
+            {
+                "mode": mode_val,
+                "lang_code": lang_code,
+                "matched_keyword": matched_kw,
+            },
+            student_id=student_id,
+            session_id=sid,
+        )
+    except Exception:
+        pass
+
+    # ── emit fallback if no keyword matched ─────────
+    if matched_kw is None:
+        try:
+            from .observability import emit_event, EVENT_FALLBACK
+            emit_event(
+                EVENT_FALLBACK,
+                {"mode": mode_val, "lang_code": lang_code},
+                student_id=student_id,
+                session_id=sid,
+            )
+        except Exception:
+            pass
+
     if mode_val == "DIRECT":
         if not topic_id:
             # No topic — clarifying template instead of quiz_gen
             result = _direct_clarifying_response(lang_code, plan.age_band)
             mode_label = "DIRECT_clarifying"
             agent_list: list = []
+            # emit clarifying event
+            try:
+                from .observability import emit_event, EVENT_CLARIFYING
+                emit_event(
+                    EVENT_CLARIFYING,
+                    {"mode": mode_val, "lang_code": lang_code},
+                    student_id=student_id,
+                    session_id=sid,
+                )
+            except Exception:
+                pass
         else:
             actual_cap = capability or "quiz_gen"
             result = await _call_assessment(plan, topic_id, actual_cap, student_id, sid)
@@ -695,6 +718,17 @@ async def execute(
             result = _direct_clarifying_response(lang_code, plan.age_band)
             mode_label = "HYBRID_clarifying"
             agent_list = []
+            # emit clarifying event
+            try:
+                from .observability import emit_event, EVENT_CLARIFYING
+                emit_event(
+                    EVENT_CLARIFYING,
+                    {"mode": mode_val, "lang_code": lang_code},
+                    student_id=student_id,
+                    session_id=sid,
+                )
+            except Exception:
+                pass
         else:
             actual_cap = capability or "quiz_gen"
             result = await _call_assessment(plan, topic_id, actual_cap, student_id, sid)
@@ -704,6 +738,17 @@ async def execute(
         result = await _run_contextual(text, plan, student_id, sid)
         mode_label = "CONTEXTUAL"
         agent_list = ["deeptutor"]
+        # emit ws event
+        try:
+            from .observability import emit_event, EVENT_WS
+            emit_event(
+                EVENT_WS,
+                {"mode": mode_val, "lang_code": lang_code},
+                student_id=student_id,
+                session_id=sid,
+            )
+        except Exception:
+            pass
     else:
         result = {
             "content": "I'm not sure how to help with that.",
@@ -727,12 +772,12 @@ async def execute(
         cost_summary=cost,
     )
 
-    # ── emit session_end ────────────────────────────
+    # ── emit cost event ─────────────────────────────
     try:
-        from .observability import emit_event, EVENT_SESSION_END
+        from .observability import emit_event, EVENT_COST
         emit_event(
-            EVENT_SESSION_END,
-            {"mode": mode_label, "kid_label": result.get("kid_label", "ok")},
+            EVENT_COST,
+            cost,
             student_id=student_id,
             session_id=sid,
         )

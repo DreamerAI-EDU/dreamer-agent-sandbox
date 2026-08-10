@@ -104,6 +104,7 @@ class ModeRouter:
     def __init__(self, config_path: Optional[str] = None):
         self._config_path = config_path or self._default_config_path()
         self._config: Optional[dict] = None
+        self._last_matched_keyword: Optional[str] = None
 
     @staticmethod
     def _default_config_path() -> str:
@@ -252,16 +253,19 @@ class ModeRouter:
         student_id: str = "",
         session_id: str = "",
     ) -> Tuple[Mode, str]:
-        """Route with observability trace.
+        """Route with observability trace — stores matched keyword in instance state.
 
-        Identical behaviour to route(), plus writes an obs_events row
-        of type 'routing'. Per Phase 5 red-line: event_data only contains
-        the matched keyword, never the raw student query text.
+        Pure function: no DB side-effects. The caller (execute()) is
+        responsible for emitting the routing event, not this router.
+        Per Phase 5 red-line: route() behaviour is zero-change.
+
+        Returns:
+            (mode, lang_code) — identical to route().
         """
+        self._last_matched_keyword = None
         mode_val, lang_code = self.route(text)
 
         # Extract the first matched keyword (without storing raw text)
-        matched_keyword = None
         if text and text.strip():
             mode_kw = self.config.get("mode_keywords", {})
             all_kws: List[str] = []
@@ -270,23 +274,8 @@ class ModeRouter:
                     all_kws.extend(mode_kw.get(cat, {}).get(lc, []))
             for kw in all_kws:
                 if kw.lower() in text.lower():
-                    matched_keyword = kw
+                    self._last_matched_keyword = kw
                     break
-
-        try:
-            from .observability import emit_event, EVENT_ROUTING
-            emit_event(
-                EVENT_ROUTING,
-                {
-                    "mode": mode_val.value,
-                    "lang_code": lang_code,
-                    "matched_keyword": matched_keyword,
-                },
-                student_id=student_id,
-                session_id=session_id,
-            )
-        except Exception:
-            pass  # observability is non-critical
 
         return mode_val, lang_code
 

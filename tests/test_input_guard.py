@@ -355,10 +355,21 @@ def test_write_safety_event_inserts_raw_input(tmp_path, monkeypatch):
 
 
 def test_write_safety_event_db_failure_logs_and_flags(caplog, monkeypatch):
-    """DB write failure must NOT throw; must log ERROR + set db_write_failed=True."""
-    monkeypatch.setenv("DREAMER_DB_PATH", "Z:\\nonexistent\\path\\dreamer.db")
+    """DB write failure must NOT throw; must log ERROR + set db_write_failed=True.
 
-    from agents.hermes_scheduler import _write_safety_event
+    Uses monkeypatch on sqlite3.connect (not OS-dependent path tricks) so that
+    the failure is deterministic on Windows, Linux, and macOS alike.
+    Rule #12: never rely on OS/filesystem behavior for failure injection.
+    """
+    import sqlite3 as _sqlite3_mod
+    import agents.hermes_scheduler as _hs
+
+    def _failing_connect(*_a, **_kw):
+        raise _sqlite3_mod.OperationalError("forced failure")
+
+    monkeypatch.setattr(_sqlite3_mod, "connect", _failing_connect)
+    # also patch inside hermes_scheduler — it does `import sqlite3` at module level
+    monkeypatch.setattr(_hs.sqlite3, "connect", _failing_connect)
 
     event = {
         "id": "evt_002", "student_id": "stu_002",
@@ -368,12 +379,12 @@ def test_write_safety_event_db_failure_logs_and_flags(caplog, monkeypatch):
 
     # Must not raise
     with caplog.at_level("ERROR"):
-        _write_safety_event(event)
+        _hs._write_safety_event(event)
 
     assert event.get("db_write_failed") is True, \
         "event must carry db_write_failed=True after DB write failure"
 
-    assert any("SAFETY EVENT DB WRITE FAILED" in rec.message for rec in caplog.records), \
+    assert "SAFETY EVENT DB WRITE FAILED" in caplog.text, \
         "ERROR log must contain SAFETY EVENT DB WRITE FAILED"
 
 

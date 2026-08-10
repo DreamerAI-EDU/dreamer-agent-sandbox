@@ -10,7 +10,10 @@ from collections import defaultdict
 import logging
 import os
 import sqlite3
+import uuid as _uuid
 from .registry import SubagentRegistry
+
+_log = logging.getLogger(__name__)
 
 
 class TaskStatus(Enum):
@@ -370,7 +373,11 @@ class HermesScheduler:
         if verdict.is_safe:
             return None
 
-        # Blocked — fire webhook for welfare events
+        # Blocked — persist to safety_events (must write before webhook)
+        if verdict.event is not None:
+            _write_safety_event(verdict.event)
+
+        # Fire webhook for welfare events
         if verdict.is_welfare and verdict.event is not None:
             notify_welfare(verdict.event)
 
@@ -947,6 +954,77 @@ def _write_session_log(
         conn.commit()
     finally:
         conn.close()
+
+
+# ── execute() helper: safety_events persistence ───────────
+
+def _write_safety_event(event: dict) -> None:
+    """INSERT event dict into safety_events table.
+
+    Must succeed to preserve audit trail. On failure, logs error and
+    sets db_write_failed=True on the event so webhook knows evidence is missing.
+    Per Phase 5 red-line: safety evidence ≠ observability — fail-silent is NOT
+    acceptable here.
+    """
+    import datetime as _dt
+    try:
+        db_path = os.path.abspath(os.environ.get(
+            "DREAMER_DB_PATH",
+            os.path.join(os.path.dirname(__file__), "..", "dreamer.db"),
+        ))
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS safety_events (
+                    id TEXT PRIMARY KEY,
+                    student_id TEXT NOT NULL,
+                    session_id TEXT,
+                    event_type TEXT NOT NULL,
+                    severity TEXT NOT NULL,
+                    raw_input TEXT NOT NULL,
+                    matched_rule TEXT,
+                    age_band TEXT,
+                    lang_code TEXT,
+                    reviewed BOOLEAN DEFAULT FALSE,
+                    reviewed_by TEXT,
+                    reviewed_at TEXT,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+                CREATE INDEX IF NOT EXISTS idx_safety_unreviewed
+                    ON safety_events(reviewed, severity, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_safety_student
+                    ON safety_events(student_id, created_at DESC);
+            """)
+            conn.execute(
+                """INSERT INTO safety_events
+                   (id, student_id, session_id, event_type, severity,
+                    raw_input, matched_rule, age_band, lang_code,
+                    reviewed, reviewed_by, reviewed_at, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    event.get("id") or _uuid.uuid4().hex,
+                    event.get("student_id", ""),
+                    event.get("session_id", ""),
+                    event.get("event_type", ""),
+                    event.get("severity", ""),
+                    event.get("raw_input", ""),
+                    event.get("matched_rule", ""),
+                    event.get("age_band", ""),
+                    event.get("lang_code", ""),
+                    event.get("reviewed", False),
+                    event.get("reviewed_by"),
+                    event.get("reviewed_at"),
+                    event.get("created_at") or _dt.datetime.utcnow().isoformat() + "Z",
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as exc:
+        _log.error("SAFETY EVENT DB WRITE FAILED — evidence lost: %s", exc)
+        event["db_write_failed"] = True
 
 
 # ── Phase 3: Security Gate ──────────────────────────────

@@ -261,6 +261,8 @@ def notify_welfare(event: dict, webhook_url: Optional[str] = None) -> bool:
         "age_band": event.get("age_band"),
         "lang_code": event.get("lang_code"),
         "timestamp": event.get("created_at"),
+        "db_write_failed": event.get("db_write_failed", False),
+        "event_type": event.get("event_type"),
         # raw_input intentionally excluded from webhook —
         # sensitive content routed to safety_events DB only
     }

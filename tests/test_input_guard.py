@@ -312,3 +312,147 @@ def test_welfare_takes_priority_over_injection(guard):
     verdict = guard.check(query, age_band="P4-P6", lang_code="en")
     assert verdict.is_welfare is True
     assert verdict.event["event_type"] == "welfare"
+
+
+# ── safety_events DB Persistence (Phase 5 Day 22) ──────
+
+def test_write_safety_event_inserts_raw_input(tmp_path, monkeypatch):
+    """Block events must persist to safety_events with student raw_input."""
+    import sqlite3 as _sqlite3
+    import datetime as _dt
+    db = str(tmp_path / "dreamer.db")
+    monkeypatch.setenv("DREAMER_DB_PATH", db)
+
+    from agents.hermes_scheduler import _write_safety_event
+
+    event = {
+        "id": "evt_test_001",
+        "student_id": "stu_001",
+        "session_id": "sess_abc",
+        "event_type": "welfare",
+        "severity": "high",
+        "raw_input": "I want to hurt myself",
+        "matched_rule": "welfare_pattern",
+        "age_band": "P4-P6",
+        "lang_code": "en",
+        "reviewed": False,
+        "created_at": "2026-08-09T10:00:00Z",
+    }
+
+    _write_safety_event(event)
+
+    conn = _sqlite3.connect(db)
+    try:
+        cur = conn.execute("SELECT * FROM safety_events WHERE id = ?", ("evt_test_001",))
+        row = cur.fetchone()
+    finally:
+        conn.close()
+
+    assert row is not None, "Event must be persisted to safety_events"
+    # Column order: id, student_id, session_id, event_type, severity,
+    #               raw_input(5), matched_rule, age_band, lang_code, reviewed, created_at
+    assert row[5] == "I want to hurt myself", "raw_input must contain student original text"
+
+
+def test_write_safety_event_db_failure_logs_and_flags(caplog, monkeypatch):
+    """DB write failure must NOT throw; must log ERROR + set db_write_failed=True."""
+    monkeypatch.setenv("DREAMER_DB_PATH", "Z:\\nonexistent\\path\\dreamer.db")
+
+    from agents.hermes_scheduler import _write_safety_event
+
+    event = {
+        "id": "evt_002", "student_id": "stu_002",
+        "event_type": "injection", "severity": "medium",
+        "raw_input": "test",
+    }
+
+    # Must not raise
+    with caplog.at_level("ERROR"):
+        _write_safety_event(event)
+
+    assert event.get("db_write_failed") is True, \
+        "event must carry db_write_failed=True after DB write failure"
+
+    assert any("SAFETY EVENT DB WRITE FAILED" in rec.message for rec in caplog.records), \
+        "ERROR log must contain SAFETY EVENT DB WRITE FAILED"
+
+
+def test_safety_events_schema_13_columns(tmp_path, monkeypatch):
+    """After INSERT, PRAGMA table_info must match migration SQL 13 columns exactly."""
+    import sqlite3 as _sqlite3
+    db = str(tmp_path / "dreamer.db")
+    monkeypatch.setenv("DREAMER_DB_PATH", db)
+
+    from agents.hermes_scheduler import _write_safety_event
+
+    event = {
+        "id": "evt_003", "student_id": "stu_003",
+        "event_type": "offensive_language", "severity": "low",
+        "raw_input": "hello", "age_band": "P4-P6", "lang_code": "en",
+    }
+    _write_safety_event(event)
+
+    conn = _sqlite3.connect(db)
+    try:
+        cur = conn.execute("PRAGMA table_info(safety_events)")
+        cols = [(row[1], row[2]) for row in cur.fetchall()]  # (name, type)
+    finally:
+        conn.close()
+
+    expected = [
+        ("id",                "TEXT"),
+        ("student_id",        "TEXT"),
+        ("session_id",        "TEXT"),
+        ("event_type",        "TEXT"),
+        ("severity",          "TEXT"),
+        ("raw_input",         "TEXT"),
+        ("matched_rule",      "TEXT"),
+        ("age_band",          "TEXT"),
+        ("lang_code",         "TEXT"),
+        ("reviewed",          "BOOLEAN"),
+        ("reviewed_by",       "TEXT"),
+        ("reviewed_at",       "TEXT"),
+        ("created_at",        "TEXT"),
+    ]
+
+    assert len(cols) == len(expected), \
+        f"Column count mismatch: got {len(cols)}, expected {len(expected)}"
+    for (actual_name, _actual_type), (exp_name, _exp_type) in zip(cols, expected):
+        assert actual_name.lower() == exp_name.lower(), \
+            f"Column mismatch: got '{actual_name}', expected '{exp_name}'"
+
+
+def test_kid_safe_input_writes_to_safety_events(tmp_path, monkeypatch):
+    """kid_safe_input() must call _write_safety_event when blocked."""
+    import sqlite3 as _sqlite3
+    db = str(tmp_path / "dreamer.db")
+    monkeypatch.setenv("DREAMER_DB_PATH", db)
+
+    from agents.hermes_scheduler import HermesScheduler
+
+    block = HermesScheduler.kid_safe_input(
+        query="I want to kill myself",
+        age_band="P4-P6",
+        lang_code="en",
+        student_id="stu_003",
+        session_id="sess_xyz",
+    )
+
+    assert block is not None
+    assert block["event"] is not None
+
+    # Verify DB
+    conn = _sqlite3.connect(db)
+    try:
+        cur = conn.execute(
+            "SELECT raw_input, event_type, severity FROM safety_events WHERE student_id = ?",
+            ("stu_003",),
+        )
+        row = cur.fetchone()
+    finally:
+        conn.close()
+
+    assert row is not None, "safety_events must have a row after kid_safe_input block"
+    assert "kill" in row[0].lower(), "raw_input must contain student query"
+    assert row[1] == "welfare"
+    assert row[2] == "high"

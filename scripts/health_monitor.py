@@ -2,39 +2,43 @@
 Dreamer AI Phase 5 — Health Monitor
 
 Usage:
-    python scripts/health_monitor.py --once    # exit 0 on healthy, 1 on unhealthy
-    python scripts/health_monitor.py           # continuous mode (Ctrl-C to stop)
+    python scripts/health_monitor.py --once [--url http://localhost:8001]
+    python scripts/health_monitor.py                  # continuous mode (Ctrl-C to stop)
 
-Health check: DB reachable + obs_events table exists.
+Health check: DeepTutor container HTTP endpoint reachable.
+  - GET /              → 200 = healthy
+  - GET /api/v1/knowledge/health → 200 = healthy
 Continuous mode: polls every 30s; 3 consecutive failures → exit 1.
 """
 
 from __future__ import annotations
 
 import argparse
-import os
-import sqlite3
 import sys
 import time
+import urllib.request
+import urllib.error
 
 
-def check_health(db_path: str) -> bool:
-    """Return True if the system is healthy (DB reachable, obs_events initialized)."""
-    if not os.path.exists(db_path):
-        return False
+def check_health(url: str, timeout: int = 5) -> bool:
+    """Return True if the DeepTutor endpoint is healthy."""
     try:
-        conn = sqlite3.connect(db_path)
-        try:
-            # Verify obs_events table exists (system fully initialized)
-            cur = conn.execute(
-                "SELECT name FROM sqlite_master "
-                "WHERE type='table' AND name='obs_events'"
-            )
-            return cur.fetchone() is not None
-        finally:
-            conn.close()
+        req = urllib.request.Request(f"{url}/", method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status != 200:
+                return False
     except Exception:
         return False
+
+    try:
+        req2 = urllib.request.Request(f"{url}/api/v1/knowledge/health", method="GET")
+        with urllib.request.urlopen(req2, timeout=timeout) as resp2:
+            if resp2.status != 200:
+                return False
+    except Exception:
+        return False
+
+    return True
 
 
 def main() -> None:
@@ -43,26 +47,32 @@ def main() -> None:
         "--once", action="store_true",
         help="Run one health check and exit. Exit 0 = healthy, 1 = unhealthy.",
     )
+    parser.add_argument(
+        "--url", default="http://localhost:8001",
+        help="DeepTutor base URL (default: http://localhost:8001)",
+    )
     args = parser.parse_args()
 
-    db_path = os.path.abspath(os.environ.get(
-        "DREAMER_DB_PATH",
-        os.path.join(os.path.dirname(__file__), "..", "dreamer.db"),
-    ))
-
     if args.once:
-        if check_health(db_path):
-            sys.exit(0)
+        healthy = check_health(args.url)
+        if healthy:
+            print(f"[health_monitor] {args.url} is healthy")
         else:
-            sys.exit(1)
+            print(f"[health_monitor] {args.url} is unhealthy", file=sys.stderr)
+        sys.exit(0 if healthy else 1)
 
     # Continuous mode
     consecutive_failures = 0
     while True:
-        if check_health(db_path):
+        if check_health(args.url):
             consecutive_failures = 0
         else:
             consecutive_failures += 1
+            print(
+                f"[health_monitor] {args.url} unhealthy — "
+                f"{consecutive_failures}/3 consecutive failures",
+                file=sys.stderr,
+            )
             if consecutive_failures >= 3:
                 print(
                     f"[health_monitor] {consecutive_failures} consecutive "

@@ -231,6 +231,7 @@ class AssessmentAgent:
                     "topic": topic,
                     "num_questions": count,
                     "difficulty": f"grade_{grade_level}",
+                    "lang_code": lang_code,
                 },
             )
 

@@ -452,3 +452,146 @@ def test_parse_markdown_questions_numbered_list():
     assert len(questions) == 3
     assert questions[0]["id"] == "q1"
     assert "2+2" in questions[0]["question"]
+
+
+# ── 3.1 language directive + language param forwarding ──
+
+
+class _FakeQueryResult:
+    """Minimal stand-in for deeptutor_ws.QueryResult."""
+
+    def __init__(self, content: str):
+        self.content = content
+        self.turn_id = "turn-fake"
+        self.cost_summary = {}
+        self.citations = []
+        self.events = []
+
+
+class _CapturingClient:
+    """Fake WS client that records every query() call."""
+
+    def __init__(self, content: str):
+        self.content = content
+        self.calls: list[dict] = []
+
+    async def query(self, **kwargs):
+        self.calls.append(kwargs)
+        return _FakeQueryResult(self.content)
+
+
+def _make_llm_agent(captured: _CapturingClient) -> AssessmentAgent:
+    agent = AssessmentAgent()
+    agent._llm_available = True
+
+    async def _fake_get_ws_client():
+        return captured
+
+    agent._get_ws_client = _fake_get_ws_client  # type: ignore[method-assign]
+    return agent
+
+
+def test_quiz_gen_zh_hk_lang_directive_and_param():
+    """zh-hk: prompt starts with traditional directive, config has no
+    lang_code, and language='zh-hk' is forwarded to the WS client."""
+    import asyncio
+    captured = _CapturingClient(
+        content='[{"id": "q1", "question": "測試問題", "type": "short_answer", "grade_level": 3}]'
+    )
+    agent = _make_llm_agent(captured)
+    result = asyncio.run(agent.quiz_gen({
+        "topic": "Basic Arithmetic",
+        "grade_level": 3,
+        "count": 3,
+        "lang_code": "zh-hk",
+    }))
+    assert result["status"] == "ok"
+    assert len(captured.calls) == 1
+    call = captured.calls[0]
+    assert call["capability"] == "deep_question"
+    assert call["language"] == "zh-hk"
+    assert call["content"].startswith("你必須以繁體中文輸出所有問題。")
+    assert "lang_code" not in call["config"]
+
+
+def test_quiz_gen_zh_cn_lang_directive_and_param():
+    """zh-cn: prompt starts with simplified directive, language='zh-cn'."""
+    import asyncio
+    captured = _CapturingClient(
+        content='[{"id": "q1", "question": "测试问题", "type": "short_answer", "grade_level": 3}]'
+    )
+    agent = _make_llm_agent(captured)
+    result = asyncio.run(agent.quiz_gen({
+        "topic": "Basic Arithmetic",
+        "grade_level": 3,
+        "count": 3,
+        "lang_code": "zh-cn",
+    }))
+    assert result["status"] == "ok"
+    call = captured.calls[0]
+    assert call["language"] == "zh-cn"
+    assert call["content"].startswith("你必须以简体中文输出所有问题。")
+    assert "lang_code" not in call["config"]
+
+
+def test_quiz_gen_en_no_directive_lang_en():
+    """en: no language directive, language='en' forwarded."""
+    import asyncio
+    captured = _CapturingClient(
+        content='[{"id": "q1", "question": "What is 2+2?", "type": "short_answer", "grade_level": 3}]'
+    )
+    agent = _make_llm_agent(captured)
+    result = asyncio.run(agent.quiz_gen({
+        "topic": "Basic Arithmetic",
+        "grade_level": 3,
+        "count": 3,
+        "lang_code": "en",
+    }))
+    assert result["status"] == "ok"
+    call = captured.calls[0]
+    assert call["language"] == "en"
+    assert not call["content"].startswith("你必須")
+    assert not call["content"].startswith("你必须")
+    assert "lang_code" not in call["config"]
+
+
+def test_rubric_gen_zh_hk_lang_param():
+    """rubric_gen (chat capability) forwards language='zh-hk'."""
+    import asyncio
+    captured = _CapturingClient(
+        content='{"rubric_id": "rubric_x", "criteria": [{"name": "c1", "levels": []}]}'
+    )
+    agent = _make_llm_agent(captured)
+    result = asyncio.run(agent.rubric_gen({
+        "topic": "Essay",
+        "grade_level": 4,
+        "criteria": ["structure"],
+        "lang_code": "zh-hk",
+    }))
+    assert result["status"] == "ok"
+    call = captured.calls[0]
+    assert call["capability"] == "chat"
+    assert call["language"] == "zh-hk"
+    assert call["content"].startswith("你必須以繁體中文輸出所有評分標準描述。")
+
+
+def test_auto_marking_zh_cn_lang_param():
+    """auto_marking (chat capability) forwards language='zh-cn'."""
+    import asyncio
+    captured = _CapturingClient(
+        content='{"internal_label": "achieved", "confidence": 0.8, "evidence_text": "测试", "rubric_id": "r1"}'
+    )
+    agent = _make_llm_agent(captured)
+    result = asyncio.run(agent.auto_marking({
+        "student_answer": "答案",
+        "question": "問題",
+        "rubric_id": "r1",
+        "topic": "Maths",
+        "grade_level": 3,
+        "lang_code": "zh-cn",
+    }))
+    assert result.internal_label == "achieved"
+    call = captured.calls[0]
+    assert call["capability"] == "chat"
+    assert call["language"] == "zh-cn"
+    assert call["content"].startswith("你必须以简体中文回复。")

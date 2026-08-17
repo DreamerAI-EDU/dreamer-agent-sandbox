@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import random
 import time
 from dataclasses import dataclass, field
@@ -49,7 +50,7 @@ RECONNECT_BASE_DELAY = 1.0
 RECONNECT_MAX_DELAY = 30.0
 RECONNECT_JITTER = 1.0
 
-QUERY_TIMEOUT = 30.0                       # total accumulation timeout
+QUERY_TIMEOUT = float(os.environ.get("DEEPTUTOR_QUERY_TIMEOUT", "30.0"))  # per-event accumulation timeout
 
 
 # ---------------------------------------------------------------------------
@@ -380,6 +381,7 @@ class DeepTutorWSClient:
         capability: str = "chat",
         config: dict[str, Any] | None = None,
         tools: list[str] | None = None,
+        language: str | None = None,
         timeout: float = QUERY_TIMEOUT,
     ) -> QueryResult:
         """Send a message and collect the full streaming response.
@@ -393,6 +395,9 @@ class DeepTutorWSClient:
             capability: Capability to invoke (default: "chat").
             config: Optional capability-specific config dict.
             tools: Optional tool whitelist for this turn.
+            language: Optional UI/response language ("en"|"zh-hk"|"zh-cn").
+                Forwarded as the top-level ``language`` field so the backend
+                sets ``context.language`` (deep_question/chat both honor it).
             timeout: Total accumulation timeout in seconds.
 
         Returns:
@@ -422,6 +427,8 @@ class DeepTutorWSClient:
                 msg["config"] = config
             if tools is not None:
                 msg["tools"] = tools
+            if language:
+                msg["language"] = language
 
             if not await self._send_raw(msg):
                 raise DeepTutorNotConnectedError("WS send failed")

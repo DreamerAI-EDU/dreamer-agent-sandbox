@@ -373,6 +373,19 @@ async def run_case(
             passed, detail = False, f"check_raised: {exc}"
         checks[ck_name] = {"passed": passed, "detail": detail}
 
+    # llm_path check: in real mode, stub fallback is a hard fail
+    if not stub:
+        status = (raw_result.get("cost_summary") or {}).get("status", "")
+        is_stub = status == "ok_stub"
+        checks["llm_path"] = {
+            "passed": not is_stub,
+            "detail": (
+                "Silent stub fallback — real LLM NOT used"
+                if is_stub
+                else "Real LLM path confirmed"
+            ),
+        }
+
     return {
         "case": case,
         "result": raw_result,
@@ -407,8 +420,10 @@ def generate_reports(
         1 for r in results
         if all(c["passed"] for c in r["checks"].values())
     )
+    # Gather check names from first result (includes conditional llm_path)
+    check_names = list(results[0]["checks"].keys()) if results else [n for n, _ in CHECKS]
     per_check = {}
-    for ck_name, _ in CHECKS:
+    for ck_name in check_names:
         per_check[ck_name] = sum(
             1 for r in results if r["checks"][ck_name]["passed"]
         )
@@ -443,7 +458,7 @@ def generate_reports(
         fail_count = len(r["checks"]) - pass_count
         status_icon = "✅" if fail_count == 0 else "❌"
 
-        md_lines.append(f"### Case {c['n']} — {status_icon} {pass_count}/{len(CHECKS)} checks passed")
+        md_lines.append(f"### Case {c['n']} — {status_icon} {pass_count}/{len(r['checks'])} checks passed")
         md_lines.append(f"**Query:** {c['query']}")
         md_lines.append(
             f"**Expected:** {c['expected_mode']} | "
@@ -569,12 +584,12 @@ async def main_async(stub: bool = False, start: int = 1, end: int = 12) -> None:
 
             # Quick per-case summary
             passes = sum(1 for v in row["checks"].values() if v["passed"])
-            fails = len(CHECKS) - passes
+            fails = len(row["checks"]) - passes
             if fails > 0:
                 failed_checks = [
                     k for k, v in row["checks"].items() if not v["passed"]
                 ]
-                print(f"       {passes}/{len(CHECKS)} passed — FAIL: {', '.join(failed_checks)}")
+                print(f"       {passes}/{len(row['checks'])} passed — FAIL: {', '.join(failed_checks)}")
     finally:
         for p in patches:
             p.stop()

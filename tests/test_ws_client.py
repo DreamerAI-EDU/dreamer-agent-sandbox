@@ -408,6 +408,58 @@ async def test_query_sends_tools_and_config(mock_deeptutor_server):
         await client.close()
 
 
+@pytest.mark.asyncio
+async def test_query_forwards_language(mock_deeptutor_server):
+    """query() with language → server receives top-level language field."""
+    host, port, ctrl = mock_deeptutor_server
+    ctrl.auto_done = False
+    ctrl.sequence = [{"type": "done", "session_id": "s_lang", "turn_id": "t-lang", "seq": 1}]
+
+    client = DeepTutorWSClient(ws_url=f"ws://{host}:{port}/api/v1/ws")
+    client.liveness_url = f"http://{host}:{port}/"
+    client.readiness_url = f"http://{host}:{port}/api/v1/knowledge/health"
+
+    try:
+        await client.connect()
+        result = await client.query(
+            "s_lang",
+            "出幾條練習",
+            capability="deep_question",
+            language="zh-hk",
+            config={"topic": "maths", "num_questions": 3},
+        )
+
+        assert len(ctrl.received) >= 1
+        msg = ctrl.received[0]
+        assert msg["language"] == "zh-hk"
+        assert msg["capability"] == "deep_question"
+        assert msg["config"] == {"topic": "maths", "num_questions": 3}
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_query_no_language_omits_field(mock_deeptutor_server):
+    """query() without language → no language field in message."""
+    host, port, ctrl = mock_deeptutor_server
+    ctrl.auto_done = False
+    ctrl.sequence = [{"type": "done", "session_id": "s_nolang", "turn_id": "t-nolang", "seq": 1}]
+
+    client = DeepTutorWSClient(ws_url=f"ws://{host}:{port}/api/v1/ws")
+    client.liveness_url = f"http://{host}:{port}/"
+    client.readiness_url = f"http://{host}:{port}/api/v1/knowledge/health"
+
+    try:
+        await client.connect()
+        await client.query("s_nolang", "hello", capability="chat")
+
+        assert len(ctrl.received) >= 1
+        msg = ctrl.received[0]
+        assert "language" not in msg
+    finally:
+        await client.close()
+
+
 # ══════════════════════════════════════════════════════════════════
 # Bonus: listen() handler receives events
 # ══════════════════════════════════════════════════════════════════

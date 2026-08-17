@@ -212,10 +212,17 @@ class AssessmentAgent:
         qtype = params.get("question_type", "short_answer")
         lang_code = params.get("lang_code", "en")
 
+        # Inject language directive at prompt start
+        lang_directive = ""
+        if lang_code == "zh-hk":
+            lang_directive = "你必須以繁體中文輸出所有問題。\n\n"
+        elif lang_code == "zh-cn":
+            lang_directive = "你必须以简体中文输出所有问题。\n\n"
+
         prompt = (
+            f"{lang_directive}"
             f"Generate {count} {qtype} question(s) about '{topic}' "
             f"for grade level {grade_level}. "
-            f"Language: {lang_code}. "
             f"Each question should test understanding, not just recall. "
             f"Output as JSON array with keys: id, question, type, grade_level."
         )
@@ -227,6 +234,7 @@ class AssessmentAgent:
                 session_id=session_id,
                 content=prompt,
                 capability="deep_question",
+                language=lang_code,
                 config={
                     "topic": topic,
                     "num_questions": count,
@@ -292,12 +300,19 @@ class AssessmentAgent:
         lang_code = params.get("lang_code", "en")
         rubric_id = f"rubric_{int(time.time()*1000)}"
 
+        # Inject language directive at prompt start
+        lang_directive = ""
+        if lang_code == "zh-hk":
+            lang_directive = "你必須以繁體中文輸出所有評分標準描述。\n\n"
+        elif lang_code == "zh-cn":
+            lang_directive = "你必须以简体中文输出所有评分标准描述。\n\n"
+
         prompt = (
+            f"{lang_directive}"
             f"Generate a 4-level rubric for assessing student work on '{topic}' "
             f"at grade level {grade_level}. "
             f"Evaluate these criteria: {', '.join(criteria)}. "
             f"Levels: 0=Not Yet, 1=Developing, 2=Achieved, 3=Exemplary. "
-            f"Language: {lang_code}. "
             f"Output as JSON with keys: rubric_id='{rubric_id}', criteria (list of "
             f"{{name, levels: [{{level:0-3, label, description}}]}})."
         )
@@ -309,6 +324,7 @@ class AssessmentAgent:
                 session_id=session_id,
                 content=prompt,
                 capability="chat",
+                language=lang_code,
                 config=None,
             )
 
@@ -364,7 +380,15 @@ class AssessmentAgent:
         grade_level = params.get("grade_level", 1)
         lang_code = params.get("lang_code", "en")
 
+        # Inject language directive at prompt start
+        lang_directive = ""
+        if lang_code == "zh-hk":
+            lang_directive = "你必須以繁體中文回覆。evidence_text 欄位必須使用繁體中文。\n\n"
+        elif lang_code == "zh-cn":
+            lang_directive = "你必须以简体中文回复。evidence_text 字段必须使用简体中文。\n\n"
+
         prompt = (
+            f"{lang_directive}"
             f"You are an assessment agent for Dreamer AI. "
             f"Evaluate this student answer against the Dreamer 4D rubric. "
             f"Output ONLY a JSON object with these keys:\n"
@@ -374,8 +398,7 @@ class AssessmentAgent:
             f'that supports your label)\n'
             f'  "rubric_id": "{rubric_id}"\n\n'
             f"Topic: {topic}\n"
-            f"Grade Level: {grade_level}\n"
-            f"Language: {lang_code}\n\n"
+            f"Grade Level: {grade_level}\n\n"
             f"Question: {question}\n\n"
             f"Student Answer: {student_answer}"
         )
@@ -387,6 +410,7 @@ class AssessmentAgent:
                 session_id=session_id,
                 content=prompt,
                 capability="chat",
+                language=lang_code,
                 config=None,
             )
 

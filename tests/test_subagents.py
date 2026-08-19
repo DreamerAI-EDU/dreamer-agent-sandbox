@@ -18,11 +18,11 @@ from agents.registry import SubagentRegistry
 from agents.subagents import (
     CurriculumAgentStub,
     PortfolioAgentStub,
-    ParentReportAgentStub,
     MarketingAgentStub,
     register_all,
 )
 from agents.assessment_agent import AssessmentAgent
+from agents.parent_report_agent import ParentReportAgent
 
 
 # ── Fixtures ────────────────────────────────────────────
@@ -66,12 +66,11 @@ def test_portfolio_stub_execute():
     assert "[PortfolioAgent stub]" in result["result"]
 
 
-def test_parent_report_stub_execute():
-    agent = ParentReportAgentStub()
+def test_parent_report_agent_execute():
+    agent = ParentReportAgent()
     result = agent.execute("t4", {"key": "val"})
     assert result["agent"] == "parent_report"
-    assert result["status"] == "ok"
-    assert "[ParentReportAgent stub]" in result["result"]
+    assert result["status"] == "error"  # missing student_id
 
 
 def test_marketing_stub_execute():
@@ -152,7 +151,7 @@ def test_non_student_agents_excluded_from_list_by_mode(populated_registry):
 def test_non_student_agents_still_gettable(populated_registry):
     """Non-student agents should be accessible via direct get()."""
     parent = populated_registry.get("parent_report")
-    assert isinstance(parent, ParentReportAgentStub)
+    assert isinstance(parent, ParentReportAgent)
 
     marketing = populated_registry.get("marketing")
     assert isinstance(marketing, MarketingAgentStub)
@@ -185,8 +184,8 @@ def test_agent_classes_have_correct_static_attrs():
     assert PortfolioAgentStub.AGENT_NAME == "portfolio"
     assert PortfolioAgentStub.MODE_ALLOWLIST == ["CONTEXTUAL"]
 
-    assert ParentReportAgentStub.AGENT_NAME == "parent_report"
-    assert ParentReportAgentStub.MODE_ALLOWLIST is None
+    assert ParentReportAgent.AGENT_NAME == "parent_report"
+    assert ParentReportAgent.MODE_ALLOWLIST is None
 
     assert MarketingAgentStub.AGENT_NAME == "marketing"
     assert MarketingAgentStub.MODE_ALLOWLIST is None

@@ -11,8 +11,8 @@ from .registry import SubagentRegistry
 from .subagents import (
     CurriculumAgentStub,
     PortfolioAgentStub,
-    ParentReportAgentStub,
     MarketingAgentStub,
     register_all as register_all_subagents,
 )
 from .assessment_agent import AssessmentAgent
+from .parent_report_agent import ParentReportAgent

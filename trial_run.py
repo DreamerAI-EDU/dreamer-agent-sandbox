@@ -412,11 +412,26 @@ def verify_registry_wiring() -> dict:
 
     Returns dict of check_name → bool.
     """
+    import os
+    import sqlite3
+    import tempfile
+
     from agents.registry import SubagentRegistry
     from agents.subagents import register_all
     from agents.hermes_scheduler import HermesScheduler
+    from trial_parent_report import _seed_schema
 
     checks = {}
+
+    # ParentReportAgent queries the DB on route(); point the registered
+    # instance at a seeded temp DB so CI (no dreamer.db) behaves like local.
+    fd, tmp_db = tempfile.mkstemp(suffix=".db", prefix="trial_wire_")
+    os.close(fd)
+    os.unlink(tmp_db)
+    conn = sqlite3.connect(tmp_db)
+    _seed_schema(conn)
+    conn.commit()
+    conn.close()
 
     # Create registry + register all stubs
     registry = SubagentRegistry()
@@ -425,6 +440,11 @@ def verify_registry_wiring() -> dict:
     # Inject into scheduler
     scheduler = HermesScheduler(registry=registry)
     checks["registry_injected"] = scheduler.registry is registry
+
+    # point registered ParentReportAgent at the seeded temp DB
+    pr_agent = registry.get("parent_report")
+    if pr_agent is not None and hasattr(pr_agent, "_db_path"):
+        pr_agent._db_path = os.path.abspath(tmp_db)
 
     # select_candidates by mode
     direct = scheduler.select_candidates("DIRECT")
@@ -460,8 +480,11 @@ def verify_registry_wiring() -> dict:
         result["agent"] == "assessment" and result["status"] == "ok"
     )
 
-    # route() with non-student agent
-    result = scheduler.route("parent_report", "t_wire_003", {"key": "val"})
+    # route() with non-student agent (real ParentReportAgent validates params)
+    result = scheduler.route(
+        "parent_report", "t_wire_003",
+        {"student_id": "t_wire_003", "period": "cycle", "lang_code": "en"},
+    )
     checks["route_non_student_ok"] = (
         result["agent"] == "parent_report" and result["status"] == "ok"
     )

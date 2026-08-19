@@ -595,3 +595,58 @@ def test_auto_marking_zh_cn_lang_param():
     assert call["capability"] == "chat"
     assert call["language"] == "zh-cn"
     assert call["content"].startswith("你必须以简体中文回复。")
+
+
+def test_progress_track_rolling_average(monkeypatch, tmp_path):
+    """D8 (Phase 6): mastery_pct is a rolling average across attempts.
+
+    new = (prev_mastery * prev_attempts + new_mastery) / (prev_attempts + 1)
+    Regression guard for the progress_snapshots upsert formula.
+    """
+    import asyncio
+    import sqlite3
+
+    db_file = tmp_path / "rolling.db"
+    monkeypatch.setattr("agents.assessment_agent.DB_PATH", str(db_file))
+    # _ensure_db is class-level cached; force re-create on the patched path
+    AssessmentAgent._db_ensured = False
+
+    agent = AssessmentAgent()
+    agent._llm_available = False
+
+    base = {
+        "student_id": "stu_roll",
+        "session_id": "sess_r",
+        "topic_id": "maths_rolling",
+        "rubric_id": "r1",
+        "evidence_text": "ok",
+        "age_band": "P4-P6",
+        "lang_code": "en",
+    }
+
+    # attempt 1: developing (0.50) → mastery 0.50, count 1
+    r1 = asyncio.run(agent.progress_track({**base, "internal_label": "developing", "confidence": 0.8}))
+    assert r1["status"] == "ok"
+    # attempt 2: achieved (0.75) → (0.50*1 + 0.75)/2 = 0.625, count 2
+    r2 = asyncio.run(agent.progress_track({**base, "internal_label": "achieved", "confidence": 0.8}))
+    assert r2["status"] == "ok"
+    # attempt 3: not_yet (0.25) → (0.625*2 + 0.25)/3 = 0.50, count 3
+    r3 = asyncio.run(agent.progress_track({**base, "internal_label": "not_yet", "confidence": 0.8}))
+    assert r3["status"] == "ok"
+
+    conn = sqlite3.connect(str(db_file))
+    row = conn.execute(
+        """SELECT mastery_pct, attempt_count, last_label
+           FROM progress_snapshots
+           WHERE student_id=? AND topic_id=?""",
+        ("stu_roll", "maths_rolling"),
+    ).fetchone()
+    conn.close()
+
+    assert row is not None
+    mastery, attempts, last = row
+    assert attempts == 3
+    assert last == "not_yet"
+    assert abs(mastery - 0.5) < 1e-6
+    # restore class flag so other tests see the original DB path state
+    AssessmentAgent._db_ensured = False

@@ -64,29 +64,6 @@ class PortfolioAgentStub:
         }
 
 
-class ParentReportAgentStub:
-    """Non-student-facing: generates parent-facing progress reports.
-
-    Queries Dreamer DB only (not DeepTutor).
-    Read-only on portfolio KB.
-    mode_allowlist=None — no student-query routing.
-    """
-
-    AGENT_NAME = "parent_report"
-    KB_OWNERSHIP: list = []
-    KBS_READ = ["dreamer-portfolio"]
-    CAPABILITIES = ["report_gen", "db_query", "progress_summary"]
-    MODE_ALLOWLIST = None  # non-student-facing
-
-    def execute(self, task_id: str, params: Dict) -> Dict:
-        return {
-            "agent": self.AGENT_NAME,
-            "task_id": task_id,
-            "status": "ok",
-            "result": f"[ParentReportAgent stub] params={params}",
-        }
-
-
 class MarketingAgentStub:
     """Non-student-facing: generates social media / marketing content.
 
@@ -116,9 +93,11 @@ def register_all(registry) -> None:
     """Register all agent entries into the given registry.
 
     Phase 3: Assessment uses real AssessmentAgent (agents/assessment_agent.py).
+    Phase 6 Day 24: ParentReport uses real ParentReportAgent (agents/parent_report_agent.py).
     Phase 2.1 stubs remain for other agents.
     """
     from .assessment_agent import AssessmentAgent
+    from .parent_report_agent import ParentReportAgent
 
     registry.register(
         CurriculumAgentStub.AGENT_NAME,
@@ -142,11 +121,11 @@ def register_all(registry) -> None:
         mode_allowlist=PortfolioAgentStub.MODE_ALLOWLIST,
     )
     registry.register(
-        ParentReportAgentStub.AGENT_NAME,
-        ParentReportAgentStub,
-        kb_ownership=ParentReportAgentStub.KB_OWNERSHIP,
-        capabilities=ParentReportAgentStub.CAPABILITIES,
-        mode_allowlist=ParentReportAgentStub.MODE_ALLOWLIST,
+        ParentReportAgent.AGENT_NAME,
+        ParentReportAgent,
+        kb_ownership=ParentReportAgent.KB_OWNERSHIP,
+        capabilities=ParentReportAgent.CAPABILITIES,
+        mode_allowlist=ParentReportAgent.MODE_ALLOWLIST,
     )
     registry.register(
         MarketingAgentStub.AGENT_NAME,

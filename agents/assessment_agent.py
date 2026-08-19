@@ -527,14 +527,19 @@ class AssessmentAgent:
                     else:
                         new_streak = 1
 
+                    # D8 (Phase 6): mastery_pct uses rolling average
+                    #   new = (prev_mastery * prev_attempts + new_mastery) / (prev_attempts + 1)
                     conn.execute(
                         """INSERT INTO progress_snapshots
                            (student_id, topic_id, mastery_pct, attempt_count,
                             last_label, streak, updated_at)
                            VALUES (?,?,?,1,?,?,?)
                            ON CONFLICT(student_id, topic_id) DO UPDATE SET
-                           mastery_pct=excluded.mastery_pct,
-                           attempt_count=attempt_count+1,
+                           mastery_pct=(progress_snapshots.mastery_pct *
+                                        progress_snapshots.attempt_count +
+                                        excluded.mastery_pct) /
+                                       (progress_snapshots.attempt_count + 1),
+                           attempt_count=progress_snapshots.attempt_count + 1,
                            last_label=excluded.last_label,
                            streak=excluded.streak,
                            updated_at=excluded.updated_at""",

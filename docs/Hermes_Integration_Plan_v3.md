@@ -323,7 +323,7 @@ Dreamer AI uses its proprietary Dreamer 4D framework as the pedagogical spine. P
 
 | Internal (DeepTutor) | Kid-Facing P1-P3 (en) | Kid-Facing P1-P3 (zh-hk) | Kid-Facing P4-P6 (en) | Kid-Facing P4-P6 (zh-hk) | Kid-Facing S1-S3 (en) | Kid-Facing S1-S3 (zh-hk) | Parent-Facing (en) | Parent-Facing (zh-hk) |
 |---|---|---|---|---|---|---|---|---|
-| **Not Yet** | Getting Started | 開始緊啦！ | Keep Going! | 繼續努力！ | Not Yet | 仍需努力 | Not Yet Achieved | 尚未達標 |
+| **Not Yet** | Getting Started | 開始緊啦！ | Keep Going! | 繼續努力！ | Not Yet | 仍需努力 | Building Foundations | 建立基礎中 |
 | **Developing** | Making Progress | 進步中！ | Almost There! | 就快得啦！ | Developing | 發展中 | Developing | 發展中 |
 | **Achieved** | You've Got It! | 你做到啦！ | Well Done! | 做得好！ | Achieved | 已達標 | Achieved | 已達標 |
 | **Exemplary** | Amazing Work! | 好犀利呀！ | Excellent! | 非常出色！ | Exemplary | 卓越表現 | Exemplary | 卓越表現 |

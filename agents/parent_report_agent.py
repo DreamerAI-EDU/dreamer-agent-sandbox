@@ -287,6 +287,31 @@ class ParentReportAgent:
             total_ms += float(data.get("elapsed_ms") or 0.0)
         return int(total_ms / 1000)
 
+    def _aggregate_cost(
+        self, obs_events: List[dict]
+    ) -> int:
+        """Total token usage from obs_events cost events (summary level).
+
+        D5 (Phase 6): report-level total only — no per-assessment detail.
+        Cost events written by the WS client carry total_tokens; events written
+        directly by assessment (no LLM) carry no token field → contribute 0.
+        Returns 0 when unavailable.
+        """
+        total = 0
+        for ev in obs_events:
+            if ev.get("event_type") != "cost":
+                continue
+            try:
+                data = json.loads(ev.get("event_data") or "{}")
+            except (json.JSONDecodeError, TypeError):
+                continue
+            tokens = data.get("total_tokens") or 0
+            try:
+                total += int(tokens)
+            except (TypeError, ValueError):
+                continue
+        return total
+
     def _build_topics(
         self,
         logs: List[dict],
@@ -660,6 +685,7 @@ class ParentReportAgent:
 
         obs_events = self._query_obs_events(student_id, start, end)
         duration_seconds = self._aggregate_duration(obs_events)
+        total_tokens = self._aggregate_cost(obs_events)
 
         # 2. aggregates
         topic_ids = sorted({
@@ -726,7 +752,7 @@ class ParentReportAgent:
             "age_band": None,
             "kid_label": None,
             "citations": [],
-            "cost_summary": {"status": "ok", "total_tokens": 0},
+            "cost_summary": {"status": "ok", "total_tokens": total_tokens},
             "report": report,
         }
 
@@ -825,6 +851,7 @@ class ParentReportAgent:
 
         obs_events = self._query_obs_events(student_id, start, end)
         duration_seconds = self._aggregate_duration(obs_events)
+        total_tokens = self._aggregate_cost(obs_events)
 
         topic_ids = sorted({
             (l.get("topic_id") or "") for l in logs if l.get("topic_id")
@@ -873,7 +900,7 @@ class ParentReportAgent:
             "age_band": None,
             "kid_label": None,
             "citations": [],
-            "cost_summary": {"status": "ok", "total_tokens": 0},
+            "cost_summary": {"status": "ok", "total_tokens": total_tokens},
             "report": report,
         }
 

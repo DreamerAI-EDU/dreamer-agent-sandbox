@@ -315,6 +315,25 @@ def test_duration_from_cost_events(db_path):
     assert result["report"]["summary"]["total_duration_seconds"] == 150
 
 
+def test_cost_summary_tokens_aggregated(db_path):
+    """cost_summary.total_tokens aggregates cost event total_tokens (D5)."""
+    conn = sqlite3.connect(db_path)
+    _seed_log(conn, "stu_c", "t_maths", "achieved", 1)
+    _seed_session(conn, "stu_c", 1)
+    _seed_obs(conn, "stu_c", "cost", {"total_tokens": 6283, "elapsed_ms": 17000}, 1)
+    _seed_obs(conn, "stu_c", "cost", {"total_tokens": 500, "elapsed_ms": 3000}, 1)
+    # Non-cost events and token-less cost events contribute 0
+    _seed_obs(conn, "stu_c", "routing", {"matched_keyword": "溫書"}, 1)
+    _seed_obs(conn, "stu_c", "cost", {"elapsed_ms": 9000}, 1)
+    conn.commit()
+    conn.close()
+
+    agent = ParentReportAgent(db_path=db_path)
+    result = agent.generate_report("stu_c", period="cycle", lang_code="zh-hk")
+    assert result["cost_summary"]["status"] == "ok"
+    assert result["cost_summary"]["total_tokens"] == 6783
+
+
 # ── execute() wrapper ──────────────────────────────────
 
 def test_execute_wrapper(db_path):

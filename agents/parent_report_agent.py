@@ -289,18 +289,25 @@ class ParentReportAgent:
 
     def _aggregate_cost(
         self, obs_events: List[dict]
-    ) -> int:
+    ) -> "tuple[int, bool]":
         """Total token usage from obs_events cost events (summary level).
 
         D5 (Phase 6): report-level total only — no per-assessment detail.
         Cost events written by the WS client carry total_tokens; events written
         directly by assessment (no LLM) carry no token field → contribute 0.
-        Returns 0 when unavailable.
+
+        Returns (total_tokens, has_cost_events). has_cost_events=True when at
+        least one cost event exists in the period — even if all of them are
+        token-less (total stays 0). Caller decides status: all-token-less is
+        "no_data", NOT a silent 0 (a zero-token report would mislead parents
+        into thinking the report was free).
         """
         total = 0
+        has_cost = False
         for ev in obs_events:
             if ev.get("event_type") != "cost":
                 continue
+            has_cost = True
             try:
                 data = json.loads(ev.get("event_data") or "{}")
             except (json.JSONDecodeError, TypeError):
@@ -310,7 +317,7 @@ class ParentReportAgent:
                 total += int(tokens)
             except (TypeError, ValueError):
                 continue
-        return total
+        return total, has_cost
 
     def _build_topics(
         self,
@@ -685,7 +692,7 @@ class ParentReportAgent:
 
         obs_events = self._query_obs_events(student_id, start, end)
         duration_seconds = self._aggregate_duration(obs_events)
-        total_tokens = self._aggregate_cost(obs_events)
+        total_tokens, has_cost = self._aggregate_cost(obs_events)
 
         # 2. aggregates
         topic_ids = sorted({
@@ -752,7 +759,11 @@ class ParentReportAgent:
             "age_band": None,
             "kid_label": None,
             "citations": [],
-            "cost_summary": {"status": "ok", "total_tokens": total_tokens},
+            "cost_summary": (
+                {"status": "ok", "total_tokens": total_tokens}
+                if has_cost and total_tokens > 0
+                else {"status": "no_data", "total_tokens": 0}
+            ),
             "report": report,
         }
 
@@ -851,7 +862,7 @@ class ParentReportAgent:
 
         obs_events = self._query_obs_events(student_id, start, end)
         duration_seconds = self._aggregate_duration(obs_events)
-        total_tokens = self._aggregate_cost(obs_events)
+        total_tokens, has_cost = self._aggregate_cost(obs_events)
 
         topic_ids = sorted({
             (l.get("topic_id") or "") for l in logs if l.get("topic_id")
@@ -900,7 +911,11 @@ class ParentReportAgent:
             "age_band": None,
             "kid_label": None,
             "citations": [],
-            "cost_summary": {"status": "ok", "total_tokens": total_tokens},
+            "cost_summary": (
+                {"status": "ok", "total_tokens": total_tokens}
+                if has_cost and total_tokens > 0
+                else {"status": "no_data", "total_tokens": 0}
+            ),
             "report": report,
         }
 

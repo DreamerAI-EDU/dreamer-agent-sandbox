@@ -460,8 +460,11 @@ def verify_registry_wiring() -> dict:
         result["agent"] == "assessment" and result["status"] == "ok"
     )
 
-    # route() with non-student agent
-    result = scheduler.route("parent_report", "t_wire_003", {"key": "val"})
+    # route() with non-student agent (real ParentReportAgent validates params)
+    result = scheduler.route(
+        "parent_report", "t_wire_003",
+        {"student_id": "t_wire_003", "period": "cycle", "lang_code": "en"},
+    )
     checks["route_non_student_ok"] = (
         result["agent"] == "parent_report" and result["status"] == "ok"
     )

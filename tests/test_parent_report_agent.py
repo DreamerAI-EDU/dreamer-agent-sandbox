@@ -199,6 +199,45 @@ def test_standard_variant_established(db_path):
     assert report["summary"]["session_count"] >= 4
 
 
+def test_variant_boundary_exact_five_sessions_long_span(db_path):
+    """Boundary (D7): exactly 5 sessions + first session ≥14 days ago → standard."""
+    conn = sqlite3.connect(db_path)
+    # 5 sessions exactly; first one 20 days ago (≥ FIRST_STEPS_MIN_DAYS)
+    for i, days_ago in enumerate([20, 10, 5, 2, 0]):
+        _seed_log(conn, "stu_b5", "t_maths", "achieved", days_ago, session_id=f"s{i}")
+        _seed_session(conn, "stu_b5", days_ago, session_id=f"s{i}")
+    _seed_snapshot(conn, "stu_b5", "t_maths", 0.75, "achieved", 5, attempts=5)
+    conn.commit()
+    conn.close()
+
+    agent = ParentReportAgent(db_path=db_path)
+    result = agent.generate_report("stu_b5", period="journey", lang_code="zh-hk")
+    report = result["report"]
+    assert report["summary"]["session_count"] == 5
+    assert report["variant"] == "standard"
+    assert report["baseline"] is None
+
+
+def test_variant_boundary_five_sessions_short_span(db_path):
+    """Boundary (D7): exactly 5 sessions but first session <14 days ago → first_steps."""
+    conn = sqlite3.connect(db_path)
+    # 5 sessions exactly; first one only 10 days ago (< FIRST_STEPS_MIN_DAYS)
+    for i, days_ago in enumerate([10, 5, 2, 1, 0]):
+        _seed_log(conn, "stu_b5s", "t_maths", "achieved", days_ago, session_id=f"s{i}")
+        _seed_session(conn, "stu_b5s", days_ago, session_id=f"s{i}")
+    _seed_snapshot(conn, "stu_b5s", "t_maths", 0.75, "achieved", 5, attempts=5)
+    conn.commit()
+    conn.close()
+
+    agent = ParentReportAgent(db_path=db_path)
+    result = agent.generate_report("stu_b5s", period="journey", lang_code="zh-hk")
+    report = result["report"]
+    assert report["summary"]["session_count"] == 5
+    assert report["variant"] == "first_steps"
+    assert report["baseline"] is not None
+    assert report["roadmap"] is not None
+
+
 # ── Period windows ─────────────────────────────────────
 
 def test_weekly_window_filters_old_logs(db_path):
@@ -332,6 +371,38 @@ def test_cost_summary_tokens_aggregated(db_path):
     result = agent.generate_report("stu_c", period="cycle", lang_code="zh-hk")
     assert result["cost_summary"]["status"] == "ok"
     assert result["cost_summary"]["total_tokens"] == 6783
+
+
+def test_cost_summary_all_tokenless_is_no_data(db_path):
+    """D5 spot check: all cost events token-less → status=no_data, NOT silent 0."""
+    conn = sqlite3.connect(db_path)
+    _seed_log(conn, "stu_c0", "t_maths", "achieved", 1)
+    _seed_session(conn, "stu_c0", 1)
+    # cost events exist but carry no total_tokens
+    _seed_obs(conn, "stu_c0", "cost", {"elapsed_ms": 9000}, 1)
+    _seed_obs(conn, "stu_c0", "cost", {"elapsed_ms": 3000}, 1)
+    conn.commit()
+    conn.close()
+
+    agent = ParentReportAgent(db_path=db_path)
+    result = agent.generate_report("stu_c0", period="cycle", lang_code="zh-hk")
+    assert result["cost_summary"]["status"] == "no_data"
+    assert result["cost_summary"]["total_tokens"] == 0
+
+
+def test_cost_summary_no_cost_events_is_no_data(db_path):
+    """D5 spot check: no cost events at all → status=no_data."""
+    conn = sqlite3.connect(db_path)
+    _seed_log(conn, "stu_c1", "t_maths", "achieved", 1)
+    _seed_session(conn, "stu_c1", 1)
+    _seed_obs(conn, "stu_c1", "routing", {"matched_keyword": "溫書"}, 1)
+    conn.commit()
+    conn.close()
+
+    agent = ParentReportAgent(db_path=db_path)
+    result = agent.generate_report("stu_c1", period="cycle", lang_code="zh-hk")
+    assert result["cost_summary"]["status"] == "no_data"
+    assert result["cost_summary"]["total_tokens"] == 0
 
 
 # ── execute() wrapper ──────────────────────────────────

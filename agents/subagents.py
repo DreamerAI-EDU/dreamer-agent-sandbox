@@ -98,6 +98,7 @@ def register_all(registry) -> None:
     """
     from .assessment_agent import AssessmentAgent
     from .parent_report_agent import ParentReportAgent
+    from .portfolio_agent import PortfolioAgent
 
     registry.register(
         CurriculumAgentStub.AGENT_NAME,
@@ -114,11 +115,11 @@ def register_all(registry) -> None:
         mode_allowlist=AssessmentAgent.MODE_ALLOWLIST,
     )
     registry.register(
-        PortfolioAgentStub.AGENT_NAME,
-        PortfolioAgentStub,
-        kb_ownership=PortfolioAgentStub.KB_OWNERSHIP,
-        capabilities=PortfolioAgentStub.CAPABILITIES,
-        mode_allowlist=PortfolioAgentStub.MODE_ALLOWLIST,
+        PortfolioAgent.AGENT_NAME,
+        PortfolioAgent,
+        kb_ownership=PortfolioAgent.KB_OWNERSHIP,
+        capabilities=PortfolioAgent.CAPABILITIES,
+        mode_allowlist=PortfolioAgent.MODE_ALLOWLIST,
     )
     registry.register(
         ParentReportAgent.AGENT_NAME,

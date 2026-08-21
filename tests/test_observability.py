@@ -42,8 +42,13 @@ def tmp_db_path(tmp_path: Path) -> str:
 def clean_env(tmp_db_path: str):
     """Set DREAMER_DB_PATH to a temp DB, restore after test.
     Also creates session_logs table (needed by _write_session_log)."""
+    import agents.hermes_scheduler as hs
+
     old = os.environ.get("DREAMER_DB_PATH")
     os.environ["DREAMER_DB_PATH"] = tmp_db_path
+    # Reset table-ensured flag so _write_session_log migrates the fresh DB.
+    old_flag = hs._SESSION_LOGS_TABLE_ENSURED
+    hs._SESSION_LOGS_TABLE_ENSURED = False
     # Pre-create session_logs table (used by hermes_scheduler)
     conn = sqlite3.connect(tmp_db_path)
     conn.execute("PRAGMA journal_mode=WAL")
@@ -58,12 +63,14 @@ def clean_env(tmp_db_path: str):
             agent_list TEXT NOT NULL,
             topic_ids TEXT NOT NULL,
             cost_summary TEXT NOT NULL,
+            duration_seconds INTEGER,
             created_at TEXT NOT NULL
         );
     """)
     conn.commit()
     conn.close()
     yield tmp_db_path
+    hs._SESSION_LOGS_TABLE_ENSURED = old_flag
     if old is not None:
         os.environ["DREAMER_DB_PATH"] = old
     else:

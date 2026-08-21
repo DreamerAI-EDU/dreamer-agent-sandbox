@@ -41,8 +41,12 @@ T1 = "computing-scratch-basics-01"
 T2 = "maths-multiplication-02"
 T3 = "computing-game-design-01"
 
-# Default max tokens cap (env DREAMER_MAX_TOKENS overrides)
-MAX_TOKENS = int(os.environ.get("DREAMER_MAX_TOKENS", "8192"))
+# Pipeline-level token sanity ceiling (audit-only; env DREAMER_MAX_TOKENS overrides).
+# Day 27 #6 removed the client-side max_tokens injection, so this is no longer a
+# "did the cap truncate" assertion — truncation responsibility moved server-side
+# (agents.yaml 8000 output cap). 200_000 chosen 2026-08-21 from real-run observations
+# 75k–128k tokens (≈1.5× headroom: catches runaway pipelines, avoids flapping).
+COST_CEILING = int(os.environ.get("DREAMER_MAX_TOKENS", "200000"))
 
 # Per-case timeout (seconds) — real execute() can take 80-120s via WS
 CASE_TIMEOUT_S = int(os.environ.get("AUDIT_CASE_TIMEOUT", "150"))
@@ -288,20 +292,42 @@ def check_sentence_length(result: dict, case: dict) -> tuple:
 
 
 def check_cost(result: dict, case: dict) -> tuple:
-    """Check #5: cost_summary tokens ≤ MAX_TOKENS."""
-    cost = result.get("cost_summary", {})
+    """Check #5: cost_summary must carry a real token number and stay under ceiling.
+
+    Three-layer assertion (Day 27 #6 rewrite):
+      1. Real LLM cases must report tokens — no number = FAIL (closes vacuous pass
+         where stub/non-LLM responses passed by "No token field").
+      2. Pipeline-level sanity ceiling COST_CEILING (default 200_000, see constant
+         comment for basis) — catches runaway pipelines.
+      3. No truncation assertion — client-side max_tokens injection was removed in
+         Day 27 #6; truncation responsibility is server-side (agents.yaml output cap).
+    """
+    cost = result.get("cost_summary") or {}
     tokens = (
         cost.get("tokens")
         or cost.get("total_tokens")
         or cost.get("cost_tokens")
         or cost.get("usage_total_tokens")
     )
+    # Timeout / error / stub responses legitimately lack token numbers;
+    # they are not real-LLM cost samples, so pass. ok_stub covers --stub mode
+    # (STUB_QUIZ_RESPONSE) and silent WS fallback in real mode — the latter is
+    # caught by llm_path check, not cost.
+    is_non_llm = (
+        result.get("mode") in ("TIMEOUT", "ERROR")
+        or cost.get("status") == "ok_stub"
+        or "ws_fallback" in cost
+        or "error" in cost
+        or "timeout" in cost
+    )
+    if tokens is None and is_non_llm:
+        return True, "No token field (non-LLM/error path)"
     if tokens is None:
-        # Stub responses may not include tokens — pass
-        return True, "No token field (stub/non-LLM response)"
-    passed = int(tokens) <= MAX_TOKENS
+        # Real LLM path with no cost data — vacuous pass is now a hard fail.
+        return False, "No token field (real LLM path must report cost)"
+    passed = int(tokens) <= COST_CEILING
     detail = f"tokens={tokens}" + (
-        f" (>{MAX_TOKENS})" if not passed else ""
+        f" (>{COST_CEILING})" if not passed else ""
     )
     return passed, detail
 

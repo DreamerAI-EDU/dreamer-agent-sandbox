@@ -22,14 +22,14 @@
   "age_band": null,
   "kid_label": null,
   "citations": [],
-  "cost_summary": {"status": "...", "total_tokens": 0},
+  "cost_summary": {"status": "ok | no_data", "total_tokens": 0},
   "report": {
     "student_id": "...",
     "variant": "first_steps | standard",
     "period": {"type": "weekly | cycle | journey", "from": "...", "to": "...", "days": 56},
     "summary": {
       "session_count": 0,
-      "total_duration_seconds": 0,
+      "total_duration_seconds": 0,   // null 當無 duration（= no_data），唔出假 0
       "topics_touched": 0,
       "mode_distribution": {"DIRECT": 0, "CONTEXTUAL": 0, "HYBRID": 0}
     },
@@ -58,8 +58,10 @@
 
 | 欄位 / 規則 | 說明 |
 |---|---|
-| `variant` | `first_steps`（首週 / 首 3–5 sessions）或 `standard`（≥2 週或 ≥5 sessions） |
+| `variant` | `first_steps`（首週 / 首 3–5 sessions）或 `standard`（**≥2 週 且 ≥5 sessions**，AND 邏輯） |
 | `baseline` / `roadmap` | `first_steps` 時填入（baseline=首次 DIRECT session 嘅 auto_marking 結果做起始水平；roadmap=Curriculum Navigator prerequisite chain 嘅下一步建議）；`standard` 時出 `null` |
+| `total_duration_seconds` | 有 duration 出 int（秒）；歷史行留 NULL / 無 duration 數據時出 `null`，**唔准砌假 0**（= no_data，Phase 7 前端要 handle null） |
+| `cost_summary` | 有 obs 數據時出真實 token 數；無數據出 `{"status": "no_data", "total_tokens": 0}`，**唔准當佢係真實 0 用量** |
 | `mastery_delta` | 期初 vs 期末（依賴 D8 rolling average） |
 | `portfolio_highlights` | cycle report cross-link 學生期內嘅 portfolio items（id + title 級別，唔倒內容） |
 | `evidence_text` | 截斷 ≤200 字 |
@@ -150,3 +152,36 @@
 ## 4. 版本記錄
 
 - 2026-08-19：初版鎖死（D1–D8 / P1–P5 全部拍板後）
+- 2026-08-21（Day 27）：
+  - `total_duration_seconds` 可為 `null`（= no_data），歷史行留 NULL 唔 backfill 假數
+  - `cost_summary` 無數據時出 `{"status": "no_data", "total_tokens": 0}`（唔當真實 0 用量）
+  - `variant` 判定係 AND 邏輯：`standard` 需要 ≥2 週 **且** ≥5 sessions
+  - 新增 obs_events cost event schema（§5），兩路徑（assessment / CONTEXTUAL WS）統一 emit helper，schema 單一出處
+
+---
+
+## 5. obs_events cost event schema（D5 數據源，Day 27 對齊）
+
+所有 mode（DIRECT / HYBRID / CONTEXTUAL）嘅 cost event 由 `execute()` 內統一 helper emit，schema 只有一個出處。Phase 7 前端對住呢份 schema 寫用量展示。
+
+```json
+{
+  "event_type": "cost",
+  "event_data": {
+    "agent": "assessment | deeptutor_ws",
+    "capability": "quiz_gen | rubric_gen | auto_marking | progress_track | chat",
+    "status": "ok | ok_stub | error | ...",
+    "questions_count": 3,
+    "total_tokens": 150,
+    "total_cost_usd": 0.0019,
+    "total_calls": 1,
+    "elapsed_ms": 20.7
+  }
+}
+```
+
+| 欄位 | 說明 |
+|---|---|
+| `total_tokens` / `total_cost_usd` / `total_calls` | 由 WS `result` event 嘅 `cost_summary` propagate（巢狀 path `metadata.metadata.cost_summary` + flat fallback）；兩路徑字段必須一致 |
+| `elapsed_ms` | `execute()` 統一附上（runtime 值，唔跨 event 比較） |
+| assessment path 缺 WS 數據 | 對應欄位缺省（唔砌假 0）；`status` 反映真實狀態（`ok_stub` / `error` 等） |

@@ -61,6 +61,7 @@ CREATE TABLE session_logs (
     agent_list TEXT NOT NULL DEFAULT '',
     topic_ids TEXT NOT NULL DEFAULT '',
     cost_summary TEXT NOT NULL DEFAULT '{}',
+    duration_seconds INTEGER,
     created_at TEXT NOT NULL
 );
 CREATE TABLE obs_events (
@@ -99,14 +100,14 @@ def _seed_log(conn, student_id, topic_id, label, days_ago, mode="DIRECT", sessio
     )
 
 
-def _seed_session(conn, student_id, days_ago, session_id="s1", mode="DIRECT", topic_ids="t_maths"):
+def _seed_session(conn, student_id, days_ago, session_id="s1", mode="DIRECT", topic_ids="t_maths", duration_seconds=None):
     conn.execute(
         """INSERT INTO session_logs
            (session_id, student_id, mode, lang_code, age_band, agent_list,
-            topic_ids, cost_summary, created_at)
-           VALUES (?,?,?,?,?,?,?,?,?)""",
+            topic_ids, cost_summary, duration_seconds, created_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?)""",
         (session_id, student_id, mode, "zh-hk", "P4-P6", '["assessment"]',
-         topic_ids, '{}', _iso(days_ago)),
+         topic_ids, '{}', duration_seconds, _iso(days_ago)),
     )
 
 
@@ -339,19 +340,122 @@ def test_safety_alerts_pointer_only(db_path):
 
 # ── Duration aggregation ───────────────────────────────
 
-def test_duration_from_cost_events(db_path):
-    """total_duration_seconds aggregates cost event elapsed_ms."""
+def test_duration_from_session_logs(db_path):
+    """total_duration_seconds aggregates session_logs.duration_seconds."""
     conn = sqlite3.connect(db_path)
     _seed_log(conn, "stu_t", "t_maths", "achieved", 1)
-    _seed_session(conn, "stu_t", 1)
-    _seed_obs(conn, "stu_t", "cost", {"elapsed_ms": 120000}, 1)
-    _seed_obs(conn, "stu_t", "cost", {"elapsed_ms": 30000}, 1)
+    _seed_session(conn, "stu_t", 1, duration_seconds=120)
+    _seed_session(conn, "stu_t", 1, session_id="s2", duration_seconds=30)
     conn.commit()
     conn.close()
 
     agent = ParentReportAgent(db_path=db_path)
     result = agent.generate_report("stu_t", period="cycle", lang_code="zh-hk")
     assert result["report"]["summary"]["total_duration_seconds"] == 150
+
+
+def test_duration_all_null_is_no_data(db_path):
+    """D7 spot check: all session durations NULL → no_data, NOT silent 0."""
+    conn = sqlite3.connect(db_path)
+    _seed_log(conn, "stu_d7", "t_maths", "achieved", 1)
+    # legacy rows: no duration recorded
+    _seed_session(conn, "stu_d7", 1)
+    _seed_session(conn, "stu_d7", 1, session_id="s2")
+    conn.commit()
+    conn.close()
+
+    agent = ParentReportAgent(db_path=db_path)
+    result = agent.generate_report("stu_d7", period="cycle", lang_code="zh-hk")
+    assert result["report"]["summary"]["total_duration_seconds"] is None
+
+
+def test_duration_mixed_null_and_value(db_path):
+    """Partial NULL: sum only rows with recorded duration."""
+    conn = sqlite3.connect(db_path)
+    _seed_log(conn, "stu_d7m", "t_maths", "achieved", 1)
+    _seed_session(conn, "stu_d7m", 1)  # legacy NULL
+    _seed_session(conn, "stu_d7m", 1, session_id="s2", duration_seconds=90)
+    _seed_session(conn, "stu_d7m", 1, session_id="s3", duration_seconds=10)
+    conn.commit()
+    conn.close()
+
+    agent = ParentReportAgent(db_path=db_path)
+    result = agent.generate_report("stu_d7m", period="cycle", lang_code="zh-hk")
+    assert result["report"]["summary"]["total_duration_seconds"] == 100
+
+
+def test_session_logs_duration_migration_idempotent(monkeypatch, tmp_path):
+    """ALTER TABLE ADD COLUMN duration_seconds runs twice without throw."""
+    import agents.hermes_scheduler as hs
+
+    # legacy DB with old schema (no duration_seconds)
+    db = tmp_path / "migrate_dur.db"
+    conn = sqlite3.connect(str(db))
+    conn.executescript("""
+        CREATE TABLE session_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            student_id TEXT NOT NULL,
+            mode TEXT NOT NULL DEFAULT '',
+            lang_code TEXT NOT NULL DEFAULT '',
+            age_band TEXT NOT NULL DEFAULT '',
+            agent_list TEXT NOT NULL DEFAULT '[]',
+            topic_ids TEXT NOT NULL DEFAULT '[]',
+            cost_summary TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL
+        );
+    """)
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setenv("DREAMER_DB_PATH", str(db))
+    old_flag = hs._SESSION_LOGS_TABLE_ENSURED
+    try:
+        # first run adds the column
+        hs._SESSION_LOGS_TABLE_ENSURED = False
+        hs._ensure_session_logs_table()
+        conn = sqlite3.connect(str(db))
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(session_logs)")]
+        conn.close()
+        assert "duration_seconds" in cols
+
+        # second run must not throw (idempotent)
+        hs._SESSION_LOGS_TABLE_ENSURED = False
+        hs._ensure_session_logs_table()
+        conn = sqlite3.connect(str(db))
+        cols2 = [r[1] for r in conn.execute("PRAGMA table_info(session_logs)")]
+        conn.close()
+        assert cols2.count("duration_seconds") == 1
+    finally:
+        hs._SESSION_LOGS_TABLE_ENSURED = old_flag
+        monkeypatch.delenv("DREAMER_DB_PATH", raising=False)
+
+
+def test_write_session_log_persists_duration(monkeypatch, tmp_path):
+    """New session rows carry real duration_seconds."""
+    import agents.hermes_scheduler as hs
+
+    db = str(tmp_path / "write_dur.db")
+    monkeypatch.setenv("DREAMER_DB_PATH", db)
+    old_flag = hs._SESSION_LOGS_TABLE_ENSURED
+    try:
+        hs._SESSION_LOGS_TABLE_ENSURED = False
+        hs._write_session_log(
+            session_id="s_dur", student_id="stu_w",
+            mode="DIRECT", lang_code="zh-hk", age_band="P4-P6",
+            agent_list=["assessment"], topic_ids=["t_maths"],
+            cost_summary={"total_tokens": 100}, duration_seconds=42,
+        )
+        conn = sqlite3.connect(db)
+        row = conn.execute(
+            "SELECT duration_seconds FROM session_logs WHERE session_id='s_dur'"
+        ).fetchone()
+        conn.close()
+        assert row is not None
+        assert row[0] == 42
+    finally:
+        hs._SESSION_LOGS_TABLE_ENSURED = old_flag
+        monkeypatch.delenv("DREAMER_DB_PATH", raising=False)
 
 
 def test_cost_summary_tokens_aggregated(db_path):
@@ -439,3 +543,64 @@ def test_execute_missing_student(db_path):
     assert result["status"] == "ok"
     assert result["result"]["report"]["variant"] == "first_steps"
     assert result["result"]["report"]["summary"]["session_count"] == 0
+
+
+# ── Narrative numeric fixes (Day 27) ───────────────────
+
+def test_narrative_mastery_pct_50_percent(db_path):
+    """Regression: 0-1 mastery float must render as 50%, not int() truncated 0%."""
+    conn = sqlite3.connect(db_path)
+    _seed_log(conn, "stu_pct", "t_maths", "developing", 1)
+    _seed_session(conn, "stu_pct", 1)
+    _seed_snapshot(conn, "stu_pct", "t_maths", 0.5, "developing", 1)
+    conn.commit()
+    conn.close()
+
+    agent = ParentReportAgent(db_path=db_path)
+    result = agent.generate_report("stu_pct", period="cycle", lang_code="zh-hk")
+    content = result["content"]
+    assert "掌握度約 50%" in content, f"expected 50% display, got: {content!r}"
+    assert "掌握度約 0%" not in content
+
+
+def test_narrative_mastery_delta_50_points(db_path):
+    """Regression: mastery_delta 0.5 must render as 上升50個百分點, not 0."""
+    conn = sqlite3.connect(db_path)
+    # Standard variant: ≥5 sessions, first ≥14 days ago; not_yet → achieved = +0.5
+    for i, days_ago in enumerate([60, 45, 30, 15, 5, 1]):
+        _seed_log(conn, "stu_dlt", "t_maths",
+                  "not_yet" if i == 0 else "achieved", days_ago,
+                  session_id=f"s{i}")
+        _seed_session(conn, "stu_dlt", days_ago, session_id=f"s{i}")
+    _seed_snapshot(conn, "stu_dlt", "t_maths", 0.75, "achieved", 1, attempts=6)
+    conn.commit()
+    conn.close()
+
+    agent = ParentReportAgent(db_path=db_path)
+    result = agent.generate_report("stu_dlt", period="journey", lang_code="zh-hk")
+    assert result["report"]["variant"] == "standard"
+    topics = {t["topic_id"]: t for t in result["report"]["topics"]}
+    assert topics["t_maths"]["mastery_delta"] == 0.5
+    assert "上升 50 個百分點" in result["content"], result["content"]
+
+
+def test_round_half_up_quarter(db_path):
+    """Regression: 0.25 must round half-up to 0.3 (not banker's 0.2)."""
+    from agents.parent_report_agent import _round_half_up
+    assert _round_half_up(0.25, 1) == 0.3
+    assert _round_half_up(0.35, 1) == 0.4
+    assert _round_half_up(0.05, 1) == 0.1
+    assert _round_half_up(0.15, 1) == 0.2
+
+    # Surface-level: snapshot mastery 0.25 → topics[0].mastery_pct == 0.3
+    conn = sqlite3.connect(db_path)
+    _seed_log(conn, "stu_rhu", "t_maths", "not_yet", 1)
+    _seed_session(conn, "stu_rhu", 1)
+    _seed_snapshot(conn, "stu_rhu", "t_maths", 0.25, "not_yet", 1)
+    conn.commit()
+    conn.close()
+
+    agent = ParentReportAgent(db_path=db_path)
+    result = agent.generate_report("stu_rhu", period="cycle", lang_code="zh-hk")
+    topics = {t["topic_id"]: t for t in result["report"]["topics"]}
+    assert topics["t_maths"]["mastery_pct"] == 0.3

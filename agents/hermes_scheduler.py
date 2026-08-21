@@ -614,12 +614,14 @@ async def execute(
     )
     if block is not None:
         # Safety-triggered block — return immediately, no further routing
+        block_elapsed_ms = (time.perf_counter() - start_time) * 1000
         _write_session_log(
             session_id=sid, student_id=student_id,
             mode="BLOCKED", lang_code=lang_code_hint,
             age_band=age_band, agent_list=[],
             topic_ids=[topic_id] if topic_id else [],
             cost_summary={"input_safety_blocked": True},
+            duration_seconds=int(block_elapsed_ms / 1000),
         )
         # Emit safety event with pointer only (no raw text)
         try:
@@ -758,19 +760,11 @@ async def execute(
         age_band=plan.age_band, agent_list=agent_list,
         topic_ids=[topic_id] if topic_id else [],
         cost_summary=cost,
+        duration_seconds=int(elapsed_ms / 1000),
     )
 
-    # ── emit cost event ─────────────────────────────
-    try:
-        from .observability import emit_event, EVENT_COST
-        emit_event(
-            EVENT_COST,
-            cost,
-            student_id=student_id,
-            session_id=sid,
-        )
-    except Exception:
-        pass
+    # ── emit cost event (single source of truth, all modes) ──
+    _emit_cost_event(cost, student_id=student_id, session_id=sid)
 
     # ── Step 5: structured JSON ─────────────────────
     return {
@@ -868,6 +862,10 @@ async def _call_assessment(
             "status": raw.get("status", "ok"),
             "questions_count": len(questions),
         }
+        # Merge WS-derived cost fields (total_tokens/total_cost_usd/total_calls).
+        # Context fields above take precedence; missing keys fall back to raw.
+        for _k, _v in (raw.get("cost_summary") or {}).items():
+            cost.setdefault(_k, _v)
         # Emit fallback if LLM fell to stub
         if raw.get("status") == "ok_stub":
             try:
@@ -891,11 +889,14 @@ async def _call_assessment(
             "cost_summary": cost,
         }
     # Fallback: return raw stub content
+    _err_cost = {"agent": "assessment", "status": raw.get("status", "error")}
+    for _k, _v in (raw.get("cost_summary") or {}).items():
+        _err_cost.setdefault(_k, _v)
     return {
         "content": str(raw.get("result", "")),
         "kid_label": "ok",
         "citations": [],
-        "cost_summary": {"agent": "assessment", "status": raw.get("status", "error")},
+        "cost_summary": _err_cost,
     }
 
 
@@ -931,15 +932,12 @@ async def _run_contextual(
     try:
         if not client.is_connected:
             await client.wait_until_ready(max_retries=5, interval=2.0)
-        ws_config: dict = {}
-        raw_max = os.environ.get("DREAMER_MAX_TOKENS", "")
-        if raw_max and raw_max.isdigit():
-            ws_config["max_tokens"] = int(raw_max)
+        # Day 27 #6: removed DREAMER_MAX_TOKENS → ws_config["max_tokens"] injection.
+        # The env var now only serves quality_audit's cost cap assertion (audit-only).
         ws_result = await client.query(
             session_id=session_id,
             content=injected,
             capability="chat",
-            config=ws_config if ws_config else None,
         )
     except Exception as exc:
         _log = logging.getLogger(__name__)
@@ -982,13 +980,36 @@ async def _run_contextual(
     }
 
 
+# ── execute() helper: cost event emit (single source of truth) ──
+
+def _emit_cost_event(cost: dict, student_id: str, session_id: str) -> None:
+    """Emit one obs_events cost row. All modes (DIRECT/HYBRID/CONTEXTUAL)
+    funnel through this helper so the cost event schema has exactly one
+    origin — callers only shape the payload, never emit themselves."""
+    try:
+        from .observability import emit_event, EVENT_COST
+        emit_event(
+            EVENT_COST,
+            cost,
+            student_id=student_id,
+            session_id=session_id,
+        )
+    except Exception:
+        pass
+
+
 # ── execute() helper: session_logs persistence ───────────
 
 _SESSION_LOGS_TABLE_ENSURED = False
 
 
 def _ensure_session_logs_table() -> None:
-    """Create session_logs table if not exists."""
+    """Create session_logs table if not exists (idempotent, with migration).
+
+    Phase 7 (Day 27): duration_seconds added. SQLite has no
+    ADD COLUMN IF NOT EXISTS — check via PRAGMA so repeated runs on both
+    fresh and legacy DBs never throw. Legacy rows keep NULL (unknown), not 0.
+    """
     global _SESSION_LOGS_TABLE_ENSURED
     if _SESSION_LOGS_TABLE_ENSURED:
         return
@@ -1014,6 +1035,7 @@ def _ensure_session_logs_table() -> None:
                 agent_list TEXT NOT NULL DEFAULT '[]',
                 topic_ids TEXT NOT NULL DEFAULT '[]',
                 cost_summary TEXT NOT NULL DEFAULT '{}',
+                duration_seconds INTEGER,
                 created_at TEXT NOT NULL
             );
 
@@ -1022,6 +1044,13 @@ def _ensure_session_logs_table() -> None:
             CREATE INDEX IF NOT EXISTS idx_session_logs_student
                 ON session_logs(student_id, created_at);
         """)
+        # Migration: legacy DBs created before duration_seconds.
+        cols = [row[1] for row in conn.execute("PRAGMA table_info(session_logs)")]
+        if "duration_seconds" not in cols:
+            conn.execute(
+                "ALTER TABLE session_logs ADD COLUMN duration_seconds INTEGER"
+            )
+        conn.commit()
     finally:
         conn.close()
     _SESSION_LOGS_TABLE_ENSURED = True
@@ -1036,8 +1065,9 @@ def _write_session_log(
     agent_list: list,
     topic_ids: list,
     cost_summary: dict,
+    duration_seconds: Optional[int] = None,
 ) -> None:
-    """Write a session_logs row."""
+    """Write a session_logs row (duration_seconds = real session span)."""
     import json
     import datetime
 
@@ -1054,13 +1084,14 @@ def _write_session_log(
         conn.execute(
             """INSERT INTO session_logs
                (session_id, student_id, mode, lang_code, age_band,
-                agent_list, topic_ids, cost_summary, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                agent_list, topic_ids, cost_summary, duration_seconds, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 session_id, student_id, mode, lang_code, age_band,
                 json.dumps(agent_list, ensure_ascii=False),
                 json.dumps(topic_ids, ensure_ascii=False),
                 json.dumps(cost_summary, ensure_ascii=False),
+                duration_seconds,
                 datetime.datetime.utcnow().isoformat() + "Z",
             ),
         )

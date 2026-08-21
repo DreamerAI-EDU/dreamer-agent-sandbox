@@ -52,7 +52,7 @@ class AssessmentResult:
 
     __slots__ = (
         "internal_label", "confidence", "evidence_text",
-        "rubric_id", "raw_response",
+        "rubric_id", "raw_response", "cost_summary",
     )
 
     def __init__(
@@ -62,12 +62,14 @@ class AssessmentResult:
         evidence_text: str,
         rubric_id: str = "",
         raw_response: str = "",
+        cost_summary: dict | None = None,
     ):
         self.internal_label = internal_label
         self.confidence = confidence
         self.evidence_text = evidence_text
         self.rubric_id = rubric_id
         self.raw_response = raw_response
+        self.cost_summary = cost_summary or {}
 
     def to_dict(self) -> dict:
         return {
@@ -271,6 +273,7 @@ class AssessmentAgent:
                 "grade_level": grade_level,
                 "rubric_id": "",
                 "cost_tokens": cost_tokens,
+                "cost_summary": dict(result.cost_summary or {}),
                 "turn_id": result.turn_id,
             }
 
@@ -345,6 +348,7 @@ class AssessmentAgent:
                 "criteria": rubric_data.get("criteria", criteria),
                 "grade_level": grade_level,
                 "cost_tokens": cost_tokens,
+                "cost_summary": dict(result.cost_summary or {}),
             }
 
         except Exception as exc:
@@ -426,6 +430,7 @@ class AssessmentAgent:
                     evidence_text=str(parsed.get("evidence_text", "")),
                     rubric_id=str(parsed.get("rubric_id", rubric_id)),
                     raw_response=result.content,
+                    cost_summary=dict(result.cost_summary or {}),
                 )
 
             # Could not parse — fallback
@@ -436,6 +441,7 @@ class AssessmentAgent:
                 evidence_text="",
                 rubric_id=rubric_id,
                 raw_response=result.content,
+                cost_summary=dict(result.cost_summary or {}),
             )
 
         except Exception as exc:
@@ -567,6 +573,7 @@ class AssessmentAgent:
                 "kid_facing_label": kid_label,
                 "mastery_pct": get_mastery_pct(internal_label),
                 "skip_snapshot": skip_snapshot,
+                "cost_summary": {},
             }
 
         except Exception as exc:

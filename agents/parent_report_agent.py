@@ -37,11 +37,22 @@ import os
 import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional, Tuple
 
 from .kid_safe.label_soften import soften_label, get_mastery_pct
 
 logger = logging.getLogger(__name__)
+
+
+def _round_half_up(value: float, ndigits: int = 1) -> float:
+    """Round half away from zero via Decimal (ROUND_HALF_UP).
+
+    Avoids Python's banker's rounding, which biases 0.25 → 0.2
+    (round half to even) and silently deflates mastery numbers.
+    """
+    quant = Decimal("1." + "0" * ndigits) if ndigits > 0 else Decimal("1")
+    return float(Decimal(str(value)).quantize(quant, rounding=ROUND_HALF_UP))
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -253,7 +264,7 @@ class ParentReportAgent:
         self,
         sessions: List[dict],
         logs: List[dict],
-        duration_seconds: int,
+        duration_seconds: Optional[int],
         topic_ids: List[str],
     ) -> dict:
         mode_dist = {"DIRECT": 0, "CONTEXTUAL": 0, "HYBRID": 0}
@@ -269,23 +280,26 @@ class ParentReportAgent:
         }
 
     def _aggregate_duration(
-        self, obs_events: List[dict]
-    ) -> int:
-        """Total LLM elapsed from obs_events cost events (real measurement).
+        self, sessions: List[dict]
+    ) -> Optional[int]:
+        """Total session duration from session_logs.duration_seconds.
 
-        session_logs has no duration column (backlog known gap); cost event
-        elapsed_ms is the only real timing signal. 0 when unavailable.
+        Duration is the real session start-to-end span recorded at write time.
+        Rows with NULL duration (legacy data) are skipped; when no session
+        carries a recorded duration, returns None (unknown) — never a fake 0.
         """
-        total_ms = 0.0
-        for ev in obs_events:
-            if ev.get("event_type") != "cost":
+        total = 0
+        found = False
+        for s in sessions:
+            d = s.get("duration_seconds")
+            if d is None:
                 continue
             try:
-                data = json.loads(ev.get("event_data") or "{}")
-            except (json.JSONDecodeError, TypeError):
+                total += int(d)
+            except (TypeError, ValueError):
                 continue
-            total_ms += float(data.get("elapsed_ms") or 0.0)
-        return int(total_ms / 1000)
+            found = True
+        return total if found else None
 
     def _aggregate_cost(
         self, obs_events: List[dict]
@@ -376,7 +390,7 @@ class ParentReportAgent:
             if len(t_logs) >= 2:
                 first_pct = get_mastery_pct(t_logs[0].get("internal_label") or "")
                 last_pct = get_mastery_pct(t_logs[-1].get("internal_label") or "")
-                delta = round(last_pct - first_pct, 1)
+                delta = _round_half_up(last_pct - first_pct, 1)
 
             # Recent evidence: last 3 logs, evidence truncated
             recent = []
@@ -396,7 +410,7 @@ class ParentReportAgent:
             topics.append({
                 "topic_id": tid,
                 "subject": _subject_of(tid),
-                "mastery_pct": round(mastery, 1),
+                "mastery_pct": _round_half_up(mastery, 1),
                 "mastery_delta": delta,
                 "attempt_count": int(snap.get("attempt_count") or len(t_logs)),
                 "last_label_internal": last_internal,
@@ -539,11 +553,12 @@ class ParentReportAgent:
         self, summary: dict, topics: List[dict], lang_code: str, variant: str
     ) -> str:
         sessions = summary["session_count"]
-        minutes = int(summary["total_duration_seconds"] / 60)
+        dur = summary.get("total_duration_seconds")
+        minutes = int(dur / 60) if dur is not None else None
         topics_n = summary["topics_touched"]
         top = topics[0] if topics else None
         top_name = top["subject"] if top else ""
-        top_mastery = int(top["mastery_pct"]) if top else 0
+        top_mastery = int(round(top["mastery_pct"] * 100)) if top else 0
 
         if sessions == 0:
             return {
@@ -556,19 +571,24 @@ class ParentReportAgent:
             return {
                 "zh-hk": (
                     f"囝囡啱啱開始使用 Dreamer AI，目前已進行 {sessions} 次學習，"
-                    f"覆蓋 {topics_n} 個課題，累計約 {minutes} 分鐘。"
+                    f"覆蓋 {topics_n} 個課題"
+                    + (f"，累計約 {minutes} 分鐘" if minutes is not None else "")
+                    + "。"
                     + (f"喺「{top_name}」方面已建立基礎（掌握度約 {top_mastery}%）。" if top else "")
                     + "建議保持每週 2–3 次練習，逐步建立學習習慣。"
                 ),
                 "zh-cn": (
                     f"孩子刚开始使用 Dreamer AI，目前已进行 {sessions} 次学习，"
-                    f"覆盖 {topics_n} 个课题，累计约 {minutes} 分钟。"
+                    f"覆盖 {topics_n} 个课题"
+                    + (f"，累计约 {minutes} 分钟" if minutes is not None else "")
+                    + "。"
                     + (f"在「{top_name}」方面已建立基础（掌握度约 {top_mastery}%）。" if top else "")
                     + "建议保持每周 2–3 次练习，逐步建立学习习惯。"
                 ),
                 "en": (
                     f"Your child has just started with Dreamer AI — {sessions} sessions, "
-                    f"{topics_n} topic(s), about {minutes} minutes in total."
+                    f"{topics_n} topic(s)"
+                    + (f", about {minutes} minutes in total." if minutes is not None else ".")
                     + (f" Foundations are forming in {top_name} (about {top_mastery}% mastery)." if top else "")
                     + " Aim for 2–3 short practices per week to build a steady routine."
                 ),
@@ -578,24 +598,28 @@ class ParentReportAgent:
         delta_str = ""
         if top and top["mastery_delta"] > 0:
             delta_str = {
-                "zh-hk": f"「{top_name}」掌握度較期初上升 {int(top['mastery_delta'])} 個百分點。",
-                "zh-cn": f"「{top_name}」掌握度较期初上升 {int(top['mastery_delta'])} 个百分点。",
-                "en": f"Mastery in {top_name} is up {int(top['mastery_delta'])} points from the start of the period.",
+                "zh-hk": f"「{top_name}」掌握度較期初上升 {int(round(top['mastery_delta'] * 100))} 個百分點。",
+                "zh-cn": f"「{top_name}」掌握度较期初上升 {int(round(top['mastery_delta'] * 100))} 个百分点。",
+                "en": f"Mastery in {top_name} is up {int(round(top['mastery_delta'] * 100))} points from the start of the period.",
             }.get(lang_code, "")
         return {
             "zh-hk": (
-                f"呢段時間囝囡共進行咗 {sessions} 次學習，覆蓋 {topics_n} 個課題，"
-                f"累計約 {minutes} 分鐘。" + delta_str
+                f"呢段時間囝囡共進行咗 {sessions} 次學習，覆蓋 {topics_n} 個課題"
+                + (f"，累計約 {minutes} 分鐘" if minutes is not None else "")
+                + "。" + delta_str
                 + "整體學習投入穩定，繼續保持！"
             ),
             "zh-cn": (
-                f"这段时间孩子共进行了 {sessions} 次学习，覆盖 {topics_n} 个课题，"
-                f"累计约 {minutes} 分钟。" + delta_str
+                f"这段时间孩子共进行了 {sessions} 次学习，覆盖 {topics_n} 个课题"
+                + (f"，累计约 {minutes} 分钟" if minutes is not None else "")
+                + "。" + delta_str
                 + "整体学习投入稳定，继续保持！"
             ),
             "en": (
                 f"Your child completed {sessions} sessions this period across "
-                f"{topics_n} topic(s), about {minutes} minutes in total. " + delta_str
+                f"{topics_n} topic(s)"
+                + (f", about {minutes} minutes in total." if minutes is not None else ".")
+                + " " + delta_str
                 + "Consistent engagement — keep it up!"
             ),
         }.get(lang_code, "")
@@ -627,15 +651,17 @@ class ParentReportAgent:
         )
 
         topics_summary = "; ".join(
-            f"{t['subject']} ({int(t['mastery_pct'])}% mastery)"
+            f"{t['subject']} ({int(round(t['mastery_pct'] * 100))}% mastery)"
             for t in topics[:5]
         ) or "no topics yet"
 
+        _dur = summary.get("total_duration_seconds")
+        _minutes = int(_dur / 60) if _dur is not None else "no_data"
         user_prompt = (
             f"Write a parent progress summary in {lang_name}.\n"
             f"Variant: {variant}\n"
             f"Sessions: {summary['session_count']}, "
-            f"minutes: {int(summary['total_duration_seconds']/60)}, "
+            f"minutes: {_minutes}, "
             f"topics touched: {summary['topics_touched']}\n"
             f"Topics: {topics_summary}"
         )
@@ -691,7 +717,7 @@ class ParentReportAgent:
         ]
 
         obs_events = self._query_obs_events(student_id, start, end)
-        duration_seconds = self._aggregate_duration(obs_events)
+        duration_seconds = self._aggregate_duration(sessions)
         total_tokens, has_cost = self._aggregate_cost(obs_events)
 
         # 2. aggregates
@@ -790,7 +816,7 @@ class ParentReportAgent:
                 "period": {"type": period, "from": start, "to": end, "days": days},
                 "summary": {
                     "session_count": 0,
-                    "total_duration_seconds": 0,
+                    "total_duration_seconds": None,
                     "topics_touched": 0,
                     "mode_distribution": {"DIRECT": 0, "CONTEXTUAL": 0, "HYBRID": 0},
                 },
@@ -861,7 +887,7 @@ class ParentReportAgent:
         ]
 
         obs_events = self._query_obs_events(student_id, start, end)
-        duration_seconds = self._aggregate_duration(obs_events)
+        duration_seconds = self._aggregate_duration(sessions)
         total_tokens, has_cost = self._aggregate_cost(obs_events)
 
         topic_ids = sorted({

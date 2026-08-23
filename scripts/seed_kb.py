@@ -240,11 +240,10 @@ def build_metadata(kb_name: str) -> dict[str, Any]:
     }
 
 
-def build_kb_config(manifest: dict[str, Any], runtime_config: dict[str, Any] | None) -> tuple[dict[str, Any], bool]:
+def build_kb_config(manifest: dict[str, Any], runtime_config: dict[str, Any] | None) -> dict[str, Any]:
     """Build kb_config.json from manifest while preserving DeepTutor runtime
-    state (index_versions / last_indexed_* / status ready). Returns
-    (config, changed) where changed is True if the new content differs from
-    the existing file on disk.
+    state (index_versions / last_indexed_* / status ready). The caller decides
+    whether the result differs from the file on disk.
     """
     runtime_config = runtime_config or {}
     existing = runtime_config.get("knowledge_bases", {})
@@ -260,7 +259,7 @@ def build_kb_config(manifest: dict[str, Any], runtime_config: dict[str, Any] | N
                 "rag_provider": entry["rag_provider"],
                 "status": "registered",
             }
-    return {"knowledge_bases": kbs}, True
+    return {"knowledge_bases": kbs}
 
 
 # --- Runtime helpers ---------------------------------------------------------
@@ -281,6 +280,42 @@ def write_json(path: Path, data: dict[str, Any]) -> None:
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(data, fh, ensure_ascii=False, indent=2)
     tmp.replace(path)
+
+
+def clear_kb_index(runtime_kb_dir: Path) -> None:
+    """Remove version-* index directories so a subsequent reindex actually
+    rebuilds. DeepTutor's reindex is a no-op while an index exists for the
+    active embedding config (verified on v1.5.8); raw/ is left untouched.
+    """
+    for p in runtime_kb_dir.glob("version-*"):
+        if p.is_dir():
+            shutil.rmtree(p, ignore_errors=True)
+            print(f"  [clear] {runtime_kb_dir.name}: removed {p.name}")
+
+
+def index_content_files(runtime_kb_dir: Path) -> set[str] | None:
+    """Ground truth of what is actually in the index: the file names recorded
+    in the BM25 corpus (version-*/bm25_retriever/corpus.jsonl). Returns None
+    if no index exists on disk yet.
+    """
+    versions = sorted(runtime_kb_dir.glob("version-*"))
+    if not versions:
+        return None
+    corpus = versions[-1] / "bm25_retriever" / "corpus.jsonl"
+    if not corpus.exists():
+        return None
+    names: set[str] = set()
+    for line in corpus.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        fname = rec.get("file_name")
+        if fname and not fname.startswith("."):
+            names.add(fname)
+    return names
 
 
 def mirror_md_files(src_dir: Path, dst_raw_dir: Path, kb_name: str) -> list[str]:
@@ -465,7 +500,7 @@ def cmd_sync(args: argparse.Namespace, force_rebuild: bool = False) -> int:
 
     # 2) Config generation (preserve DeepTutor runtime state).
     runtime_config = read_json(KB_RUNTIME_DIR / "kb_config.json")
-    new_config, _ = build_kb_config(manifest, runtime_config)
+    new_config = build_kb_config(manifest, runtime_config)
     config_path = KB_RUNTIME_DIR / "kb_config.json"
     config_changed = force_rebuild or (read_json(config_path) != new_config)
     write_json(config_path, new_config)
@@ -492,19 +527,22 @@ def cmd_sync(args: argparse.Namespace, force_rebuild: bool = False) -> int:
             return EXIT_NOT_READY
         print("[restart] DeepTutor ready")
 
-    # 4) Reindex changed KBs only.
+    # 4) Rebuild changed KBs: clear their index (DeepTutor reindex is a no-op
+    #    while an index exists for the active embedding config), then reindex.
     reindex_failures: list[str] = []
     if changed_kbs or force_rebuild:
         targets = set(kbs) if force_rebuild else changed_kbs
         for name in sorted(targets):
+            runtime_kb_dir = KB_RUNTIME_DIR / name
             print(f"  [reindex] {name}…")
+            clear_kb_index(runtime_kb_dir)
             try:
                 api.reindex(name)
             except SeedError as exc:
                 print(f"  [FAIL] {name}: reindex request failed: {exc}")
                 reindex_failures.append(name)
                 continue
-            if not wait_reindex_done(api, name, args.wait):
+            if not wait_reindex_done(api, runtime_kb_dir, name, args.wait):
                 print(f"  [FAIL] {name}: reindex did not complete")
                 reindex_failures.append(name)
                 continue
@@ -512,10 +550,13 @@ def cmd_sync(args: argparse.Namespace, force_rebuild: bool = False) -> int:
 
     save_state(new_state)
 
-    # 5) Verify per-KB doc counts.
+    # 5) Verify per-KB doc counts AND actual index contents. raw_documents is
+    #    a raw/ directory scan (not the index); ground truth is the BM25
+    #    corpus on disk.
     failures: list[str] = []
     for name, entry in kbs.items():
         expected = len(entry["_md_files"])
+        runtime_kb_dir = KB_RUNTIME_DIR / name
         try:
             status = api.kb_status(name)
             raw = (status.get("statistics") or {}).get("raw_documents", 0)
@@ -523,11 +564,23 @@ def cmd_sync(args: argparse.Namespace, force_rebuild: bool = False) -> int:
             print(f"  [FAIL] {name}: verify failed: {exc}")
             failures.append(name)
             continue
-        if raw == expected:
-            print(f"  [OK] {name}: raw_documents={raw} == {expected}")
-        else:
+        if raw != expected:
             print(f"  [FAIL] {name}: raw_documents={raw} != expected {expected}")
             failures.append(name)
+            continue
+        expected_md = {p.name for p in entry["_md_files"]}
+        indexed = index_content_files(runtime_kb_dir)
+        if indexed is None:
+            print(f"  [FAIL] {name}: no index found on disk")
+            failures.append(name)
+            continue
+        missing = sorted(expected_md - indexed)
+        if missing:
+            print(f"  [FAIL] {name}: index missing docs: {', '.join(missing)}")
+            failures.append(name)
+            continue
+        print(f"  [OK] {name}: raw_documents={raw} == {expected}, "
+              f"indexed {len(indexed)} md file(s)")
 
     print("--- summary ---")
     print(f"KBs: {len(kbs)}, reindexed: {sorted(changed_kbs) or '(none)'}, "
@@ -537,7 +590,13 @@ def cmd_sync(args: argparse.Namespace, force_rebuild: bool = False) -> int:
     return EXIT_VERIFY_FAIL if (failures or reindex_failures) else EXIT_OK
 
 
-def wait_reindex_done(api: TutorAPI, kb_name: str, timeout: float) -> bool:
+def wait_reindex_done(api: TutorAPI, runtime_kb_dir: Path, kb_name: str,
+                      timeout: float) -> bool:
+    """Poll until DeepTutor reports the KB index ready AND a version-* index
+    exists on disk. The disk check is the deterministic half: DeepTutor's
+    statistics (needs_reindex / rag_initialized) flip synchronously with its
+    own index state (verified on v1.5.8), but we never rely on that alone.
+    """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
@@ -546,9 +605,9 @@ def wait_reindex_done(api: TutorAPI, kb_name: str, timeout: float) -> bool:
             time.sleep(5)
             continue
         stats = status.get("statistics") or {}
-        if not stats.get("needs_reindex", True) and stats.get("raw_documents", 0) >= 0:
-            if stats.get("rag_initialized") or not stats.get("needs_reindex"):
-                return True
+        ready = not stats.get("needs_reindex", True)
+        if ready and any(runtime_kb_dir.glob("version-*")):
+            return True
         time.sleep(5)
     return False
 

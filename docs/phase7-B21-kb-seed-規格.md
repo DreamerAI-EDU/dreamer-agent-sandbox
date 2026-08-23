@@ -99,10 +99,9 @@ knowledge_bases:
     rag_provider: llamaindex        # O3 定案：全部 KB 用 llamaindex；欄位名與 samples 契約統一為 rag_provider
     docs_dir: maths-ai/              # 相對 repo kb/
     expected_doc_count: 10           # 對返 phase1 manifest total_topics
-    docs:
-      - file: maths-fractions-01.md
-        sha256: <content hash>       # 冪等關鍵：hash 不變 = skip
 ```
+
+> **v1.2 修正（Review R2）**：實作冇用 per-doc `docs: sha256` 清單——doc hash 由 `seed_kb.py` 自動計算，存於 runtime `kb_runtime/.seed_state.json`（`{kb_name: {file: sha256}}`），hash 不變 = skip。manifest 唔使人手維護 hash，兩者等價但後者唔會 drift。
 
 `expected_doc_count` 同實際 docs 數唔啱 → `--check` 出 WARNING（內容爬坡期唔 fail），但 `count = 0` → **FAIL（B22 fail-loud）**。
 
@@ -128,7 +127,8 @@ knowledge_bases:
 ### 2.5 Reindex + verify
 
 - 逐 KB 觸發 reindex（endpoint 名以 openapi.json 為準）
-- Verify：每 KB `raw_documents` count == manifest `expected_doc_count`（現有文件數）
+- **v1.2（Review R1 實測發現）**：DeepTutor v1.5.8 嘅 reindex 喺「active embedding config 已有 index」時係 **no-op**（回 `already has an index...no reindex needed`），唔感知 raw/ 內容變化——即新 md 入 raw/ 後直接 reindex 唔會入索引（實測：raw_documents=2 但 index 得舊 doc）。因此 `--sync` 喺 reindex 前對 changed KB **先刪 `version-*` 目錄**（`clear_kb_index`）再觸發 reindex，確保真重建。
+- Verify 分兩層：① 每 KB `raw_documents` count == manifest `expected_doc_count`；② **索引內容核對**——讀 `version-*/bm25_retriever/corpus.jsonl` 嘅 `file_name` 集合，同 manifest 預期 md 集對比，缺檔 → FAIL（`index missing docs`）。第②層先會抓到「raw 有但 index 冇」嘅沉默失敗。
 - 失敗處理：某 KB 失敗唔阻其他 KB；summary 列明邊個 FAIL，exit 1
 
 ### 2.6 冪等
@@ -138,6 +138,10 @@ knowledge_bases:
 ### 2.7 Exit codes
 
 `0` 全綠 / `1` 任何 KB verify 失敗或 count=0 / `2` manifest validation 失敗 / `3` DeepTutor 唔 ready
+
+### 2.8 Known limitations
+
+- **Orphan KB**：KB 由 manifest 刪走後，config 會跟（manifest 全量生成），但 runtime `kb_runtime/` 目錄（含 index）會留低。現靠 `--force-rebuild` 一次過清；長期可加 `--prune` flag（backlog）。
 
 ---
 

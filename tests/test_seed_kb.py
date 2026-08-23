@@ -276,8 +276,7 @@ def test_kb_config_preserves_runtime_state(kb_fs):
             }
         }
     }
-    cfg, changed = seed.build_kb_config(manifest, runtime_config)
-    assert changed is True
+    cfg = seed.build_kb_config(manifest, runtime_config)
     entry = cfg["knowledge_bases"]["dreamer-ethical-ai"]
     assert entry["status"] == "ready"  # runtime state preserved
     assert entry["index_versions"][0]["version"] == "version-1"
@@ -407,6 +406,14 @@ def test_sync_noop_when_nothing_changed(monkeypatch, kb_fs, capsys):
 
         def reindex(self, kb_name):
             calls["reindex"].append(kb_name)
+            # Simulate DeepTutor writing a fresh index from runtime raw/.
+            raw = kb_fs["runtime"] / kb_name / "raw"
+            corpus = kb_fs["runtime"] / kb_name / "version-1" / "bm25_retriever"
+            corpus.mkdir(parents=True, exist_ok=True)
+            lines = [f'{{"file_name": "{p.name}", "text": "x"}}'
+                     for p in sorted(raw.glob("*.md"))]
+            (corpus / "corpus.jsonl").write_text("\n".join(lines) + "\n",
+                                                 encoding="utf-8")
             return {}
 
     monkeypatch.setattr(seed, "restart_container", fake_restart)
@@ -425,3 +432,50 @@ def test_sync_noop_when_nothing_changed(monkeypatch, kb_fs, capsys):
     assert seed.cmd_sync(args) == seed.EXIT_OK
     assert calls["restart"] == 0
     assert calls["reindex"] == []
+
+
+def test_sync_rebuilds_index_for_changed_kb(monkeypatch, kb_fs, capsys):
+    """R1 regression: when raw content changes, the changed KB's index is
+    cleared first and verify checks the BM25 corpus, not just raw_documents.
+    """
+    kb_dir = kb_fs["runtime"] / "dreamer-ethical-ai"
+    # Pre-existing stale index containing only the old doc.
+    (kb_dir / "version-1" / "bm25_retriever").mkdir(parents=True)
+    (kb_dir / "version-1" / "bm25_retriever" / "corpus.jsonl").write_text(
+        '{"file_name": "ethical-ai-bias-01.md", "text": "old"}\n',
+        encoding="utf-8",
+    )
+
+    def fake_restart():
+        pass
+
+    class _Fake:
+        def __init__(self, *a, **k):
+            pass
+
+        def health(self):
+            return {"status": "ok", "knowledge_bases_count": 2}
+
+        def kb_status(self, kb_name):
+            return {"statistics": {"raw_documents": 1, "needs_reindex": False}}
+
+        def reindex(self, kb_name):
+            # Simulate DeepTutor building a fresh index from runtime raw/.
+            raw = kb_fs["runtime"] / kb_name / "raw"
+            corpus = kb_fs["runtime"] / kb_name / "version-2" / "bm25_retriever"
+            corpus.mkdir(parents=True, exist_ok=True)
+            lines = [f'{{"file_name": "{p.name}", "text": "x"}}'
+                     for p in sorted(raw.glob("*.md"))]
+            (corpus / "corpus.jsonl").write_text("\n".join(lines) + "\n",
+                                                 encoding="utf-8")
+            return {}
+
+    monkeypatch.setattr(seed, "restart_container", fake_restart)
+    monkeypatch.setattr(seed, "wait_ready", lambda api, t: True)
+    monkeypatch.setattr(seed, "TutorAPI", _Fake)
+
+    args = seed.argparse.Namespace(api_base="http://x", timeout=1.0, wait=1.0)
+    assert seed.cmd_sync(args) == seed.EXIT_OK
+    out = capsys.readouterr().out
+    assert "index missing docs" not in out
+    assert "indexed 1 md file(s)" in out

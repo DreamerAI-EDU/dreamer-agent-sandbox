@@ -1,0 +1,30 @@
+# Phase 7 B21 — KB Seed Manifest (SoT)
+# Contract: docs/phase7-B21-kb-seed-規格.md §2.2
+# docs_dir is relative to repo knowledge_bases/
+version: 1
+last_updated: "2026-08-22"
+knowledge_bases:
+  - name: dreamer-assessment
+    rag_provider: llamaindex
+    docs_dir: dreamer-assessment/
+    expected_doc_count: 1
+  - name: dreamer-coding-python
+    rag_provider: llamaindex
+    docs_dir: dreamer-coding-python/
+    expected_doc_count: 1
+  - name: dreamer-core-kb
+    rag_provider: llamaindex
+    docs_dir: dreamer-core-kb/
+    expected_doc_count: 1
+  - name: dreamer-ethical-ai
+    rag_provider: llamaindex
+    docs_dir: dreamer-ethical-ai/
+    expected_doc_count: 6
+  - name: dreamer-game-design
+    rag_provider: llamaindex
+    docs_dir: dreamer-game-design/
+    expected_doc_count: 1
+  - name: dreamer-maths-ai
+    rag_provider: llamaindex
+    docs_dir: dreamer-maths-ai/
+    expected_doc_count: 1

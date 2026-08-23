@@ -6,9 +6,8 @@ dreamer_phase: Design
 modes_allowed:
   - contextual
   - hybrid
-grade_level: M1-M3
+grade_level: P4-P6
 kb_name: dreamer-game-design
-domain_agent_owner: creation-agent
 ib_atl_skills:
   - thinking-critical
   - communication-representation

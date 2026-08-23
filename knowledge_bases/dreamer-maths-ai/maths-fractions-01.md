@@ -9,7 +9,6 @@ modes_allowed:
   - hybrid
 grade_level: P4-P6
 kb_name: dreamer-maths-ai
-domain_agent_owner: research-agent
 ib_atl_skills:
   - thinking-creative
   - thinking-critical

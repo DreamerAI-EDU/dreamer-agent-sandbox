@@ -7,9 +7,8 @@ modes_allowed:
   - contextual
   - direct
   - hybrid
-grade_level: M1-M3
+grade_level: P4-P6
 kb_name: dreamer-ethical-ai
-domain_agent_owner: compere-agent
 ib_atl_skills:
   - thinking-critical
   - communication-exchange

@@ -8,7 +8,6 @@ modes_allowed:
   - direct
 grade_level: P1-P3
 kb_name: dreamer-core-kb
-domain_agent_owner: compere-agent
 ib_atl_skills:
   - thinking-creative
   - research-information-literacy
@@ -49,7 +48,7 @@ Students work in pairs. One group writes explicit rules for sorting shapes by co
 ### Teacher Notes
 
 - This topic anchors the Dream phase of the Dreamer 4D journey
-- Cross-reference: thinking-creative (ATL) — students imagine what "smart" could mean
+- Cross-reference: thinking-creative — students imagine what "smart" could mean
 - Ethical grounding: transparency, fairness-awareness tags ensure early exposure to responsible AI thinking
 
 > This document is part of DeepTutor's Dreamer Core KB. Next phase: Discover — how do we teach a machine to recognize patterns?

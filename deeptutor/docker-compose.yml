@@ -14,8 +14,11 @@ services:
       - "127.0.0.1:${DEEPTUTOR_HTTP_PORT:-8000}:8000"       # Health check + management
       - "127.0.0.1:8001:8001"                                # Backend API (WS + HTTP)
     volumes:
-      # Shared KBs (read-only, mounted from host)
-      - ./knowledge_bases:/app/data/knowledge_bases:ro
+      # Shared KBs (read-only) — SoT sync source, immutable to the container
+      - ./knowledge_bases:/app/data/kb_sot:ro
+      # KB root (writable): kb_config.json, metadata.json, provider indexes.
+      # Single-direction discipline: host SoT -> robocopy -> kb_runtime.
+      - ./kb_runtime:/app/data/knowledge_bases
       # Model catalog (OpenRouter profile, read-only)
       - ./settings:/app/data/user/settings
       # Ephemeral workspaces (per-student, auto-cleaned after 24h)
@@ -28,7 +31,8 @@ services:
       - DEEPTUTOR_WS_ENABLED=true
       - DEEPTUTOR_MAX_CONCURRENT=50
       - DEEPTUTOR_WORKSPACE_ROOT=/app/data/workspaces
-      - DEEPTUTOR_KB_ROOT=/app/data/knowledge_bases
+      # KB root is the rw bind at /app/data/knowledge_bases (see volumes);
+      # /app/data/kb_sot is the immutable SoT sync source.
       # LLM configuration — OpenRouter (HK-accessible via sk-or-v1- key)
       - LLM_PROVIDER=${LLM_PROVIDER:-openrouter}
       - LLM_MODEL=${LLM_MODEL:-deepseek/deepseek-chat}

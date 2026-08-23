@@ -19,7 +19,7 @@ knowledge_bases:
   - name: dreamer-ethical-ai
     rag_provider: llamaindex
     docs_dir: dreamer-ethical-ai/
-    expected_doc_count: 4
+    expected_doc_count: 6
   - name: dreamer-game-design
     rag_provider: llamaindex
     docs_dir: dreamer-game-design/

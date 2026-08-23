@@ -592,11 +592,19 @@ def cmd_sync(args: argparse.Namespace, force_rebuild: bool = False) -> int:
 
 def wait_reindex_done(api: TutorAPI, runtime_kb_dir: Path, kb_name: str,
                       timeout: float) -> bool:
-    """Poll until DeepTutor reports the KB index ready AND a version-* index
-    exists on disk. The disk check is the deterministic half: DeepTutor's
-    statistics (needs_reindex / rag_initialized) flip synchronously with its
-    own index state (verified on v1.5.8), but we never rely on that alone.
+    """Poll until DeepTutor reports the KB index ready AND the BM25 corpus on
+    disk contains every md file in runtime raw/. The corpus-content check is
+    the deterministic half: DeepTutor's statistics (needs_reindex /
+    rag_initialized) flip synchronously with its own index state (verified on
+    v1.5.8), and version-* directory existence alone is not enough — a fresh
+    clear-then-reindex can report done before the index files land on disk,
+    which is exactly the first-deploy path. Waiting on the actual index
+    contents makes that race deterministic-safe. Spec §2.5: keep this in sync
+    with verify's Layer-2 (corpus file_name set vs expected md set).
     """
+    raw_dir = runtime_kb_dir / "raw"
+    expected = ({p.name for p in raw_dir.glob("*.md")}
+                if raw_dir.is_dir() else set())
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
@@ -606,8 +614,10 @@ def wait_reindex_done(api: TutorAPI, runtime_kb_dir: Path, kb_name: str,
             continue
         stats = status.get("statistics") or {}
         ready = not stats.get("needs_reindex", True)
-        if ready and any(runtime_kb_dir.glob("version-*")):
-            return True
+        if ready:
+            indexed = index_content_files(runtime_kb_dir)
+            if indexed is not None and expected <= indexed:
+                return True
         time.sleep(5)
     return False
 

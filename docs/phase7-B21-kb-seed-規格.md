@@ -129,6 +129,8 @@ knowledge_bases:
 - 逐 KB 觸發 reindex（endpoint 名以 openapi.json 為準）
 - **v1.2（Review R1 實測發現）**：DeepTutor v1.5.8 嘅 reindex 喺「active embedding config 已有 index」時係 **no-op**（回 `already has an index...no reindex needed`），唔感知 raw/ 內容變化——即新 md 入 raw/ 後直接 reindex 唔會入索引（實測：raw_documents=2 但 index 得舊 doc）。因此 `--sync` 喺 reindex 前對 changed KB **先刪 `version-*` 目錄**（`clear_kb_index`）再觸發 reindex，確保真重建。
 - Verify 分兩層：① 每 KB `raw_documents` count == manifest `expected_doc_count`；② **索引內容核對**——讀 `version-*/bm25_retriever/corpus.jsonl` 嘅 `file_name` 集合，同 manifest 預期 md 集對比，缺檔 → FAIL（`index missing docs`）。第②層先會抓到「raw 有但 index 冇」嘅沉默失敗。
+- **v1.3（Review R2 實測發現）**：`wait_reindex_done` 嘅 wait 條件由「needs_reindex=False + version-* 目錄存在」升級為「**corpus.jsonl 包含晒 runtime raw/ 全部 md 檔名**」——clear 後首次 reindex 可以喺 index 檔落盤前就報 done（fresh runtime 首次部署正正係呢個場景），只查目錄存在會 timing race 見紅；查 corpus 內容係確定性消除。
+- **v1.3 備註**：第②層（corpus.jsonl 內容核對）同 `wait_reindex_done` 嘅 corpus 條件都係 **llamaindex-specific**（BM25 retriever 嘅檔案格式）。若將來有 KB 換 engine，兩處都要跟住換 verify/wait 方式，唔好留返沉默失敗。
 - 失敗處理：某 KB 失敗唔阻其他 KB；summary 列明邊個 FAIL，exit 1
 
 ### 2.6 冪等

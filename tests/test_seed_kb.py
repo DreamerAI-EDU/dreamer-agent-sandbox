@@ -479,3 +479,40 @@ def test_sync_rebuilds_index_for_changed_kb(monkeypatch, kb_fs, capsys):
     out = capsys.readouterr().out
     assert "index missing docs" not in out
     assert "indexed 1 md file(s)" in out
+
+
+def test_wait_reindex_done_requires_full_corpus(tmp_path, monkeypatch):
+    """Race fix: wait_reindex_done must not return True merely because a
+    version-* dir exists — it must wait until the BM25 corpus contains every
+    raw md file. First-deploy does clear -> reindex -> verify in one pass, and
+    reindex can report done before index files land on disk.
+    """
+    monkeypatch.setattr(seed.time, "sleep", lambda s: None)
+
+    kb_dir = tmp_path / "runtime" / "dreamer-ethical-ai"
+    raw = kb_dir / "raw"
+    raw.mkdir(parents=True)
+    (raw / "a.md").write_text("x", encoding="utf-8")
+    (raw / "b.md").write_text("x", encoding="utf-8")
+
+    corpus_dir = kb_dir / "version-1" / "bm25_retriever"
+    corpus_dir.mkdir(parents=True)
+
+    class _Fake:
+        def kb_status(self, kb_name):
+            return {"statistics": {"needs_reindex": False}}
+
+    api = _Fake()
+
+    # version-* exists but corpus is missing a raw doc -> must NOT pass.
+    (corpus_dir / "corpus.jsonl").write_text(
+        '{"file_name": "a.md", "text": "x"}\n', encoding="utf-8")
+    assert seed.wait_reindex_done(api, kb_dir, "dreamer-ethical-ai",
+                                  timeout=0.2) is False
+
+    # corpus now contains every raw md -> pass.
+    (corpus_dir / "corpus.jsonl").write_text(
+        '{"file_name": "a.md", "text": "x"}\n'
+        '{"file_name": "b.md", "text": "x"}\n', encoding="utf-8")
+    assert seed.wait_reindex_done(api, kb_dir, "dreamer-ethical-ai",
+                                  timeout=0.2) is True

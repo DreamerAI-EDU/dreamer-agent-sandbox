@@ -57,7 +57,7 @@ class PortfolioAgent:
 
     AGENT_NAME = "portfolio"
     KB_OWNERSHIP = ["dreamer-portfolio"]
-    KBS_READ = ["dreamer-psd", "dreamer-life_skills"]
+    KBS_READ: list = []
     CAPABILITIES = ["portfolio_mgmt", "reflection_prompt", "artifact_curate"]
     MODE_ALLOWLIST = ["CONTEXTUAL", "HYBRID"]
 

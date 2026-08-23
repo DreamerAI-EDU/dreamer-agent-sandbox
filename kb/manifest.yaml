@@ -28,3 +28,11 @@ knowledge_bases:
     rag_provider: llamaindex
     docs_dir: dreamer-maths-ai/
     expected_doc_count: 1
+  - name: dreamer-portfolio
+    rag_provider: llamaindex
+    docs_dir: dreamer-portfolio/
+    expected_doc_count: 0
+  - name: dreamer-prerequisites
+    rag_provider: llamaindex
+    docs_dir: dreamer-prerequisites/
+    expected_doc_count: 0

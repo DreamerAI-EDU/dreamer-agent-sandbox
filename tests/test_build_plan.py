@@ -71,7 +71,7 @@ def seeded_db(tmp_path):
             (
                 "maths-fractions-01", "Mathematics", "P4-P6",
                 json.dumps(["maths-numbers-01"]),
-                json.dumps(["dreamer-maths"]),
+                json.dumps(["dreamer-maths-ai"]),
             ),
         )
         # progress_snapshots
@@ -178,11 +178,12 @@ class TestBuildPlanKBList:
             registry=registry, mode_router=router, navigator=navigator,
         )
         assert ETHICAL_AI_KB in plan.kb_list
-        assert "dreamer-maths" in plan.kb_list
+        assert "dreamer-maths-ai" in plan.kb_list
 
-    def test_direct_mode_filters_psd_life_skills(self, registry, router, navigator):
-        """Even with topic kb_list containing psd, DIRECT filters them."""
-        # Seed a topic with psd in kb_list
+    def test_direct_mode_keeps_all_kbs(self, registry, router, navigator):
+        """B21 §1: FILTER_IN_DIRECT is empty (psd/life_skills have no manifest
+        counterpart) — DIRECT no longer drops any kb."""
+        # Seed a topic with several kbs
         conn = sqlite3.connect(navigator._db_path)
         try:
             conn.executescript("""
@@ -200,7 +201,8 @@ class TestBuildPlanKBList:
                 "(topic_id, subject, grade_level, prerequisites, kb_list) "
                 "VALUES (?,?,?,?,?)",
                 ("psd-exam-01", "PSD", "S1-S3", "[]",
-                 json.dumps(["dreamer-psd", "dreamer-life_skills", "dreamer-l2l"])),
+                 json.dumps(["dreamer-coding-python", "dreamer-game-design",
+                             "dreamer-maths-ai"])),
             )
             conn.commit()
         finally:
@@ -211,9 +213,9 @@ class TestBuildPlanKBList:
             registry=registry, mode_router=router, navigator=navigator,
         )
         assert plan.mode == "DIRECT"
-        assert "dreamer-psd" not in plan.kb_list
-        assert "dreamer-life_skills" not in plan.kb_list
-        assert "dreamer-l2l" in plan.kb_list
+        assert "dreamer-coding-python" in plan.kb_list
+        assert "dreamer-game-design" in plan.kb_list
+        assert "dreamer-maths-ai" in plan.kb_list
         assert ETHICAL_AI_KB in plan.kb_list
 
 

@@ -516,3 +516,100 @@ def test_wait_reindex_done_requires_full_corpus(tmp_path, monkeypatch):
         '{"file_name": "b.md", "text": "x"}\n', encoding="utf-8")
     assert seed.wait_reindex_done(api, kb_dir, "dreamer-ethical-ai",
                                   timeout=0.2) is True
+
+
+# --- structural KB (expected_doc_count=0) (spec §5) --------------------------
+
+def _add_structural_kb(kb_fs, name="dreamer-portfolio"):
+    """Add a structural KB (expected_doc_count=0) to the throwaway repo."""
+    kb_sot = kb_fs["kb_sot"]
+    (kb_sot / name).mkdir()
+    manifest_path = kb_fs["tmp_path"] / "kb" / "manifest.yaml"
+    text = manifest_path.read_text(encoding="utf-8")
+    text += (
+        "  - name: {0}\n"
+        "    rag_provider: llamaindex\n"
+        "    docs_dir: {0}/\n"
+        "    expected_doc_count: 0\n"
+    ).format(name)
+    manifest_path.write_text(text, encoding="utf-8")
+
+
+def test_check_structural_kb_raw_zero_not_fail(monkeypatch, kb_fs, capsys):
+    """Spec §5: structural KBs (expected_doc_count=0) must not fail --check
+    when raw_documents=0 — they are not seeded through the doc pipeline, so
+    raw=0 is expected, not a B22 fail-loud."""
+    _add_structural_kb(kb_fs)
+
+    class _Fake:
+        def __init__(self, *a, **k):
+            pass
+
+        def health(self):
+            return {"status": "ok", "knowledge_bases_count": 3}
+
+        def list_kbs(self):
+            return [
+                {"name": "dreamer-ethical-ai",
+                 "statistics": {"raw_documents": 1}},
+                {"name": "dreamer-maths-ai",
+                 "statistics": {"raw_documents": 1}},
+                {"name": "dreamer-portfolio",
+                 "statistics": {"raw_documents": 0}},
+            ]
+
+        def test_embeddings(self):
+            return {}
+
+    monkeypatch.setattr(seed, "TutorAPI", _Fake)
+    args = seed.argparse.Namespace(api_base="http://x", timeout=1.0, wait=1.0)
+    assert seed.cmd_check(args) == seed.EXIT_OK
+    out = capsys.readouterr().out
+    assert "structural KB" in out
+    assert "[FAIL] KB dreamer-portfolio" not in out
+
+
+def test_sync_structural_kb_skips_reindex_and_verify(monkeypatch, kb_fs, capsys):
+    """Spec §5: structural KBs are registered in config but skipped in
+    reindex/verify — raw=0 must not be misread as a failure, and no index
+    build is attempted for an empty KB."""
+    _add_structural_kb(kb_fs)
+    calls = {"reindex": []}
+
+    def fake_restart():
+        pass
+
+    class _Fake:
+        def __init__(self, *a, **k):
+            pass
+
+        def health(self):
+            return {"status": "ok", "knowledge_bases_count": 3}
+
+        def kb_status(self, kb_name):
+            if kb_name == "dreamer-portfolio":
+                return {"statistics": {"raw_documents": 0}}
+            return {"statistics": {"raw_documents": 1, "needs_reindex": False}}
+
+        def reindex(self, kb_name):
+            calls["reindex"].append(kb_name)
+            # Simulate DeepTutor writing a fresh index from runtime raw/.
+            raw = kb_fs["runtime"] / kb_name / "raw"
+            corpus = kb_fs["runtime"] / kb_name / "version-1" / "bm25_retriever"
+            corpus.mkdir(parents=True, exist_ok=True)
+            lines = [f'{{"file_name": "{p.name}", "text": "x"}}'
+                     for p in sorted(raw.glob("*.md"))]
+            (corpus / "corpus.jsonl").write_text("\n".join(lines) + "\n",
+                                                 encoding="utf-8")
+            return {}
+
+    monkeypatch.setattr(seed, "restart_container", fake_restart)
+    monkeypatch.setattr(seed, "wait_ready", lambda api, t: True)
+    monkeypatch.setattr(seed, "TutorAPI", _Fake)
+
+    args = seed.argparse.Namespace(api_base="http://x", timeout=1.0, wait=1.0)
+    assert seed.cmd_sync(args) == seed.EXIT_OK
+    out = capsys.readouterr().out
+    assert "structural KB" in out
+    assert "dreamer-portfolio" not in calls["reindex"]
+    assert set(calls["reindex"]) == {"dreamer-ethical-ai", "dreamer-maths-ai"}

@@ -94,10 +94,9 @@ class AssessmentAgent:
     """
 
     AGENT_NAME = "assessment"
-    KB_OWNERSHIP = ["dreamer-rubrics"]
+    KB_OWNERSHIP = ["dreamer-assessment"]
     KBS_READ = [
-        "dreamer-maths", "dreamer-english", "dreamer-computing",
-        "dreamer-science", "dreamer-l2l",
+        "dreamer-maths-ai", "dreamer-coding-python", "dreamer-game-design",
     ]
     CAPABILITIES = ["quiz_gen", "rubric_gen", "auto_marking", "progress_track"]
     MODE_ALLOWLIST = ["DIRECT", "HYBRID"]

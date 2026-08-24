@@ -59,37 +59,38 @@ def seed_topic_metadata(conn: sqlite3.Connection) -> None:
         (
             "maths-fractions-01", "Mathematics", "P4-P6",
             json.dumps(["maths-numbers-01"]),
-            json.dumps(["dreamer-maths"]),
+            json.dumps(["dreamer-maths-ai"]),
         ),
         (
             "maths-numbers-01", "Mathematics", "P4-P6",
             "[]",
-            json.dumps(["dreamer-maths"]),
+            json.dumps(["dreamer-maths-ai"]),
         ),
         (
             "psd-teamwork-u1", "PSD", "P4-P6",
             "[]",
-            json.dumps(["dreamer-psd"]),
+            json.dumps(["dreamer-portfolio"]),
         ),
         (
             "science-energy-02", "Science", "S1-S3",
             json.dumps(["science-matter-01"]),
-            json.dumps(["dreamer-science", "dreamer-life_skills"]),
+            json.dumps(["dreamer-coding-python", "dreamer-game-design"]),
         ),
         (
             "science-matter-01", "Science", "S1-S3",
             "[]",
-            json.dumps(["dreamer-science"]),
+            json.dumps(["dreamer-coding-python"]),
         ),
         (
             "ethics-digital-citizen", "Computing", "S1-S3",
             "[]",
-            json.dumps(["dreamer-computing", "dreamer-ethical-ai"]),
+            json.dumps(["dreamer-coding-python", "dreamer-ethical-ai"]),
         ),
         (
             "english-grammar-03", "English", "P1-P3",
             json.dumps(["english-phonics-01"]),
-            json.dumps(["dreamer-english", "dreamer-psd", "dreamer-life_skills"]),
+            json.dumps(["dreamer-coding-python", "dreamer-game-design",
+                        "dreamer-maths-ai"]),
         ),
     ]
     conn.executemany(
@@ -164,7 +165,8 @@ def nav(seeded_db):
 # ═══════════════════════════════════════════════════════════
 
 class TestKBMatrixRules:
-    """Two hard rules: ethical-ai always append; DIRECT filter psd/life_skills."""
+    """Two hard rules: ethical-ai always append; DIRECT filter is now an
+    empty set (psd/life_skills have no manifest counterpart — B21 §1)."""
 
     def test_ethical_ai_appended_when_absent(self, nav):
         """Rule 1: dreamer-ethical-ai is always appended if not already present."""
@@ -176,35 +178,38 @@ class TestKBMatrixRules:
         kbs = nav.resolve_kb_list("HYBRID", "ethics-digital-citizen")
         assert kbs.count(ETHICAL_AI_KB) == 1
 
-    def test_direct_filters_psd(self, nav):
-        """Rule 2: DIRECT mode filters out dreamer-psd."""
+    def test_direct_filter_is_empty_set(self, nav):
+        """Rule 2 (B21): FILTER_IN_DIRECT is empty — no KB is dropped in
+        DIRECT mode anymore."""
         kbs = nav.resolve_kb_list("DIRECT", "psd-teamwork-u1")
-        assert "dreamer-psd" not in kbs
+        assert "dreamer-portfolio" in kbs
 
-    def test_direct_filters_life_skills(self, nav):
-        """Rule 2: DIRECT mode filters out dreamer-life_skills."""
+    def test_direct_keeps_all_kbs(self, nav):
+        """Rule 2 (B21): DIRECT no longer filters coding/game kbs."""
         kbs = nav.resolve_kb_list("DIRECT", "science-energy-02")
-        assert "dreamer-life_skills" not in kbs
+        assert "dreamer-coding-python" in kbs
+        assert "dreamer-game-design" in kbs
 
-    def test_hybrid_does_not_filter_psd_life_skills(self, nav):
-        """HYBRID mode: psd/life_skills are NOT filtered."""
+    def test_hybrid_does_not_filter(self, nav):
+        """HYBRID mode: no KB is filtered."""
         kbs = nav.resolve_kb_list("HYBRID", "english-grammar-03")
-        assert "dreamer-psd" in kbs
-        assert "dreamer-life_skills" in kbs
+        assert "dreamer-coding-python" in kbs
+        assert "dreamer-game-design" in kbs
+        assert "dreamer-maths-ai" in kbs
 
-    def test_contextual_does_not_filter_psd_life_skills(self, nav):
-        """CONTEXTUAL mode: psd/life_skills are NOT filtered."""
+    def test_contextual_does_not_filter(self, nav):
+        """CONTEXTUAL mode: no KB is filtered."""
         kbs = nav.resolve_kb_list("CONTEXTUAL", "english-grammar-03")
-        assert "dreamer-psd" in kbs
-        assert "dreamer-life_skills" in kbs
+        assert "dreamer-coding-python" in kbs
+        assert "dreamer-game-design" in kbs
 
-    def test_combined_rules_direct_topics_psd_and_life(self, nav):
-        """DIRECT mode: ethical-ai appended AND psd/life_skills removed."""
+    def test_combined_rules_direct_appends_ethical(self, nav):
+        """DIRECT mode: ethical-ai appended; empty filter keeps all kbs."""
         kbs = nav.resolve_kb_list("DIRECT", "english-grammar-03")
         assert ETHICAL_AI_KB in kbs
-        assert "dreamer-psd" not in kbs
-        assert "dreamer-life_skills" not in kbs
-        assert "dreamer-english" in kbs
+        assert "dreamer-coding-python" in kbs
+        assert "dreamer-game-design" in kbs
+        assert "dreamer-maths-ai" in kbs
 
     def test_ethical_ai_stays_even_in_direct(self, nav):
         """Rule 1 + Rule 2: ethical-ai is NOT in FILTER_IN_DIRECT, stays."""
@@ -242,8 +247,8 @@ class TestPrerequisites:
         assert meta["subject"] == "Science"
         assert meta["grade_level"] == "S1-S3"
         assert meta["prerequisites"] == ["science-matter-01"]
-        assert "dreamer-science" in meta["kb_list"]
-        assert "dreamer-life_skills" in meta["kb_list"]
+        assert "dreamer-coding-python" in meta["kb_list"]
+        assert "dreamer-game-design" in meta["kb_list"]
 
     def test_get_topic_metadata_nonexistent(self, nav):
         meta = nav.get_topic_metadata("nonexistent")
@@ -317,7 +322,7 @@ class TestPrereqGaps:
                 (
                     "multi-prereq-01", "Science", "P4-P6",
                     json.dumps(["science-matter-01", "maths-fractions-01"]),
-                    json.dumps(["dreamer-science"]),
+                    json.dumps(["dreamer-coding-python"]),
                 ),
             )
             conn.commit()
@@ -350,7 +355,7 @@ class TestPrereqGaps:
                 "VALUES (?,?,?,?,?)",
                 ("maths-division-01", "maths", "P4-P6",
                  json.dumps(["maths-multiplication-02"]),
-                 json.dumps(["dreamer-maths"])),
+                 json.dumps(["dreamer-maths-ai"])),
             )
             conn.commit()
         finally:
@@ -370,7 +375,7 @@ class TestPrereqGaps:
                 "VALUES (?,?,?,?,?)",
                 ("maths-division-01", "maths", "P4-P6",
                  json.dumps(["maths-multiplication-02"]),
-                 json.dumps(["dreamer-maths"])),
+                 json.dumps(["dreamer-maths-ai"])),
             )
             conn.execute(
                 "INSERT OR REPLACE INTO progress_snapshots "

@@ -14,16 +14,15 @@ from typing import Dict, Optional
 class CurriculumAgentStub:
     """Student-facing: designs lesson plans and curriculum navigation.
 
-    KB owner: dreamer-maths/english/computing/science/psd/life_skills/l2l/history
+    KB owner: dreamer-maths-ai / dreamer-coding-python / dreamer-game-design
               + dreamer-prerequisites (Curriculum Navigator sub-role)
     Modes: CONTEXTUAL, HYBRID
     """
 
     AGENT_NAME = "curriculum"
     KB_OWNERSHIP = [
-        "dreamer-maths", "dreamer-english", "dreamer-computing",
-        "dreamer-science", "dreamer-psd", "dreamer-life_skills",
-        "dreamer-l2l", "dreamer-history", "dreamer-prerequisites",
+        "dreamer-maths-ai", "dreamer-coding-python", "dreamer-game-design",
+        "dreamer-prerequisites",
     ]
     CAPABILITIES = ["lesson_plan", "curriculum_nav", "topic_design", "prerequisite_check"]
     MODE_ALLOWLIST = ["CONTEXTUAL", "HYBRID"]
@@ -42,14 +41,14 @@ class CurriculumAgentStub:
 class PortfolioAgentStub:
     """Student-facing: manages student portfolio and reflections.
 
-    KB reader: dreamer-psd/life_skills
     KB owner: dreamer-portfolio
+    KB reader: none (psd / life_skills have no manifest counterpart)
     Modes: CONTEXTUAL
     """
 
     AGENT_NAME = "portfolio"
     KB_OWNERSHIP = ["dreamer-portfolio"]
-    KBS_READ = ["dreamer-psd", "dreamer-life_skills"]
+    KBS_READ: list = []
     CAPABILITIES = ["portfolio_mgmt", "reflection_prompt", "artifact_curate"]
     MODE_ALLOWLIST = ["CONTEXTUAL"]
 
@@ -67,14 +66,14 @@ class PortfolioAgentStub:
 class MarketingAgentStub:
     """Non-student-facing: generates social media / marketing content.
 
-    KB reader: dreamer-computing/science
+    KB reader: dreamer-coding-python / dreamer-game-design
     Social content only.
     mode_allowlist=None — no student-query routing.
     """
 
     AGENT_NAME = "marketing"
     KB_OWNERSHIP: list = []
-    KBS_READ = ["dreamer-computing", "dreamer-science"]
+    KBS_READ = ["dreamer-coding-python", "dreamer-game-design"]
     CAPABILITIES = ["social_content", "campaign_brief", "brand_copy"]
     MODE_ALLOWLIST = None  # non-student-facing
 

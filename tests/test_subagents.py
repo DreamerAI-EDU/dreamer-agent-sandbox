@@ -99,15 +99,14 @@ def test_curriculum_kb_ownership(populated_registry):
 
 
 def test_curriculum_kb_ownership_broad(populated_registry):
-    for kb in ["dreamer-maths", "dreamer-english", "dreamer-computing",
-               "dreamer-science", "dreamer-psd", "dreamer-life_skills",
-               "dreamer-l2l", "dreamer-history"]:
+    for kb in ["dreamer-maths-ai", "dreamer-coding-python",
+               "dreamer-game-design"]:
         result = populated_registry.list_by_kb(kb)
         assert "curriculum" in result, f"curriculum should own {kb}"
 
 
 def test_assessment_kb_ownership(populated_registry):
-    result = populated_registry.list_by_kb("dreamer-rubrics")
+    result = populated_registry.list_by_kb("dreamer-assessment")
     assert "assessment" in result
 
 

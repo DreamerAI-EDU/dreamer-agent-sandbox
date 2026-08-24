@@ -446,7 +446,13 @@ def cmd_check(args: argparse.Namespace) -> int:
         return EXIT_VERIFY_FAIL
 
     kbs_api = {kb["name"]: kb for kb in api.list_kbs()}
-    for name in kbs:
+    for name, entry in kbs.items():
+        # Structural KBs (expected_doc_count=0) are not seeded through the
+        # document pipeline — raw_documents=0 is expected, not a fail-loud.
+        if entry["expected_doc_count"] == 0:
+            print(f"  [OK] KB {name}: structural KB (expected_doc_count=0), "
+                  f"skipped raw_documents check")
+            continue
         status = kbs_api.get(name, {})
         raw = (status.get("statistics") or {}).get("raw_documents", 0)
         if raw == 0:
@@ -533,6 +539,13 @@ def cmd_sync(args: argparse.Namespace, force_rebuild: bool = False) -> int:
     if changed_kbs or force_rebuild:
         targets = set(kbs) if force_rebuild else changed_kbs
         for name in sorted(targets):
+            # Structural KBs (expected_doc_count=0) have no md docs to
+            # mirror/index — skip reindex (raw=0 must not be treated as a
+            # change needing a rebuild).
+            if kbs[name]["expected_doc_count"] == 0:
+                print(f"  [skip] {name}: structural KB (expected_doc_count=0), "
+                      f"no reindex")
+                continue
             runtime_kb_dir = KB_RUNTIME_DIR / name
             print(f"  [reindex] {name}…")
             clear_kb_index(runtime_kb_dir)
@@ -555,6 +568,13 @@ def cmd_sync(args: argparse.Namespace, force_rebuild: bool = False) -> int:
     #    corpus on disk.
     failures: list[str] = []
     for name, entry in kbs.items():
+        # Structural KBs (expected_doc_count=0) are registered in config but
+        # have no raw/ docs and no index — skip raw/index verify to avoid a
+        # false raw=0 / missing-index FAIL.
+        if entry["expected_doc_count"] == 0:
+            print(f"  [OK] {name}: structural KB (expected_doc_count=0), "
+                  f"skipped verify")
+            continue
         expected = len(entry["_md_files"])
         runtime_kb_dir = KB_RUNTIME_DIR / name
         try:

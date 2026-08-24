@@ -26,7 +26,10 @@ logger = logging.getLogger(__name__)
 VALID_AGE_BANDS = frozenset({"P1-P3", "P4-P6", "S1-S3"})
 
 ETHICAL_AI_KB = "dreamer-ethical-ai"
-FILTER_IN_DIRECT: frozenset[str] = frozenset({"dreamer-psd", "dreamer-life_skills"})
+# FILTER_IN_DIRECT is empty: psd / life_skills have no
+# manifest counterpart (spec §1 naming unification), so DIRECT mode no
+# longer filters any KB.
+FILTER_IN_DIRECT: frozenset[str] = frozenset()
 
 DB_PATH = os.environ.get(
     "DREAMER_DB_PATH",
@@ -193,7 +196,8 @@ class CurriculumNavigator:
 
         Rules (apply in order):
           1. dreamer-ethical-ai is always appended if not already in the raw kb_list.
-          2. DIRECT mode: dreamer-psd and dreamer-life_skills are REMOVED.
+          2. DIRECT mode: no KB filters (FILTER_IN_DIRECT is empty post
+             naming unification — psd/life_skills have no manifest counterpart).
 
         Args:
             mode: One of "DIRECT", "CONTEXTUAL", "HYBRID".
@@ -212,7 +216,8 @@ class CurriculumNavigator:
         if ETHICAL_AI_KB not in kbs:
             kbs.append(ETHICAL_AI_KB)
 
-        # Rule 2: DIRECT mode filters psd/life_skills
+        # Rule 2: DIRECT mode filters any KB in FILTER_IN_DIRECT (empty set
+        # after naming unification — no manifest KBs are filtered).
         if mode == "DIRECT":
             kbs = [kb for kb in kbs if kb not in FILTER_IN_DIRECT]
 

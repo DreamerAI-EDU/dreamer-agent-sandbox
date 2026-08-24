@@ -28,6 +28,12 @@ The server assigns its own `session_id` (format `unified_xxx`) and **does not ec
 
 The `done` event signals turn completion. The `error` event can appear at any point and terminates the turn with `DeepTutorError`.
 
+### 2.1 Top-level `language` field (Day 23 fix)
+
+Outgoing WS payloads carry a top-level `language` field that mirrors Hermes `lang_code`. Allowed values: `"en"`, `"zh-hk"`, `"zh-cn"` (B26: `zh-cn` synced with Hermes enum; B18 tracks remaining doc work). Omit the field when no language is set.
+
+> **Rule:** never add `language` (or any unknown key) to the config dict — DeepTutor silently falls back to stub on unrecognized config keys (handover habit #14).
+
 ### 3. 403 → OpenRouter fix (Day 10 critical path)
 
 **Root cause:** Container's `model_catalog.json` had empty profile → default gpt-4o-mini → `api.openai.com` → `unsupported_country_region_territory` (Hong Kong).

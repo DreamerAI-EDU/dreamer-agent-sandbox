@@ -247,22 +247,19 @@ class PortfolioAgent:
             latest = rows[-1]["internal_label"]
             grew = earliest in ("not_yet", "developing") and latest in ("achieved", "exemplary")
             if grew:
-                return (
-                    "你喺呢個項目度有明顯進步！"
-                    if lang_code == "zh-hk"
-                    else "You've made great progress on this project!"
-                )
+                return {
+                    "zh-hk": "你喺呢個項目度有明顯進步！",
+                    "zh-cn": "你在这个项目里进步很明显！",
+                }.get(lang_code, "You've made great progress on this project!")
             if latest in ("not_yet", "developing"):
-                return (
-                    "呢個項目仲有進步空間，繼續加油！"
-                    if lang_code == "zh-hk"
-                    else "Keep going — there's room to grow here!"
-                )
-            return (
-                "你一直保持出色表現！"
-                if lang_code == "zh-hk"
-                else "You've stayed consistently strong!"
-            )
+                return {
+                    "zh-hk": "呢個項目仲有進步空間，繼續加油！",
+                    "zh-cn": "这个项目还有进步空间，继续加油！",
+                }.get(lang_code, "Keep going — there's room to grow here!")
+            return {
+                "zh-hk": "你一直保持出色表現！",
+                "zh-cn": "你一直保持出色表现！",
+            }.get(lang_code, "You've stayed consistently strong!")
         except Exception:
             return ""
 
@@ -328,17 +325,15 @@ class PortfolioAgent:
 
         # kid-facing narrative, passed through Kid-Safe tone layer
         if items:
-            raw_content = (
-                "你嘅作品集有新作品喇！睇吓你做到嘅嘢啦～"
-                if lang_code == "zh-hk"
-                else "Your portfolio has new pieces! Look what you've made!"
-            )
+            raw_content = {
+                "zh-hk": "你嘅作品集有新作品喇！睇吓你做到嘅嘢啦～",
+                "zh-cn": "你的作品集有新作品了！看看你做到的事情～",
+            }.get(lang_code, "Your portfolio has new pieces! Look what you've made!")
         else:
-            raw_content = (
-                "繼續探索新項目，作品集就會慢慢豐富起嚟！"
-                if lang_code == "zh-hk"
-                else "Keep exploring new projects — your portfolio is growing!"
-            )
+            raw_content = {
+                "zh-hk": "繼續探索新項目，作品集就會慢慢豐富起嚟！",
+                "zh-cn": "继续探索新项目，作品集就会慢慢丰富起来！",
+            }.get(lang_code, "Keep exploring new projects — your portfolio is growing!")
         content = rewrite_tone(raw_content, age_band, lang_code)
 
         return {

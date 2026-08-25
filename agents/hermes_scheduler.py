@@ -938,6 +938,7 @@ async def _run_contextual(
             session_id=session_id,
             content=injected,
             capability="chat",
+            language=plan.lang_code,
         )
     except Exception as exc:
         _log = logging.getLogger(__name__)

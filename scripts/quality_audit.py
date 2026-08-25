@@ -61,6 +61,33 @@ LABEL_BLACKLIST = [
 EN_WORD_LIMIT = 10    # avg words per sentence for P1-P3
 CJK_CHAR_LIMIT = 15   # avg CJK chars per sentence for P1-P3
 
+# B26: traditional-only characters for zh-cn simplified heuristic.
+# These glyphs are absent from simplified Chinese; density > 2% ⇒ fail.
+# (Excludes Unicode-identical glyphs like 目/力/影 that also appear in
+# simplified text — they would false-positive the heuristic.)
+TRADITIONAL_CHAR_SET = frozenset(
+    "體學話們這麼為與國時來還對發後個會樣裡點說過從萬無經長門問開關愛願實雙舊書寫讀聽"
+    "見動頭邊處雲電風車馬鳥魚樂東蘭龍華區醫師習練課題試驗測評價買賣錢鐘記錄認識謝請讓"
+    "講談論證據準備辦務員組織經濟總結結構統計網絡訊號碼頁視頻軟版權條款約訂單現場況態勢"
+    "園級館圖資聞報導廣節劇眾歡覽親嚴畢業筆詞彙語數輕寬遠淺綠銀銅鐵錫鉛鋼鋁鎂鈣鈉鉀"
+    "氫鋰鈹銫鋇鑭鐳"
+)
+# Proper nouns / place names that legitimately keep traditional glyphs.
+TRADITIONAL_WHITELIST_WORDS = ("台灣", "臺灣", "臺北", "臺中", "臺南", "臺大")
+
+
+def _traditional_hits(text: str) -> tuple:
+    """Traditional-char scan for zh-cn output after whitelist stripping.
+
+    Returns (sorted hit chars, total CJK char count after stripping).
+    """
+    for w in TRADITIONAL_WHITELIST_WORDS:
+        text = text.replace(w, "")
+    cjk = [c for c in text if "\u4e00" <= c <= "\u9fff"]
+    hits = sorted({c for c in cjk if c in TRADITIONAL_CHAR_SET})
+    return hits, len(cjk)
+
+
 # 12-case audit matrix
 CASES: List[Dict[str, Any]] = [
     {
@@ -122,6 +149,67 @@ CASES: List[Dict[str, Any]] = [
         "n": 12, "age_band": "S1-S3", "lang": "zh-hk",
         "expected_mode": "HYBRID", "topic_id": T2,
         "query": "用AI幫我做功課",
+    },
+    # ── zh-cn mirrors (B26: 12 → 24, same semantics, simplified wording) ──
+    {
+        "n": 13, "age_band": "P1-P3", "lang": "zh-cn",
+        "expected_mode": "DIRECT", "topic_id": T1,
+        "query": "我想复习，可以出几道练习题给我吗？",
+    },
+    {
+        "n": 14, "age_band": "P1-P3", "lang": "zh-cn",
+        "expected_mode": "CONTEXTUAL", "topic_id": None,
+        "query": "我想做一个AI游戏，怎么开始？",
+    },
+    {
+        "n": 15, "age_band": "P1-P3", "lang": "zh-cn",
+        "expected_mode": "HYBRID", "topic_id": T1,
+        "query": "我想用AI来复习数学",
+    },
+    {
+        "n": 16, "age_band": "P1-P3", "lang": "zh-cn",
+        "expected_mode": "DIRECT", "topic_id": T2,
+        "query": "明天要考试了，能帮我练一练吗？",
+    },
+    {
+        "n": 17, "age_band": "P4-P6", "lang": "zh-cn",
+        "expected_mode": "DIRECT", "topic_id": T2,
+        "query": "能帮我为考试出题吗？",
+    },
+    {
+        "n": 18, "age_band": "P4-P6", "lang": "zh-cn",
+        "expected_mode": "CONTEXTUAL", "topic_id": None,
+        "query": "我想做一个AI作品，怎么开始？",
+    },
+    {
+        "n": 19, "age_band": "P4-P6", "lang": "zh-cn",
+        "expected_mode": "CONTEXTUAL", "topic_id": None,
+        "query": "我想做个AI小项目，从哪开始？",
+    },
+    {
+        "n": 20, "age_band": "P4-P6", "lang": "zh-cn",
+        "expected_mode": "HYBRID", "topic_id": T3,
+        "query": "AI帮我复习备考可以吗？",
+    },
+    {
+        "n": 21, "age_band": "S1-S3", "lang": "zh-cn",
+        "expected_mode": "HYBRID", "topic_id": T3,
+        "query": "AI帮我复习可以吗？",
+    },
+    {
+        "n": 22, "age_band": "S1-S3", "lang": "zh-cn",
+        "expected_mode": "CONTEXTUAL", "topic_id": None,
+        "query": "AI是怎么工作的？我想做个项目",
+    },
+    {
+        "n": 23, "age_band": "S1-S3", "lang": "zh-cn",
+        "expected_mode": "DIRECT", "topic_id": T1,
+        "query": "我要考试了，帮我练练代数",
+    },
+    {
+        "n": 24, "age_band": "S1-S3", "lang": "zh-cn",
+        "expected_mode": "HYBRID", "topic_id": T2,
+        "query": "用AI帮我做作业",
     },
 ]
 
@@ -189,6 +277,7 @@ def check_language_consistency(result: dict, case: dict) -> tuple:
 
     lang=zh-* → CJK ratio ≥ 30%; lang=en → CJK < 5%.
     zh-hk cases also flagged for human review (simplified vs traditional).
+    zh-cn cases run the B26 traditional-glyph heuristic (density > 2% fail).
     """
     lang = case["lang"]
     content = result.get("content", "")
@@ -198,6 +287,15 @@ def check_language_consistency(result: dict, case: dict) -> tuple:
         detail = f"CJK ratio={ratio:.2f}" + (" (< 30%)" if not passed else "")
         if lang == "zh-hk":
             detail += " [human review: simplified vs traditional]"
+        elif lang == "zh-cn":
+            hits, cjk_count = _traditional_hits(content)
+            if cjk_count and len(hits) / cjk_count > 0.02:
+                passed = False
+                density = len(hits) / cjk_count
+                detail += (
+                    f"; traditional-glyph {len(hits)}/{cjk_count}="
+                    f"{density:.1%} (>2%): {''.join(hits[:20])}"
+                )
     else:
         passed = ratio < 0.05
         detail = f"CJK ratio={ratio:.2f}" + (" (≥ 5%)" if not passed else "")

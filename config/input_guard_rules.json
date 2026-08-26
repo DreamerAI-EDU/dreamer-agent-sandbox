@@ -2,7 +2,7 @@
     "_meta": {
         "version": "v1-phase2.5",
         "description": "Input guard rules — pre-generation safety filter. Zero LLM, rule-based. Tune JSON, no code change.",
-        "last_updated": "2026-08-08"
+        "last_updated": "2026-08-26"
     },
 
     "injection_patterns": {
@@ -234,9 +234,9 @@
                 "zh-cn": "我听到你说的话，你的感受很重要。如果你觉得很辛苦，请和一个你信任的大人聊聊——家人、老师、或者学校社工。他们可以帮到你，你值得有人支持。你不是一个人。"
             },
             "S1-S3": {
-                "en": "I hear you, and I'm sorry you're feeling this way. What you're going through is real, and you don't have to face it alone. Please talk to someone you trust — a parent, teacher, school counsellor, or reach out to a helpline. There are people who can help, and things can get better. You matter.\n\n[HK helpline placeholder — verify number before production]\nSamaritans HK (24h): [TBC]\nThe Samaritans (HK, multilingual): [TBC]\nSocial Welfare Dept 24h hotline: [TBC]",
-                "zh-hk": "我聽到你講嘅嘢，我知道你而家好辛苦。你經歷嘅嘢係真實嘅，你唔需要一個人面對。請同一個你信任嘅人傾下——家人、老師、學校社工，或者打去求助熱線。有人可以幫到你，情況係會好轉嘅。你係重要嘅。\n\n[熱線號碼 placeholder — 上線前請核實]\n撒瑪利亞防止自殺會 (24小時): [TBC]\n香港撒瑪利亞會 (多語言): [TBC]\n社會福利署 24小時熱線: [TBC]",
-                "zh-cn": "我听到你说的话，我知道你现在很辛苦。你所经历的是真实的，你不需要一个人面对。请和你信任的人聊聊——家人、老师、学校辅导员，或者拨打求助热线。有人可以帮到你，情况会好转的。你是重要的。\n\n[热线号码 placeholder — 上线前请核实]\n生命热线 (24小时): [TBC]\n心理援助热线: [TBC]"
+                "en": "I hear you, and I'm sorry you're feeling this way. What you're going through is real, and you don't have to face it alone. Please talk to someone you trust — a parent, teacher, school counsellor, or reach out to a helpline. There are people who can help, and things can get better. You matter.\n\nEmergency Hotline — Emotional Support (情緒通): 18111 (24h, Cantonese & English)\nYouth Line — Life Hotline: 2382 0777\nThe Samaritans HK: 2896 0000",
+                "zh-hk": "我聽到你講嘅嘢，我知道你而家好辛苦。你經歷嘅嘢係真實嘅，你唔需要一個人面對。請同一個你信任嘅人傾下——家人、老師、學校社工，或者打去求助熱線。有人可以幫到你，情況係會好轉嘅。你係重要嘅。\n\n情緒通：18111（24小時，廣東話+英文）\n生命熱線青少年專線：2382 0777\n撒瑪利亞會：2896 0000",
+                "zh-cn": "我听到你说的话，我知道你现在很辛苦。你所经历的是真实的，你不需要一个人面对。请和你信任的人聊聊——家人、老师、学校辅导员，或者拨打求助热线。有人可以帮到你，情况会好转的。你是重要的。\n\n情绪通：18111（24小时，粤语+英文）\n生命热线青少年专线：2382 0777\n撒玛利亚会：2896 0000"
             }
         },
         "alert": {

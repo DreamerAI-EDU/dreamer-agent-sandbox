@@ -105,10 +105,14 @@ def test_welfare_message_differs_from_generic_block(guard):
     assert welfare.response_message != injection.response_message
 
 
-def test_welfare_s1s3_includes_helpline_placeholder(guard):
+def test_welfare_s1s3_includes_real_helpline(guard):
+    """S1-S3 welfare response carries verified hotline numbers (B10)."""
     verdict = guard.check("i want to end my life", age_band="S1-S3", lang_code="en")
-    assert "helpline" in verdict.response_message.lower()
-    assert "TBC" in verdict.response_message  # placeholder, not real number yet
+    assert verdict.is_welfare is True
+    assert "18111" in verdict.response_message      # primary: 情緒通 (24h)
+    assert "2382 0777" in verdict.response_message  # backup: Life Hotline youth line
+    assert "2896 0000" in verdict.response_message  # backup: The Samaritans HK
+    assert "TBC" not in verdict.response_message    # no unresolved placeholder
 
 
 # ── Age-Inappropriate (per age band) ─────────────────

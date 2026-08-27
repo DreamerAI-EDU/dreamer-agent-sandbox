@@ -70,6 +70,23 @@ jobs:
           path: output_trials/
           retention-days: 7
 
+  # B31: read-only guard — a test_*.py tracked in repo but missing from the
+  # phase2-tests run list would silently never run, so fail RED; a stale
+  # list entry (file deleted) is only a warning. No build dependency.
+  ci-manifest-guard:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: CI manifests vs test suite consistency guard
+        run: python scripts/check_ci_manifest.py
+
   phase2-tests:
     runs-on: ubuntu-latest
 

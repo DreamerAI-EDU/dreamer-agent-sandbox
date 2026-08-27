@@ -2,7 +2,7 @@
 # Contract: docs/phase7-B21-kb-seed-規格.md §2.2
 # docs_dir is relative to repo knowledge_bases/
 version: 1
-last_updated: "2026-08-22"
+last_updated: "2026-08-26"
 knowledge_bases:
   - name: dreamer-assessment
     rag_provider: llamaindex
@@ -16,6 +16,10 @@ knowledge_bases:
     rag_provider: llamaindex
     docs_dir: dreamer-core-kb/
     expected_doc_count: 1
+  - name: dreamer-curriculum
+    rag_provider: llamaindex
+    docs_dir: dreamer-curriculum/
+    expected_doc_count: 8
   - name: dreamer-ethical-ai
     rag_provider: llamaindex
     docs_dir: dreamer-ethical-ai/

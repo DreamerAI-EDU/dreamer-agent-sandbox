@@ -362,7 +362,7 @@ class HermesScheduler:
         Returns:
             None if safe; block dict if unsafe.
         """
-        from .kid_safe.input_guard import InputGuard, notify_welfare
+        from .kid_safe.input_guard import InputGuard, notify_welfare, notify_welfare_email
 
         guard = InputGuard()
         verdict = guard.check(
@@ -377,9 +377,10 @@ class HermesScheduler:
         if verdict.event is not None:
             _write_safety_event(verdict.event)
 
-        # Fire webhook for welfare events
+        # Fire webhook + email for welfare events (both fire-and-forget)
         if verdict.is_welfare and verdict.event is not None:
             notify_welfare(verdict.event)
+            notify_welfare_email(verdict.event)
 
         return {
             "response_message": verdict.response_message,

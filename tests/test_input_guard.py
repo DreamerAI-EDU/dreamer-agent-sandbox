@@ -21,6 +21,7 @@ from agents.kid_safe.input_guard import (
     InputGuard,
     InputGuardVerdict,
     notify_welfare,
+    notify_welfare_email,
 )
 
 
@@ -471,3 +472,155 @@ def test_kid_safe_input_writes_to_safety_events(tmp_path, monkeypatch):
     assert "kill" in row[0].lower(), "raw_input must contain student query"
     assert row[1] == "welfare"
     assert row[2] == "high"
+
+
+# ── Welfare Email Notifier (B33a) ────────────────────
+
+@pytest.fixture
+def welfare_event():
+    """A realistic welfare high event (with raw_input present in the dict,
+    which the email path must never forward)."""
+    return {
+        "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        "student_id": "stu_001",
+        "session_id": "sess_abc",
+        "event_type": "welfare",
+        "severity": "high",
+        "raw_input": "i want to kill myself now",
+        "matched_rule": "welfare_pattern",
+        "age_band": "P4-P6",
+        "lang_code": "zh-hk",
+        "created_at": "2026-08-27T14:32:05Z",
+    }
+
+
+def test_email_silent_when_env_unset(monkeypatch, welfare_event):
+    """SAFETY_EMAIL_ENABLED unset → return False, SMTP never called."""
+    monkeypatch.delenv("SAFETY_EMAIL_ENABLED", raising=False)
+    with patch("agents.kid_safe.input_guard.smtplib.SMTP") as mock_smtp:
+        result = notify_welfare_email(welfare_event)
+        assert result is False
+        mock_smtp.assert_not_called()
+
+
+def test_email_returns_false_and_logs_when_password_missing(
+    caplog, monkeypatch, welfare_event
+):
+    """enabled but SAFETY_SMTP_PASSWORD missing → return False, no raise, log ERROR."""
+    monkeypatch.setenv("SAFETY_EMAIL_ENABLED", "true")
+    monkeypatch.delenv("SAFETY_SMTP_PASSWORD", raising=False)
+    with caplog.at_level("ERROR"), \
+            patch("agents.kid_safe.input_guard.smtplib.SMTP") as mock_smtp:
+        result = notify_welfare_email(welfare_event)
+        assert result is False
+        mock_smtp.assert_not_called()
+    assert "SAFETY_SMTP_PASSWORD not set" in caplog.text
+    assert "a1b2c3d4-e5f6" in caplog.text  # event_id in ERROR log
+
+
+def test_email_normal_send_returns_true(monkeypatch, welfare_event):
+    """Successful mock SMTP (587 STARTTLS path) → return True, send_message once."""
+    monkeypatch.setenv("SAFETY_EMAIL_ENABLED", "true")
+    monkeypatch.setenv("SAFETY_SMTP_PASSWORD", "test-app-password")
+    monkeypatch.setenv("SAFETY_SMTP_PORT", "587")  # force smtplib.SMTP path for mock
+    with patch("agents.kid_safe.input_guard.smtplib.SMTP") as mock_smtp:
+        instance = mock_smtp.return_value.__enter__.return_value
+        result = notify_welfare_email(welfare_event)
+        assert result is True
+        instance.send_message.assert_called_once()
+
+
+def test_email_smtp_failure_does_not_raise(caplog, monkeypatch, welfare_event):
+    """SMTP raises → return False, no raise, log ERROR (Rule #12 failure injection)."""
+    monkeypatch.setenv("SAFETY_EMAIL_ENABLED", "true")
+    monkeypatch.setenv("SAFETY_SMTP_PASSWORD", "test-app-password")
+    monkeypatch.setenv("SAFETY_SMTP_PORT", "587")
+    with caplog.at_level("ERROR"), \
+            patch("agents.kid_safe.input_guard.smtplib.SMTP",
+                  side_effect=Exception("connection refused")):
+        result = notify_welfare_email(welfare_event)
+        assert result is False
+    assert "welfare email send failed" in caplog.text
+    assert "a1b2c3d4-e5f6" in caplog.text  # event_id in ERROR log
+
+
+def test_email_never_contains_raw_input(monkeypatch, welfare_event):
+    """Email subject + body must NOT contain the student's original text (PDPO)."""
+    monkeypatch.setenv("SAFETY_EMAIL_ENABLED", "true")
+    monkeypatch.setenv("SAFETY_SMTP_PASSWORD", "test-app-password")
+    monkeypatch.setenv("SAFETY_SMTP_PORT", "587")
+    with patch("agents.kid_safe.input_guard.smtplib.SMTP") as mock_smtp:
+        instance = mock_smtp.return_value.__enter__.return_value
+        result = notify_welfare_email(welfare_event)
+        assert result is True
+        sent = instance.send_message.call_args[0][0]
+        subject = str(sent["Subject"])
+        body = sent.get_content()
+    assert "kill myself" not in subject
+    assert "kill myself" not in body
+    assert "raw_input" not in body.lower()
+
+
+def test_email_body_contains_whitelisted_fields(monkeypatch, welfare_event):
+    """Body carries event_id / student_id / session_id / age_band / rule / helpline 18111."""
+    monkeypatch.setenv("SAFETY_EMAIL_ENABLED", "true")
+    monkeypatch.setenv("SAFETY_SMTP_PASSWORD", "test-app-password")
+    monkeypatch.setenv("SAFETY_SMTP_PORT", "587")
+    with patch("agents.kid_safe.input_guard.smtplib.SMTP") as mock_smtp:
+        instance = mock_smtp.return_value.__enter__.return_value
+        notify_welfare_email(welfare_event)
+        body = instance.send_message.call_args[0][0].get_content()
+    assert "a1b2c3d4-e5f6-7890-abcd-ef1234567890" in body
+    assert "stu_001" in body
+    assert "sess_abc" in body
+    assert "P4-P6" in body
+    assert "welfare_pattern" in body
+    assert "18111" in body
+    assert "2026-08-27" in body
+
+
+def test_non_welfare_event_does_not_trigger_email(monkeypatch):
+    """injection event → no email (defence-in-depth gate), SMTP never called."""
+    event = {
+        "id": "evt_inj_001",
+        "event_type": "injection",
+        "severity": "medium",
+        "student_id": "stu_001",
+    }
+    monkeypatch.setenv("SAFETY_EMAIL_ENABLED", "true")
+    monkeypatch.setenv("SAFETY_SMTP_PASSWORD", "test-app-password")
+    with patch("agents.kid_safe.input_guard.smtplib.SMTP") as mock_smtp:
+        result = notify_welfare_email(event)
+        assert result is False
+        mock_smtp.assert_not_called()
+
+
+def test_email_fires_when_webhook_fails(monkeypatch, welfare_event):
+    """Both channels independent: webhook down → email still sends (and vice versa)."""
+    monkeypatch.setenv("SAFETY_EMAIL_ENABLED", "true")
+    monkeypatch.setenv("SAFETY_SMTP_PASSWORD", "test-app-password")
+    monkeypatch.setenv("SAFETY_SMTP_PORT", "587")
+    with patch("agents.kid_safe.input_guard.urllib.request.urlopen",
+               side_effect=Exception("webhook down")), \
+            patch("agents.kid_safe.input_guard.smtplib.SMTP") as mock_smtp:
+        webhook_ok = notify_welfare(
+            welfare_event, webhook_url="http://mock-webhook.local/alert"
+        )
+        email_ok = notify_welfare_email(welfare_event)
+        assert webhook_ok is False
+        assert email_ok is True
+        mock_smtp.return_value.__enter__.return_value.send_message.assert_called_once()
+
+
+def test_email_default_465_ssl_path(monkeypatch, welfare_event):
+    """Production default path: SAFETY_SMTP_PORT unset → SMTP_SSL(465),
+    send_message called once and return True. (CI must cover the default path.)"""
+    monkeypatch.setenv("SAFETY_EMAIL_ENABLED", "true")
+    monkeypatch.setenv("SAFETY_SMTP_PASSWORD", "test-app-password")
+    monkeypatch.delenv("SAFETY_SMTP_PORT", raising=False)  # unset → default 465
+    with patch("agents.kid_safe.input_guard.smtplib.SMTP_SSL") as mock_ssl:
+        instance = mock_ssl.return_value.__enter__.return_value
+        result = notify_welfare_email(welfare_event)
+        assert result is True
+        instance.send_message.assert_called_once()
+        mock_ssl.assert_called_once()

@@ -242,7 +242,15 @@
         "alert": {
             "enabled": true,
             "webhook_env": "SAFETY_WEBHOOK_URL",
-            "severity": "high"
+            "severity": "high",
+            "email": {
+                "enabled_env": "SAFETY_EMAIL_ENABLED",
+                "to_env": "SAFETY_EMAIL_TO",
+                "from_env": "SAFETY_EMAIL_FROM",
+                "smtp_host_env": "SAFETY_SMTP_HOST",
+                "smtp_port_env": "SAFETY_SMTP_PORT",
+                "smtp_password_env": "SAFETY_SMTP_PASSWORD"
+            }
         }
     }
 }

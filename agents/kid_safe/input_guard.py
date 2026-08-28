@@ -19,12 +19,18 @@ Design:
 """
 
 import json
+import logging
 import os
 import re
+import smtplib
+import ssl
 import uuid
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
 from typing import Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 class InputGuard:
@@ -279,3 +285,130 @@ def notify_welfare(event: dict, webhook_url: Optional[str] = None) -> bool:
     except Exception:
         # Fire-and-forget: webhook failure must never affect student response
         return False
+
+
+# ── Welfare Email Notifier (fire-and-forget, B33a) ──
+
+def notify_welfare_email(event: dict) -> bool:
+    """Send welfare high-alert email to the safety mailbox. Fire-and-forget.
+
+    Trigger alignment: caller enforces welfare + severity=high +
+    welfare.alert.enabled (same gate as notify_welfare webhook — both
+    channels always fire together, never diverge). As a defence-in-depth
+    this function also re-checks event_type/severity on the event itself.
+
+    Pointer-only policy (PDPO): body carries event_id / created_at /
+    student_id / session_id / age_band / lang_code / matched_rule and
+    helpline numbers. raw_input and any free-text student content are
+    NEVER included — email passes through third-party (Google) servers.
+
+    Env (all with defaults, see spec §3):
+        SAFETY_EMAIL_ENABLED   — master switch; unset/false silences channel
+        SAFETY_EMAIL_TO        — recipient (default info@dreamer-aiedu.net)
+        SAFETY_EMAIL_FROM      — sender = SMTP user (default info@dreamer-aiedu.net)
+        SAFETY_SMTP_HOST       — default smtp.gmail.com
+        SAFETY_SMTP_PORT       — 465 (SSL, default) or 587 (STARTTLS)
+        SAFETY_SMTP_PASSWORD   — app password (the only real secret)
+
+    Returns:
+        True if sent; False if disabled / misconfigured / SMTP failure.
+        Never raises — every failure is logged with event_id and swallowed
+        so student response / DB write / webhook are never blocked.
+    """
+    # Defence-in-depth trigger gate (mirrors webhook's conditions)
+    if event.get("event_type") != "welfare" or event.get("severity") != "high":
+        return False
+
+    # Channel master switch — unset/false → silent skip
+    if os.environ.get("SAFETY_EMAIL_ENABLED", "").lower() not in ("1", "true", "yes"):
+        return False
+
+    event_id = event.get("id", "unknown")
+    password = os.environ.get("SAFETY_SMTP_PASSWORD")
+    if not password:
+        logger.error(
+            "welfare email skipped: SAFETY_SMTP_PASSWORD not set (event_id=%s)", event_id
+        )
+        return False
+
+    to_addr = os.environ.get("SAFETY_EMAIL_TO", "info@dreamer-aiedu.net")
+    from_addr = os.environ.get("SAFETY_EMAIL_FROM", "info@dreamer-aiedu.net")
+    host = os.environ.get("SAFETY_SMTP_HOST", "smtp.gmail.com")
+    try:
+        port = int(os.environ.get("SAFETY_SMTP_PORT", "465"))
+    except ValueError:
+        port = 465
+
+    msg = EmailMessage()
+    msg["Subject"] = f"[Dreamer Safety] HIGH welfare alert — {event_id}"
+    msg["From"] = from_addr
+    msg["To"] = to_addr
+    msg.set_content(_build_welfare_email_body(event))
+
+    try:
+        if port == 465:
+            # Preferred path: implicit SSL (smtp.gmail.com:465)
+            with smtplib.SMTP_SSL(host, port, timeout=10,
+                                  context=ssl.create_default_context()) as server:
+                server.login(from_addr, password)
+                server.send_message(msg)
+        else:
+            # Fallback path: STARTTLS (587)
+            with smtplib.SMTP(host, port, timeout=10) as server:
+                server.starttls(context=ssl.create_default_context())
+                server.login(from_addr, password)
+                server.send_message(msg)
+        return True
+    except Exception:
+        # Fire-and-forget: email failure must never raise / block main flow
+        logger.error("welfare email send failed (event_id=%s)", event_id, exc_info=True)
+        return False
+
+
+def _build_welfare_email_body(event: dict) -> str:
+    """Bilingual pointer-only email body (spec §4.3).
+
+    Only whitelisted pointer fields (§4.1): event_id / created_at /
+    student_id / session_id / age_band / lang_code / matched_rule +
+    helpline numbers. Student original text is never included.
+    """
+    return "\n".join([
+        "Dreamer 安全高警 / Safety High Alert",
+        "",
+        "一個 welfare 高警事件啱啱觸發，請盡快跟進。",
+        "A high-severity welfare event was just triggered. Please follow up ASAP.",
+        "",
+        "Event ID:    " + str(event.get("id", "")),
+        "Time:        " + _format_created_at(event.get("created_at", "")),
+        "Student ID:  " + str(event.get("student_id", "")),
+        "Session:     " + str(event.get("session_id", "")),
+        "Age band:    " + str(event.get("age_band", "")),
+        "Language:    " + str(event.get("lang_code", "")),
+        "Rule:        " + str(event.get("matched_rule", "")),
+        "",
+        "學生原話基於 PDPO 唔會經 email 傳送，請登入系統查閱事件詳情。",
+        "Student's original message is withheld per PDPO; review the event in the system.",
+        "",
+        "求助熱線（如需即時支援）/ Helplines:",
+        "情緒通 Emotional Support: 18111（24h）",
+        "生命熱線青少年專線: 2382 0777",
+        "撒瑪利亞會: 2896 0000",
+    ])
+
+
+def _format_created_at(raw: str) -> str:
+    """Format ISO-8601 created_at to 'YYYY-MM-DD HH:MM:SS HKT' (UTC+8)."""
+    raw = (raw or "").strip()
+    if not raw:
+        return ""
+    try:
+        if raw.endswith("Z"):
+            dt = datetime.fromisoformat(raw[:-1] + "+00:00")
+        else:
+            dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        hkt = dt.astimezone(timezone(timedelta(hours=8)))
+        return hkt.strftime("%Y-%m-%d %H:%M:%S HKT")
+    except ValueError:
+        return raw

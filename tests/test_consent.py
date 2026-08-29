@@ -157,7 +157,7 @@ async def test_docs_registry_and_legal_pages_pair_with_yaml(
     assert "v2026-08-26" in pp_html
     assert PRIVACY_HTML_SNIPPET in pp_html
     assert "Effective Date 生效日期：26 August 2026" in pp_html
-    assert "我們永遠唔會要求或儲存學生全名" in pp_html
+    assert "我們絕不要求或儲存學生全名" in pp_html
     assert "info@dreamer-aiedu.com" in pp_html
 
     mc_page = await client.get("/legal/media-consent")

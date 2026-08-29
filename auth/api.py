@@ -1,11 +1,17 @@
-"""aiohttp.web application exposing the W2 auth core (PR#1 scope).
+"""aiohttp.web application exposing the W2 auth core (PR#1) + consent gate (PR#2).
 
 Endpoints:
     POST /api/auth/register      teacher-only (invite code + email + password)
-    POST /api/auth/login         session cookie on success
+    POST /api/auth/login         session cookie on success; re-sign gate
     POST /api/auth/logout        delete session row + clear cookie
     GET  /api/auth/me            current user (401 when not logged in)
     POST /api/auth/verify-email  consume single-use verification token
+    GET  /api/consent/docs       registered documents + current versions
+    POST /api/consent/sign       append agreed row (version-checked)
+    POST /api/consent/withdraw   append withdrawn row (media only; audit marker)
+    GET  /api/consent/status     latest per-document consent status
+    GET  /legal/privacy-policy   embedded legal page (public)
+    GET  /legal/media-consent    embedded legal page (public)
 
 Hard specs implemented here (per PR brief §3):
 - Session cookie: HttpOnly + Secure + SameSite=Lax (all three flags).
@@ -31,6 +37,7 @@ from typing import Any, Optional
 
 from aiohttp import web
 
+from . import consent
 from . import db
 from .email import send_verification_email
 from .security import (
@@ -107,10 +114,21 @@ async def _read_json(request: web.Request) -> Optional[dict[str, Any]]:
 
 @web.middleware
 async def csrf_guard(request: web.Request, handler):
-    if request.method == "POST" and request.path.startswith("/api/auth/"):
+    if request.method == "POST" and (
+        request.path.startswith("/api/auth/")
+        or request.path.startswith("/api/consent/")
+    ):
         if request.headers.get("X-Requested-With") != "XMLHttpRequest":
             return web.json_response(_ERR_INVALID, status=403)
     return await handler(request)
+
+
+def _session_user(request: web.Request) -> Optional[dict[str, Any]]:
+    """Resolve the logged-in user from the session cookie, or None."""
+    token = request.cookies.get(SESSION_COOKIE)
+    if not token:
+        return None
+    return db.get_session_user(token)
 
 
 # ---------------------------------------------------------------------------
@@ -217,7 +235,17 @@ async def handle_login(request: web.Request) -> web.Response:
         created_ip=ip,
     )
 
-    resp = web.json_response({"user": _public_user(user)})
+    # W2 PR#2 re-sign gate: required documents without a current-version
+    # agreed row force the frontend to show the re-sign page.
+    missing = consent.required_consent_gaps(user["id"])
+
+    resp = web.json_response(
+        {
+            "user": _public_user(user),
+            "consent_required": bool(missing),
+            "missing_consent": missing,
+        }
+    )
     resp.set_cookie(
         SESSION_COOKIE,
         token,
@@ -269,6 +297,139 @@ async def handle_verify_email(request: web.Request) -> web.Response:
 
 
 # ---------------------------------------------------------------------------
+# Consent gate (W2 PR#2)
+# ---------------------------------------------------------------------------
+
+async def handle_consent_docs(request: web.Request) -> web.Response:
+    """GET /api/consent/docs — registry (current_version + required + titles)."""
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+
+    docs = consent.load_consent_docs()
+    documents = {}
+    for doc_type, cfg in docs["documents"].items():
+        documents[doc_type] = {
+            "doc_type": doc_type,
+            "current_version": cfg["current_version"],
+            "required": bool(cfg.get("required")),
+            "title_zh": cfg.get("title_zh", ""),
+            "title_en": cfg.get("title_en", ""),
+        }
+    return web.json_response({"documents": documents})
+
+
+async def handle_consent_sign(request: web.Request) -> web.Response:
+    """POST /api/consent/sign — append agreed row; server checks version."""
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+
+    payload = await _read_json(request)
+    if not payload:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    doc_type = str(payload.get("doc_type") or "").strip()
+    doc_version = str(payload.get("doc_version") or "").strip()
+    student_id = str(payload.get("student_id") or "").strip() or None
+
+    doc = consent.get_doc_config(doc_type)
+    if doc is None:
+        # Unknown doc_type — unified invalid wording, no hint of valid keys.
+        return web.json_response(_ERR_INVALID, status=400)
+    if doc_version != doc["current_version"]:
+        # Refuse signing an old / fake / missing version.
+        return web.json_response(_ERR_INVALID, status=400)
+
+    consent.insert_consent_row(
+        user_id=user["id"],
+        doc_type=doc_type,
+        doc_version=doc_version,
+        action="agreed",
+        ip=_client_ip(request),
+        user_agent=request.headers.get("User-Agent"),
+        student_id=student_id,
+    )
+    return web.json_response({"ok": True, "doc_type": doc_type}, status=201)
+
+
+async def handle_consent_withdraw(request: web.Request) -> web.Response:
+    """POST /api/consent/withdraw — append withdrawn row (never mutate old).
+
+    media_consent: allowed; writes an audit-log media_takedown_pending
+    marker for the human 24h takedown flow.
+    privacy_policy: rejected — withdrawing privacy consent equals an account
+    deactivation request, handled manually via info@.
+    """
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+
+    payload = await _read_json(request)
+    if not payload:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    doc_type = str(payload.get("doc_type") or "").strip()
+    student_id = str(payload.get("student_id") or "").strip() or None
+
+    if doc_type not in consent.DOC_TYPES:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    if doc_type == "privacy_policy":
+        return web.json_response(
+            {
+                "error": "私隱政策係使用服務嘅前提，唔可以喺度撤回；如要停用帳戶，請電郵 info@dreamer-aiedu.com",
+                "email": "info@dreamer-aiedu.com",
+            },
+            status=400,
+        )
+
+    doc = consent.get_doc_config(doc_type)
+    if doc is None:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    consent.insert_consent_row(
+        user_id=user["id"],
+        doc_type=doc_type,
+        doc_version=doc["current_version"],
+        action="withdrawn",
+        ip=_client_ip(request),
+        user_agent=request.headers.get("User-Agent"),
+        student_id=student_id,
+    )
+
+    if doc_type == "media_consent":
+        consent.record_media_takedown_pending(
+            user_id=user["id"], student_id=student_id
+        )
+
+    return web.json_response({"ok": True, "doc_type": doc_type})
+
+
+async def handle_consent_status(request: web.Request) -> web.Response:
+    """GET /api/consent/status — latest per-document consent state."""
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+    return web.json_response(
+        {"documents": consent.status_for_user(user["id"])}
+    )
+
+
+async def handle_legal_page(request: web.Request) -> web.Response:
+    """GET /legal/{slug} — embedded legal page (public, version from YAML)."""
+    slug = request.match_info.get("slug", "")
+    html = consent.render_legal_page(slug)
+    if html is None:
+        return web.json_response(_ERR_INVALID, status=404)
+    return web.Response(
+        text=html,
+        content_type="text/html",
+        charset="utf-8",
+    )
+
+
+# ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
 
@@ -279,4 +440,9 @@ def build_app() -> web.Application:
     app.router.add_post("/api/auth/logout", handle_logout)
     app.router.add_get("/api/auth/me", handle_me)
     app.router.add_post("/api/auth/verify-email", handle_verify_email)
+    app.router.add_get("/api/consent/docs", handle_consent_docs)
+    app.router.add_post("/api/consent/sign", handle_consent_sign)
+    app.router.add_post("/api/consent/withdraw", handle_consent_withdraw)
+    app.router.add_get("/api/consent/status", handle_consent_status)
+    app.router.add_get("/legal/{slug}", handle_legal_page)
     return app

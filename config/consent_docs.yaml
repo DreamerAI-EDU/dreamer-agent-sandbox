@@ -1,0 +1,23 @@
+# W2 PR#2 — consent document registry (single source of truth for versions).
+#
+# The version number is part of the legal evidence chain: any word change in
+# a document = new current_version. Old signatures never auto-upgrade.
+#   - required: true  -> a new version forces re-sign on next login (PR#2 §3 gate)
+#   - required: false -> old agreement still counts; only new signatures use
+#                        the new version (no user nagging)
+#
+# The embedded legal pages (/legal/*) and the /api/consent/docs response both
+# read current_version from this file — never hardcode the version in two
+# places (test 11 asserts the pairing).
+
+documents:
+  privacy_policy:
+    current_version: "v2026-08-26"
+    required: true          # 必簽：唔簽完成唔到家長確認
+    title_zh: "私隱政策"
+    title_en: "Privacy Policy"
+  media_consent:
+    current_version: "v2026-08-26"
+    required: false         # 自願：唔剔都註冊到
+    title_zh: "媒體同意書"
+    title_en: "Media Consent Form"

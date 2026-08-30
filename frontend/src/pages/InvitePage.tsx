@@ -81,7 +81,7 @@ export function InvitePage() {
       <div className="flex min-h-screen items-center justify-center bg-[#f6f4ef] p-4">
         <div className="w-full max-w-sm rounded-2xl border border-black/5 bg-white p-8 text-center shadow-sm">
           <h1 className="text-lg font-semibold">{copy.inviteInvalidTitle}</h1>
-          <p className="mt-2 text-sm text-black/60">{copy.inviteInvalidDesc}</p>
+          <p className="mt-2 text-sm text-black/60">{state.message}</p>
           <p className="mt-4 text-xs text-black/40">
             {copy.contactEmail}: info@dreamer-aiedu.com
           </p>

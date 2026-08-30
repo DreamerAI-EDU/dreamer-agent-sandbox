@@ -315,6 +315,49 @@ def resend_invite(
 # Parent 1-click confirm (single transaction)
 # ---------------------------------------------------------------------------
 
+def get_invite_public_by_token(token: str) -> Optional[dict[str, str]]:
+    """Read-only public invite lookup for the landing page.
+
+    The token itself is the credential (same trust level as confirm — no
+    login session needed). Validity rules are identical to
+    confirm_invite_flow: invalid / expired / used / superseded all return
+    None so the caller maps every failure to the unified 400 wording.
+
+    Only the four public fields are exposed: first_name, age_band,
+    lang_code, parent_email (the invite's parent address, echoed back for
+    verification). The full student id and all other sensitive columns are
+    never returned.
+    """
+    db.ensure_schema()
+    conn = db.connect()
+    try:
+        cur = conn.execute(
+            """SELECT i.parent_email, i.used_at, i.expires_at,
+                      i.superseded_by, s.first_name, s.age_band, s.lang_code
+               FROM invites i
+               JOIN students s ON s.id = i.student_id
+               WHERE i.token = ?""",
+            (token,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        if row["used_at"] is not None:
+            return None
+        if row["expires_at"] and row["expires_at"] < _now_iso():
+            return None
+        if row["superseded_by"] is not None:
+            return None
+        return {
+            "first_name": row["first_name"],
+            "age_band": row["age_band"],
+            "lang_code": row["lang_code"],
+            "parent_email": row["parent_email"],
+        }
+    finally:
+        conn.close()
+
+
 def confirm_invite_flow(
     *,
     token: str,

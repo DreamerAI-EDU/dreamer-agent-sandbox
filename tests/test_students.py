@@ -526,3 +526,58 @@ async def test_list_students_filtered_per_parent(client, fresh_invite):
     ids_b = [s["id"] for s in (await resp_b.json())["students"]]
     assert student_b[:8] in ids_b
     assert student_a[:8] not in ids_b
+
+
+# ---------------------------------------------------------------------------
+# 13. W2 PR#5 — pin-verify / pin-reset accept the 8-char mask prefix
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_pin_verify_mask_prefix_unique_match(client, fresh_invite):
+    """A unique 8-char mask prefix resolves to the student and verifies."""
+    _, email, pw = _create_parent_user()
+    token = await _login_parent(client, email, pw)
+    student_id = await _create_student_via_api(client, token, pin="1357")
+
+    mask = student_id[:8]
+    ok = await client.post(
+        f"/api/students/{mask}/pin-verify",
+        json={"pin": "1357"},
+        headers={**HEADERS, "Cookie": f"auth_session={token}"},
+    )
+    assert ok.status == 200, await ok.text()
+
+    # The same prefix also works for pin-reset.
+    reset = await client.post(
+        f"/api/students/{mask}/pin-reset",
+        json={"pin": "2468"},
+        headers={**HEADERS, "Cookie": f"auth_session={token}"},
+    )
+    assert reset.status == 200, await reset.text()
+    row = _student_row(student_id)
+    assert row[6].startswith("$argon2id$")
+
+
+@pytest.mark.asyncio
+async def test_pin_verify_mask_prefix_no_match_403(client, fresh_invite):
+    """A prefix matching no reachable student → 403 with the unified wording."""
+    _, email, pw = _create_parent_user()
+    token = await _login_parent(client, email, pw)
+    await _create_student_via_api(client, token, pin="1357")
+
+    no_match = await client.post(
+        "/api/students/00000000/pin-verify",
+        json={"pin": "1357"},
+        headers={**HEADERS, "Cookie": f"auth_session={token}"},
+    )
+    assert no_match.status == 403
+    assert (await no_match.json())["error"] == "無權操作"
+
+    # Full id unknown keeps the same 403 (no id-existence oracle).
+    unknown = await client.post(
+        f"/api/students/{uuid.uuid4()}/pin-verify",
+        json={"pin": "1357"},
+        headers={**HEADERS, "Cookie": f"auth_session={token}"},
+    )
+    assert unknown.status == 403
+    assert (await unknown.json())["error"] == "無權操作"

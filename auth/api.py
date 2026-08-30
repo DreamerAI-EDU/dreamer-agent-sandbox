@@ -213,12 +213,16 @@ def _consent_student_owned(user, student_id: Optional[str]) -> bool:
 
 
 def _pin_authorized(user, student) -> bool:
-    """Authorisation for PIN endpoints: parent owns the student, or the
-    teacher teaches a class containing the student."""
+    """Authorisation for PIN endpoints: parent owns the student, the
+    teacher teaches a class containing the student, or the caller is an
+    admin (reachable set = all students, matching the prefix-resolution
+    scope)."""
     if user["role"] == "parent":
         return bool(student["parent_id"]) and student["parent_id"] == user["id"]
     if user["role"] == "teacher":
         return classes_mod.teacher_teaches_student(user["id"], student["id"])
+    if user["role"] == "admin":
+        return True
     return False
 
 
@@ -741,19 +745,26 @@ async def handle_list_students(request: web.Request) -> web.Response:
 async def handle_pin_verify(request: web.Request) -> web.Response:
     """POST /api/students/{id}/pin-verify — check a PIN against a student.
 
-    Only the bound parent or a teacher teaching the student may verify.
-    Unknown ids, foreign students and unbound students all return 403 with
-    the same wording (no id-existence oracle). A pending (not yet teacher-
-    confirmed) student is rejected with 403 等待老師確認 so the PIN cannot
-    be probed before the teacher approves the binding. 10 consecutive wrong
-    PINs lock the student for 1 minute (429).
+    {id} accepts a full student id (legacy) or the 8-char mask prefix; the
+    prefix is resolved within the current user's reachable set (parent =
+    own children, teacher = own classes, admin = all). Unique match
+    proceeds; no match and unknown full ids share the same 403 wording (no
+    id-existence oracle); multiple prefix matches return 400. Only the
+    bound parent or a teacher teaching the student may verify. A pending
+    (not yet teacher-confirmed) student is rejected with 403 等待老師確認 so
+    the PIN cannot be probed before the teacher approves the binding. 10
+    consecutive wrong PINs lock the student for 1 minute (429).
     """
     user = _session_user(request)
     if user is None:
         return web.json_response(_ERR_AUTH, status=401)
 
     student_id = request.match_info.get("id", "")
-    student = students_mod.get_student_by_id(student_id)
+    student, ambiguous = students_mod.resolve_student_identifier(
+        student_id, user
+    )
+    if ambiguous:
+        return web.json_response(_ERR_INVALID, status=400)
     if student is None:
         return web.json_response(_ERR_FORBIDDEN, status=403)
     if not _pin_authorized(user, student):
@@ -798,6 +809,9 @@ async def handle_pin_verify(request: web.Request) -> web.Response:
 async def handle_pin_reset(request: web.Request) -> web.Response:
     """POST /api/students/{id}/pin-reset — parent/teacher resets a PIN.
 
+    {id} accepts a full student id (legacy) or the 8-char mask prefix
+    resolved within the current user's reachable set (same rules as
+    pin-verify: unique match proceeds, no match 403, multiple matches 400).
     New PIN is supplied in the payload or generated server-side. The reset
     is audit-logged (INFO) with user + student ids.
     """
@@ -806,7 +820,11 @@ async def handle_pin_reset(request: web.Request) -> web.Response:
         return web.json_response(_ERR_AUTH, status=401)
 
     student_id = request.match_info.get("id", "")
-    student = students_mod.get_student_by_id(student_id)
+    student, ambiguous = students_mod.resolve_student_identifier(
+        student_id, user
+    )
+    if ambiguous:
+        return web.json_response(_ERR_INVALID, status=400)
     if student is None:
         return web.json_response(_ERR_FORBIDDEN, status=403)
     if not _pin_authorized(user, student):
@@ -915,6 +933,33 @@ async def handle_create_invite(request: web.Request) -> web.Response:
     if raw_pin is None:
         resp["pin"] = pin
     return web.json_response(resp, status=201)
+
+
+async def handle_invite_public(request: web.Request) -> web.Response:
+    """GET /api/invites/{token} — public read-only invite lookup.
+
+    The token itself is the credential (same trust level as confirm, no
+    login session required). Returns only the four public fields:
+    first_name / age_band / lang_code / parent_email (the invite's parent
+    address, echoed back for the parent to double-check). Invalid /
+    expired / used / superseded tokens all map to the same 400 wording as
+    confirm (_ERR_INVITE_INVALID). GET is never CSRF-protected (the guard
+    only inspects POSTs); a basic per-IP rate limit applies. The full
+    student id is never returned.
+    """
+    token = request.match_info.get("token", "")
+    ip = _client_ip(request)
+
+    if ip_rate_limiter.is_blocked(ip):
+        return web.json_response(_ERR_LOCKED, status=429)
+
+    info = classes_mod.get_invite_public_by_token(token)
+    if info is None:
+        ip_rate_limiter.record_failure(ip)
+        return web.json_response(_ERR_INVITE_INVALID, status=400)
+
+    ip_rate_limiter.reset(ip)
+    return web.json_response(info)
 
 
 async def handle_confirm_invite(request: web.Request) -> web.Response:
@@ -1267,6 +1312,7 @@ def build_app() -> web.Application:
     app.router.add_post("/api/students/{id}/pin-verify", handle_pin_verify)
     app.router.add_post("/api/students/{id}/pin-reset", handle_pin_reset)
     app.router.add_post("/api/invites", handle_create_invite)
+    app.router.add_get("/api/invites/{token}", handle_invite_public)
     app.router.add_post("/api/invites/{token}/confirm", handle_confirm_invite)
     app.router.add_post("/api/invites/{token}/resend", handle_resend_invite)
     # W2 PR#4 — safety review + step-up auth

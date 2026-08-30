@@ -1,7 +1,9 @@
 // Stream seam — the single interface both the mock and the future WS client
 // implement, so they are 1:1 swappable behind VITE_BACKEND=mock|ws.
-// Step 1: only the mock is wired; 'ws' logs a warning and falls back to mock
-// until Step 2 deployment + W2 auth make the real backend reachable.
+// W2 PR#6: VITE_BACKEND now defaults to 'backend' (the real backend is the
+// default deployment target). The chat seam is NOT wired to a WS stream yet —
+// any non-'ws' value keeps the scripted MOCK_TURNS demo alive for W3 to
+// replace. The five real REST pages bypass this seam entirely (lib/api.ts).
 import type { ChatPayload, Lang } from './mock';
 import { MOCK_TURNS, LANG_CODE } from './mock';
 import type { ActiveStage } from '../components/StageLoader';
@@ -87,10 +89,10 @@ export function playStream(
   return () => timers.forEach(clearTimeout);
 }
 
-// Env switch: VITE_BACKEND=mock (default) → mock stream; VITE_BACKEND=ws → not
-// wired until Step 2, warn and keep demo alive on mock.
+// Env switch: VITE_BACKEND=backend (default) → real backend is the default
+// deployment target; the chat stream remains on the mock until W3 wires 'ws'.
 export function createStream(): PlayStream {
-  const backend = import.meta.env.VITE_BACKEND ?? 'mock';
+  const backend = import.meta.env.VITE_BACKEND ?? 'backend';
   if (backend === 'ws') {
     console.warn('[stream] VITE_BACKEND=ws not wired until Step 2 deployment; falling back to mock.');
   }

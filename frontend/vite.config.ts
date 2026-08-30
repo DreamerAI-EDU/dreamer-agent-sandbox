@@ -9,6 +9,12 @@ export default defineConfig(({ mode }) => ({
   plugins: [mode === 'development' ? inspectAttr() : null, react()].filter(Boolean),
   server: {
     port: 3000,
+    // W2 PR#6 — dev proxy to the real aiohttp backend on localhost:8001.
+    // /legal/* is proxied too so embedded legal pages render in dev.
+    proxy: {
+      '/api': 'http://localhost:8001',
+      '/legal': 'http://localhost:8001',
+    },
   },
   resolve: {
     alias: {

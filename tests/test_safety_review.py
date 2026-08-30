@@ -808,3 +808,26 @@ async def test_admin_path(client, fresh_invite, tmp_path):
 # (12-step guard) No real-looking student distress wording anywhere in the
 # test file — enforced by the FAKE_RAW_INPUT discipline above.
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# 16. CSRF guard covers the /api/teacher/ prefix: POST review without the
+#     X-Requested-With header -> 403, and the DB review columns stay
+#     untouched (the request must never reach the handler).
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_review_without_csrf_header_blocked(client, fresh_invite):
+    token, _, stu = await _make_teacher_with_student(client)
+    evt = _insert_event(stu)
+
+    resp = await client.post(
+        f"/api/teacher/safety-events/{evt}/review",
+        headers={"Cookie": f"auth_session={token}"},
+    )
+    assert resp.status == 403
+    assert "請求無效" == (await resp.json())["error"]
+
+    row = _event_row(evt)
+    assert row["reviewed"] == 0
+    assert row["reviewed_by"] is None
+    assert row["reviewed_at"] is None

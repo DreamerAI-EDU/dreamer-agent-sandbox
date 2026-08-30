@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS students (
     lang_code     TEXT NOT NULL,
     pin_hash      TEXT,
     pin_lock_until TEXT,
+    failed_pin_count INT NOT NULL DEFAULT 0,
     created_at    TEXT NOT NULL
 );
 

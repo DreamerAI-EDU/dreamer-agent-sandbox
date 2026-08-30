@@ -39,8 +39,9 @@ CREATE TABLE IF NOT EXISTS students (
     first_name    TEXT NOT NULL,              -- B24: first name only, no other PII columns
     age_band      TEXT NOT NULL,              -- P1-P3 / P4-P6 / S1-S3
     lang_code     TEXT NOT NULL,              -- en / zh-hk / zh-cn
-    pin_hash      TEXT,                       -- used from PR#3; column exists now, no logic
-    pin_lock_until TEXT,
+    pin_hash      TEXT,                       -- Argon2id PIN hash (PR#3)
+    pin_lock_until TEXT,                      -- ISO timestamp; set on 10 consecutive wrong PINs
+    failed_pin_count INT NOT NULL DEFAULT 0,  -- consecutive wrong PIN counter
     created_at    TEXT NOT NULL
 );
 

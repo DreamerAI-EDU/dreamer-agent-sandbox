@@ -1,0 +1,4 @@
+# W2 PR#3 — auth/classes runtime config (non-secret).
+# All secrets stay in environment variables; this file only holds public
+# defaults that the code may read at request time.
+frontend_base_url: "http://localhost:5173"

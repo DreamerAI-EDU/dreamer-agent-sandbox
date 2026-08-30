@@ -37,8 +37,10 @@ from typing import Any, Optional
 
 from aiohttp import web
 
+from . import classes as classes_mod
 from . import consent
 from . import db
+from . import students as students_mod
 from .email import send_verification_email
 from .security import (
     dummy_verify,
@@ -46,6 +48,7 @@ from .security import (
     ip_rate_limiter,
     new_session_token,
     new_verify_token,
+    validate_password_strength,
     verify_password,
 )
 
@@ -57,9 +60,20 @@ LOCK_FAILURES = 5
 LOCK_MINUTES = 15
 VERIFY_HOURS = 24
 
+# Student ids are never echoed in full to the frontend (W2 PR#3 brief §3:
+# "student_id 唔准出現喺任何公開 URL/前端 state" — pin-verify URL paths are
+# the single documented exception). Responses carry a fixed-length prefix.
+STUDENT_ID_MASK_LEN = 8
+
 _ERR_AUTH = {"error": "email 或密碼不正確"}
 _ERR_INVALID = {"error": "請求無效"}
+_ERR_INVITE_INVALID = {"error": "連結無效或已過期"}
 _ERR_LOCKED = {"error": "嘗試次數過多，請稍後再試"}
+_ERR_FORBIDDEN = {"error": "無權操作"}
+
+# Student profile enumerations (B24: no last_name / school / other PII).
+AGE_BANDS = ("P1-P3", "P4-P6", "S1-S3")
+LANG_CODES = ("en", "zh-hk", "zh-cn")
 
 
 def _now_iso() -> str:
@@ -114,11 +128,23 @@ async def _read_json(request: web.Request) -> Optional[dict[str, Any]]:
 
 @web.middleware
 async def csrf_guard(request: web.Request, handler):
-    if request.method == "POST" and (
-        request.path.startswith("/api/auth/")
-        or request.path.startswith("/api/consent/")
-    ):
-        if request.headers.get("X-Requested-With") != "XMLHttpRequest":
+    if request.method == "POST":
+        path = request.path
+        protected = (
+            path.startswith("/api/auth/")
+            or path.startswith("/api/consent/")
+            or path.startswith("/api/classes")
+            or path.startswith("/api/students")
+            or path == "/api/invites"
+            # The parent 1-click confirm link is opened from an email, not
+            # from the SPA — no custom header there. Every other invite POST
+            # (create / resend) is an SPA call and must carry the header.
+            or (
+                path.startswith("/api/invites/")
+                and not path.endswith("/confirm")
+            )
+        )
+        if protected and request.headers.get("X-Requested-With") != "XMLHttpRequest":
             return web.json_response(_ERR_INVALID, status=403)
     return await handler(request)
 
@@ -129,6 +155,67 @@ def _session_user(request: web.Request) -> Optional[dict[str, Any]]:
     if not token:
         return None
     return db.get_session_user(token)
+
+
+def _log_security_warning(
+    event: str, *, user_id: str, target_id: Optional[str] = None,
+    detail: Optional[str] = None,
+) -> None:
+    """Best-effort security log line (WARNING, JSONL audit channel)."""
+    consent.write_audit_log(
+        {
+            "timestamp": _now_iso(),
+            "level": "WARNING",
+            "event": event,
+            "user_id": user_id,
+            "target_id": target_id,
+            "message": detail or event,
+        }
+    )
+
+
+def _mask_student_id(student_id: str) -> str:
+    """Fixed-length prefix — full student ids never leave the server."""
+    return student_id[:STUDENT_ID_MASK_LEN]
+
+
+def _public_student(row) -> dict[str, Any]:
+    return {
+        "id": _mask_student_id(row["id"]),
+        "first_name": row["first_name"],
+        "age_band": row["age_band"],
+        "lang_code": row["lang_code"],
+    }
+
+
+def _consent_student_owned(user, student_id: Optional[str]) -> bool:
+    """§0 ownership gate for sign/withdraw with a student_id.
+
+    When no student_id is supplied the request is unconstrained (account
+    level consent). When present, the student must exist and belong to the
+    current user as parent (students.parent_id == user.id); a student with
+    parent_id NULL (not yet bound) is rejected. Unknown ids and foreign
+    students share the same 403 so the response never reveals whether a
+    student id exists.
+    """
+    if not student_id:
+        return True
+    student = students_mod.get_student_by_id(student_id)
+    if student is None:
+        return False
+    if student["parent_id"] is None:
+        return False
+    return student["parent_id"] == user["id"]
+
+
+def _pin_authorized(user, student) -> bool:
+    """Authorisation for PIN endpoints: parent owns the student, or the
+    teacher teaches a class containing the student."""
+    if user["role"] == "parent":
+        return bool(student["parent_id"]) and student["parent_id"] == user["id"]
+    if user["role"] == "teacher":
+        return classes_mod.teacher_teaches_student(user["id"], student["id"])
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +232,9 @@ async def handle_register(request: web.Request) -> web.Response:
     password = payload.get("password")
 
     if not invite_code or not email or not isinstance(password, str) or not password:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    if validate_password_strength(password) is not None:
         return web.json_response(_ERR_INVALID, status=400)
 
     # Unified timing: even when the email already exists we burn an Argon2
@@ -341,6 +431,11 @@ async def handle_consent_sign(request: web.Request) -> web.Response:
         # Refuse signing an old / fake / missing version.
         return web.json_response(_ERR_INVALID, status=400)
 
+    # W2 PR#3 §0: when a student_id is supplied the signer must be that
+    # student's bound parent; otherwise 403 (unified, no id-existence hint).
+    if not _consent_student_owned(user, student_id):
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
     consent.insert_consent_row(
         user_id=user["id"],
         doc_type=doc_type,
@@ -388,6 +483,11 @@ async def handle_consent_withdraw(request: web.Request) -> web.Response:
     if doc is None:
         return web.json_response(_ERR_INVALID, status=400)
 
+    # W2 PR#3 §0: same ownership gate as sign — withdraw with a student_id
+    # is only allowed for that student's bound parent.
+    if not _consent_student_owned(user, student_id):
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
     consent.insert_consent_row(
         user_id=user["id"],
         doc_type=doc_type,
@@ -430,6 +530,506 @@ async def handle_legal_page(request: web.Request) -> web.Response:
 
 
 # ---------------------------------------------------------------------------
+# Classes + students + PIN + invites (W2 PR#3)
+# ---------------------------------------------------------------------------
+
+def _validate_student_profile(payload: dict[str, Any]) -> Optional[str]:
+    """Validate first_name / age_band / lang_code; return error wording or
+    None when valid. Raises nothing — callers map None to proceed."""
+    first_name = str(payload.get("first_name") or "").strip()
+    age_band = str(payload.get("age_band") or "").strip()
+    lang_code = str(payload.get("lang_code") or "").strip()
+    if not first_name:
+        return "請求無效"
+    if age_band not in AGE_BANDS:
+        return "請求無效"
+    if lang_code not in LANG_CODES:
+        return "請求無效"
+    return None
+
+
+def _resolve_pin(payload: dict[str, Any]) -> tuple[str, str]:
+    """Return (pin, pin_hash). Uses the supplied PIN when present and valid,
+    otherwise generates one. Callers pre-validate with is_valid_pin."""
+    raw = payload.get("pin")
+    if raw is not None:
+        pin = str(raw).strip()
+        if students_mod.is_valid_pin(pin):
+            return pin, students_mod.hash_pin(pin)
+    pin = students_mod.generate_pin()
+    return pin, students_mod.hash_pin(pin)
+
+
+async def handle_create_class(request: web.Request) -> web.Response:
+    """POST /api/classes — teacher creates a class (own classes only)."""
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+    if user["role"] != "teacher":
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    payload = await _read_json(request)
+    if not payload:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    name = str(payload.get("name") or "").strip()
+    if not name or len(name) > 60:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    class_id = classes_mod.create_class(teacher_id=user["id"], name=name)
+    cls = classes_mod.get_class_by_id(class_id)
+    return web.json_response(
+        {
+            "class": {
+                "id": cls["id"],
+                "name": cls["name"],
+                "join_code": cls["join_code"],
+            }
+        },
+        status=201,
+    )
+
+
+async def handle_list_classes(request: web.Request) -> web.Response:
+    """GET /api/classes — teacher's classes with pending/confirmed counts."""
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+    if user["role"] != "teacher":
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+    return web.json_response(
+        {"classes": classes_mod.list_classes_for_teacher(user["id"])}
+    )
+
+
+async def handle_create_student(request: web.Request) -> web.Response:
+    """POST /api/students — parent adds a student with a PIN.
+
+    Response carries only the masked student id (fixed-length prefix), never
+    the full id (W2 PR#3 §3). A generated PIN is echoed once so the parent
+    can store it; when the parent supplied the PIN it is not echoed.
+    """
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+    if user["role"] != "parent":
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    payload = await _read_json(request)
+    if not payload:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    err = _validate_student_profile(payload)
+    if err is not None:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    raw_pin = payload.get("pin")
+    if raw_pin is not None and not students_mod.is_valid_pin(str(raw_pin).strip()):
+        return web.json_response(_ERR_INVALID, status=400)
+    pin, pin_hash = _resolve_pin(payload)
+
+    student_id = students_mod.create_student(
+        parent_id=user["id"],
+        first_name=str(payload["first_name"]).strip(),
+        age_band=str(payload["age_band"]).strip(),
+        lang_code=str(payload["lang_code"]).strip(),
+        pin_hash=pin_hash,
+    )
+    student = students_mod.get_student_by_id(student_id)
+    resp = {
+        "student": _public_student(student),
+    }
+    if raw_pin is None:
+        resp["pin"] = pin
+    return web.json_response(resp, status=201)
+
+
+async def handle_list_students(request: web.Request) -> web.Response:
+    """GET /api/students — parent's own students / teacher's class students."""
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+
+    if user["role"] == "parent":
+        rows = students_mod.list_students_for_parent(user["id"])
+    elif user["role"] == "teacher":
+        rows = classes_mod.list_students_for_teacher(user["id"])
+    else:
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    return web.json_response(
+        {"students": [_public_student(row) for row in rows]}
+    )
+
+
+async def handle_pin_verify(request: web.Request) -> web.Response:
+    """POST /api/students/{id}/pin-verify — check a PIN against a student.
+
+    Only the bound parent or a teacher teaching the student may verify.
+    Unknown ids, foreign students and unbound students all return 403 with
+    the same wording (no id-existence oracle). A pending (not yet teacher-
+    confirmed) student is rejected with 403 等待老師確認 so the PIN cannot
+    be probed before the teacher approves the binding. 10 consecutive wrong
+    PINs lock the student for 1 minute (429).
+    """
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+
+    student_id = request.match_info.get("id", "")
+    student = students_mod.get_student_by_id(student_id)
+    if student is None:
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+    if not _pin_authorized(user, student):
+        _log_security_warning(
+            "pin_verify_cross_access",
+            user_id=user["id"],
+            target_id=student_id,
+            detail="unauthorised PIN verify attempt",
+        )
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    statuses = classes_mod.student_class_statuses(student_id)
+    if statuses and "confirmed" not in statuses:
+        return web.json_response({"error": "等待老師確認"}, status=403)
+
+    lock_remaining = students_mod.pin_lock_remaining(student_id)
+    if lock_remaining is not None:
+        return web.json_response(_ERR_LOCKED, status=429)
+
+    payload = await _read_json(request)
+    if not payload:
+        return web.json_response(_ERR_INVALID, status=400)
+    pin = str(payload.get("pin") or "").strip()
+    if not students_mod.is_valid_pin(pin):
+        return web.json_response(_ERR_INVALID, status=400)
+
+    if not students_mod.verify_pin(pin, student["pin_hash"]):
+        count = students_mod.record_pin_failure(student_id)
+        if count == 0 and students_mod.pin_lock_remaining(student_id) is not None:
+            _log_security_warning(
+                "pin_locked",
+                user_id=user["id"],
+                target_id=student_id,
+                detail="student PIN locked after 10 consecutive failures",
+            )
+        return web.json_response({"error": "PIN 不正確"}, status=401)
+
+    students_mod.clear_pin_failures(student_id)
+    return web.json_response({"ok": True})
+
+
+async def handle_pin_reset(request: web.Request) -> web.Response:
+    """POST /api/students/{id}/pin-reset — parent/teacher resets a PIN.
+
+    New PIN is supplied in the payload or generated server-side. The reset
+    is audit-logged (INFO) with user + student ids.
+    """
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+
+    student_id = request.match_info.get("id", "")
+    student = students_mod.get_student_by_id(student_id)
+    if student is None:
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+    if not _pin_authorized(user, student):
+        _log_security_warning(
+            "pin_reset_cross_access",
+            user_id=user["id"],
+            target_id=student_id,
+            detail="unauthorised PIN reset attempt",
+        )
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    payload = await _read_json(request)
+    if not payload:
+        return web.json_response(_ERR_INVALID, status=400)
+    raw_pin = payload.get("pin")
+    if raw_pin is not None and not students_mod.is_valid_pin(str(raw_pin).strip()):
+        return web.json_response(_ERR_INVALID, status=400)
+    pin, pin_hash = _resolve_pin(payload)
+
+    students_mod.set_pin(student_id, pin_hash)
+    consent.write_audit_log(
+        {
+            "timestamp": _now_iso(),
+            "level": "INFO",
+            "event": "pin_reset",
+            "user_id": user["id"],
+            "student_id": student_id,
+        }
+    )
+    resp = {"ok": True}
+    if raw_pin is None:
+        resp["pin"] = pin
+    return web.json_response(resp)
+
+
+async def handle_create_invite(request: web.Request) -> web.Response:
+    """POST /api/invites — teacher invites a parent to a class.
+
+    Creates student + pending class_students + 72h invite in one shot,
+    then sends the bilingual confirmation email (fire-and-forget). Rate
+    limited to 20 invites+resends per teacher per day (429 when exceeded).
+    """
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+    if user["role"] != "teacher":
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    payload = await _read_json(request)
+    if not payload:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    err = _validate_student_profile(payload)
+    if err is not None:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    parent_email = str(payload.get("parent_email") or "").strip().lower()
+    if not parent_email or "@" not in parent_email or len(parent_email) > 255:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    class_id = str(payload.get("class_id") or "").strip()
+    cls = classes_mod.get_class_by_id(class_id)
+    if cls is None or cls["teacher_id"] != user["id"]:
+        _log_security_warning(
+            "invite_cross_teacher",
+            user_id=user["id"],
+            target_id=class_id,
+            detail="attempted to invite into a class owned by another teacher",
+        )
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    if classes_mod.daily_invite_count(user["id"]) >= classes_mod.DAILY_INVITE_LIMIT:
+        return web.json_response({"error": "今日邀請名額已用完"}, status=429)
+
+    raw_pin = payload.get("pin")
+    if raw_pin is not None and not students_mod.is_valid_pin(str(raw_pin).strip()):
+        return web.json_response(_ERR_INVALID, status=400)
+    pin, pin_hash = _resolve_pin(payload)
+
+    student_id, token = classes_mod.create_invite_flow(
+        teacher_id=user["id"],
+        class_id=class_id,
+        first_name=str(payload["first_name"]).strip(),
+        age_band=str(payload["age_band"]).strip(),
+        lang_code=str(payload["lang_code"]).strip(),
+        pin_hash=pin_hash,
+        parent_email=parent_email,
+    )
+    base_url = classes_mod.get_frontend_base_url()
+    classes_mod.send_invite_email(
+        to_addr=parent_email, token=token, base_url=base_url
+    )
+    consent.write_audit_log(
+        {
+            "timestamp": _now_iso(),
+            "level": "INFO",
+            "event": "invite_created",
+            "user_id": user["id"],
+            "teacher_id": user["id"],
+            "class_id": class_id,
+            "student_id": student_id,
+            "parent_email": parent_email,
+        }
+    )
+    resp = {"message": "邀請已發送"}
+    if raw_pin is None:
+        resp["pin"] = pin
+    return web.json_response(resp, status=201)
+
+
+async def handle_confirm_invite(request: web.Request) -> web.Response:
+    """POST /api/invites/{token}/confirm — parent 1-click confirm.
+
+    Called from the email link (no X-Requested-With, CSRF-exempt by design).
+    privacy_policy agreement is mandatory: without it the whole confirm is
+    rejected and no rows are written. Creates the parent account (verified)
+    + consent rows + parent binding + session in one transaction.
+    """
+    token = request.match_info.get("token", "")
+    payload = await _read_json(request)
+    if not payload:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    password = payload.get("password")
+    if validate_password_strength(password) is not None:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    privacy_agreed = payload.get("privacy_policy")
+    if not isinstance(privacy_agreed, bool) or not privacy_agreed:
+        return web.json_response(_ERR_INVALID, status=400)
+    media_agreed = bool(payload.get("media_consent"))
+
+    privacy_doc = consent.get_doc_config("privacy_policy")
+    media_doc = consent.get_doc_config("media_consent")
+    if privacy_doc is None or media_doc is None:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    parent_user_id = str(uuid.uuid4())
+    session_id = new_session_token()
+    expires_at = _future_iso(days=SESSION_DAYS)
+    result = classes_mod.confirm_invite_flow(
+        token=token,
+        parent_user_id=parent_user_id,
+        password_hash=hash_password(password),
+        privacy_version=privacy_doc["current_version"],
+        media_version=media_doc["current_version"],
+        media_agreed=media_agreed,
+        session_id=session_id,
+        session_expires_at=expires_at,
+        ip=_client_ip(request),
+        user_agent=request.headers.get("User-Agent"),
+    )
+    if result is None:
+        return web.json_response(_ERR_INVITE_INVALID, status=400)
+
+    consent.write_audit_log(
+        {
+            "timestamp": _now_iso(),
+            "level": "INFO",
+            "event": "invite_confirmed",
+            "user_id": parent_user_id,
+            "parent_user_id": parent_user_id,
+            "student_id": result["student_id"],
+            "class_id": result["class_id"],
+        }
+    )
+    resp = web.json_response(
+        {"ok": True, "user": {"id": parent_user_id, "email": result["parent_email"]}},
+        status=201,
+    )
+    resp.set_cookie(
+        SESSION_COOKIE,
+        session_id,
+        max_age=SESSION_DAYS * 86400,
+        httponly=True,
+        secure=True,
+        samesite="Lax",
+    )
+    return resp
+
+
+async def handle_resend_invite(request: web.Request) -> web.Response:
+    """POST /api/invites/{token}/resend — teacher re-sends an invite link.
+
+    Old token is superseded (single valid link at a time). Shares the daily
+    invite budget. Cross-teacher / already-used tokens are rejected.
+    """
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+    if user["role"] != "teacher":
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    token = request.match_info.get("token", "")
+    payload = await _read_json(request)
+    if not payload:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    invite = classes_mod.get_invite_by_token(token)
+    if invite is None:
+        return web.json_response(_ERR_INVALID, status=400)
+    if invite["created_by"] != user["id"]:
+        _log_security_warning(
+            "invite_resend_cross_teacher",
+            user_id=user["id"],
+            target_id=token,
+            detail="attempted to resend another teacher's invite",
+        )
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+    if invite["used_at"] is not None:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    if classes_mod.daily_invite_count(user["id"]) >= classes_mod.DAILY_INVITE_LIMIT:
+        return web.json_response({"error": "今日邀請名額已用完"}, status=429)
+
+    new_email = str(payload.get("parent_email") or "").strip().lower() or None
+    if new_email is not None and (
+        "@" not in new_email or len(new_email) > 255
+    ):
+        return web.json_response(_ERR_INVALID, status=400)
+
+    new_token = classes_mod.resend_invite(
+        teacher_id=user["id"], token=token, new_parent_email=new_email
+    )
+    base_url = classes_mod.get_frontend_base_url()
+    classes_mod.send_invite_email(
+        to_addr=(new_email or invite["parent_email"]),
+        token=new_token,
+        base_url=base_url,
+    )
+    consent.write_audit_log(
+        {
+            "timestamp": _now_iso(),
+            "level": "INFO",
+            "event": "invite_resent",
+            "user_id": user["id"],
+            "teacher_id": user["id"],
+            "class_id": invite["class_id"],
+            "student_id": invite["student_id"],
+            "old_token": token,
+            "new_token": new_token,
+        }
+    )
+    return web.json_response({"message": "邀請已重發"})
+
+
+async def handle_confirm_class_student(request: web.Request) -> web.Response:
+    """POST /api/classes/{id}/confirm — teacher approves a pending binding.
+
+    Four conditions enforced in the DAO: own class / student in class /
+    status=pending / parent already bound. Cross-teacher attempts are
+    logged as security WARNING before the unified 403.
+    """
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+    if user["role"] != "teacher":
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    class_id = request.match_info.get("id", "")
+    payload = await _read_json(request)
+    if not payload:
+        return web.json_response(_ERR_INVALID, status=400)
+    student_id = str(payload.get("student_id") or "").strip()
+    if not student_id:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    cls = classes_mod.get_class_by_id(class_id)
+    if cls is not None and cls["teacher_id"] != user["id"]:
+        _log_security_warning(
+            "class_confirm_cross_teacher",
+            user_id=user["id"],
+            target_id=class_id,
+            detail="attempted to confirm a class owned by another teacher",
+        )
+
+    ok, reason = classes_mod.confirm_class_student(
+        teacher_id=user["id"], class_id=class_id, student_id=student_id
+    )
+    if not ok:
+        if reason == "forbidden":
+            return web.json_response(_ERR_FORBIDDEN, status=403)
+        return web.json_response(_ERR_INVALID, status=400)
+
+    consent.write_audit_log(
+        {
+            "timestamp": _now_iso(),
+            "level": "INFO",
+            "event": "class_student_confirmed",
+            "user_id": user["id"],
+            "teacher_id": user["id"],
+            "class_id": class_id,
+            "student_id": student_id,
+        }
+    )
+    return web.json_response({"ok": True, "status": "confirmed"})
+
+
+# ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
 
@@ -444,5 +1044,16 @@ def build_app() -> web.Application:
     app.router.add_post("/api/consent/sign", handle_consent_sign)
     app.router.add_post("/api/consent/withdraw", handle_consent_withdraw)
     app.router.add_get("/api/consent/status", handle_consent_status)
+    # W2 PR#3 — classes / students / PIN / invites
+    app.router.add_post("/api/classes", handle_create_class)
+    app.router.add_get("/api/classes", handle_list_classes)
+    app.router.add_post("/api/classes/{id}/confirm", handle_confirm_class_student)
+    app.router.add_post("/api/students", handle_create_student)
+    app.router.add_get("/api/students", handle_list_students)
+    app.router.add_post("/api/students/{id}/pin-verify", handle_pin_verify)
+    app.router.add_post("/api/students/{id}/pin-reset", handle_pin_reset)
+    app.router.add_post("/api/invites", handle_create_invite)
+    app.router.add_post("/api/invites/{token}/confirm", handle_confirm_invite)
+    app.router.add_post("/api/invites/{token}/resend", handle_resend_invite)
     app.router.add_get("/legal/{slug}", handle_legal_page)
     return app

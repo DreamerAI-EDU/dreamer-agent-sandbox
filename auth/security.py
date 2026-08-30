@@ -40,6 +40,23 @@ _DUMMY_PASSWORD_HASH = _hasher.hash("dummy-timing-equalizer-not-a-real-password"
 # Passwords
 # ---------------------------------------------------------------------------
 
+def validate_password_strength(password: str) -> Optional[str]:
+    """W2 spec §4 password policy: >= 10 chars with letters AND digits.
+
+    Returns None when the password is acceptable, otherwise a unified
+    error message. Shared by the teacher register path (PR#1) and the
+    parent 1-click confirm path (PR#3) so confirm never re-implements a
+    weaker policy.
+    """
+    if not isinstance(password, str) or len(password) < 10:
+        return "密碼必須至少 10 位，並包含字母及數字"
+    has_letter = any(ch.isascii() and ch.isalpha() for ch in password)
+    has_digit = any(ch.isdigit() for ch in password)
+    if not (has_letter and has_digit):
+        return "密碼必須至少 10 位，並包含字母及數字"
+    return None
+
+
 def hash_password(password: str) -> str:
     """Argon2id hash with library defaults (RFC 9106 recommended)."""
     return _hasher.hash(password)

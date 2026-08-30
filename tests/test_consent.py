@@ -215,7 +215,6 @@ async def test_consent_sign_success_records_ip_and_user_agent(
         json={
             "doc_type": "privacy_policy",
             "doc_version": "v2026-08-26",
-            "student_id": "stu-001",
         },
         headers={
             **HEADERS,
@@ -410,8 +409,7 @@ async def test_media_withdraw_appends_withdrawn_row_and_audit_marker(
     # Sign media_consent first.
     sign = await client.post(
         "/api/consent/sign",
-        json={"doc_type": "media_consent", "doc_version": "v2026-08-26",
-              "student_id": "stu-002"},
+        json={"doc_type": "media_consent", "doc_version": "v2026-08-26"},
         headers={**HEADERS, "Cookie": f"auth_session={token}"},
     )
     assert sign.status == 201
@@ -419,7 +417,7 @@ async def test_media_withdraw_appends_withdrawn_row_and_audit_marker(
     # Withdraw media_consent.
     w1 = await client.post(
         "/api/consent/withdraw",
-        json={"doc_type": "media_consent", "student_id": "stu-002"},
+        json={"doc_type": "media_consent"},
         headers={**HEADERS, "Cookie": f"auth_session={token}"},
     )
     assert w1.status == 200
@@ -427,7 +425,7 @@ async def test_media_withdraw_appends_withdrawn_row_and_audit_marker(
     # Repeat withdraw still succeeds (append-only, idempotent enough).
     w2 = await client.post(
         "/api/consent/withdraw",
-        json={"doc_type": "media_consent", "student_id": "stu-002"},
+        json={"doc_type": "media_consent"},
         headers={**HEADERS, "Cookie": f"auth_session={token}"},
     )
     assert w2.status == 200
@@ -461,7 +459,7 @@ async def test_media_withdraw_appends_withdrawn_row_and_audit_marker(
         assert record["level"] == "WARNING"
         assert record["doc_type"] == "media_consent"
         assert record["user_id"] == user["id"]
-        assert record["student_id"] == "stu-002"
+        assert record["student_id"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -516,3 +514,182 @@ def test_consent_module_has_no_update_or_delete_on_consent_log():
             if pattern.search(text):
                 bad.append((os.path.relpath(path, REPO_ROOT), pattern.pattern))
     assert not bad, f"consent_log mutation statements found: {bad}"
+
+
+# ---------------------------------------------------------------------------
+# 13-16. W2 PR#3 §0 — consent student_id ownership gate (blocking item).
+# sign/withdraw with student_id must verify students.parent_id == current
+# user; cross-parent and unbound students are rejected with a uniform 403.
+# ---------------------------------------------------------------------------
+
+def _create_parent_user(email="parent-a@test.local",
+                        password="test-pass-parent1"):
+    """Create a parent user directly in DB (role=parent, verified)."""
+    from auth import security as auth_security
+    import uuid
+    user_id = str(uuid.uuid4())
+    auth_db.create_user(
+        user_id=user_id,
+        email=email,
+        password_hash=auth_security.hash_password(password),
+        role="parent",
+        email_verified=True,
+    )
+    return user_id, email, password
+
+
+async def _login_parent(client, email, password):
+    login = await client.post(
+        "/api/auth/login",
+        json={"email": email, "password": password},
+        headers=HEADERS,
+    )
+    assert login.status == 200, await login.text()
+    return _session_cookie(login)
+
+
+def _create_db_student(*, parent_id, first_name="Child",
+                       age_band="P1-P3", lang_code="zh-hk", pin="1234"):
+    from auth import students as students_mod
+    return students_mod.create_student(
+        parent_id=parent_id,
+        first_name=first_name,
+        age_band=age_band,
+        lang_code=lang_code,
+        pin_hash=students_mod.hash_pin(pin),
+    )
+
+
+def _consent_count_for_student(db_path, student_id):
+    conn = sqlite3.connect(db_path)
+    try:
+        return conn.execute(
+            "SELECT COUNT(*) FROM consent_log WHERE student_id = ?",
+            (student_id,),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+
+# 13. cross-parent sign → 403, no consent row
+@pytest.mark.asyncio
+async def test_consent_sign_cross_parent_student_forbidden(
+    client, fresh_invite
+):
+    parent_a, _, _ = _create_parent_user("parent-a@test.local")
+    student_id = _create_db_student(parent_id=parent_a)
+    _, email_b, pw_b = _create_parent_user("parent-b@test.local")
+    token_b = await _login_parent(client, email_b, pw_b)
+
+    resp = await client.post(
+        "/api/consent/sign",
+        json={
+            "doc_type": "privacy_policy",
+            "doc_version": "v2026-08-26",
+            "student_id": student_id,
+        },
+        headers={**HEADERS, "Cookie": f"auth_session={token_b}"},
+    )
+    assert resp.status == 403
+    assert _consent_count_for_student(
+        os.environ["DREAMER_DB_PATH"], student_id
+    ) == 0
+
+
+# 14. cross-parent withdraw → 403
+@pytest.mark.asyncio
+async def test_consent_withdraw_cross_parent_student_forbidden(
+    client, fresh_invite
+):
+    parent_a, _, _ = _create_parent_user("parent-a@test.local")
+    student_id = _create_db_student(parent_id=parent_a)
+    _, email_b, pw_b = _create_parent_user("parent-b@test.local")
+    token_b = await _login_parent(client, email_b, pw_b)
+
+    resp = await client.post(
+        "/api/consent/withdraw",
+        json={"doc_type": "media_consent", "student_id": student_id},
+        headers={**HEADERS, "Cookie": f"auth_session={token_b}"},
+    )
+    assert resp.status == 403
+    assert _consent_count_for_student(
+        os.environ["DREAMER_DB_PATH"], student_id
+    ) == 0
+
+
+# 15. unbound student (parent_id NULL) → sign rejected
+@pytest.mark.asyncio
+async def test_consent_sign_rejects_unbound_student(client, fresh_invite):
+    student_id = _create_db_student(parent_id=None)
+    _, email, pw = _create_parent_user("parent-a@test.local")
+    token = await _login_parent(client, email, pw)
+
+    resp = await client.post(
+        "/api/consent/sign",
+        json={
+            "doc_type": "privacy_policy",
+            "doc_version": "v2026-08-26",
+            "student_id": student_id,
+        },
+        headers={**HEADERS, "Cookie": f"auth_session={token}"},
+    )
+    assert resp.status == 403
+    assert _consent_count_for_student(
+        os.environ["DREAMER_DB_PATH"], student_id
+    ) == 0
+
+
+# 16. own parent sign/withdraw with own student → allowed (regression path)
+@pytest.mark.asyncio
+async def test_consent_own_parent_sign_withdraw_own_student_ok(
+    client, fresh_invite
+):
+    parent_a, email_a, pw_a = _create_parent_user("parent-a@test.local")
+    student_id = _create_db_student(parent_id=parent_a)
+    token = await _login_parent(client, email_a, pw_a)
+
+    sign = await client.post(
+        "/api/consent/sign",
+        json={
+            "doc_type": "privacy_policy",
+            "doc_version": "v2026-08-26",
+            "student_id": student_id,
+        },
+        headers={**HEADERS, "Cookie": f"auth_session={token}"},
+    )
+    assert sign.status == 201
+
+    sign_media = await client.post(
+        "/api/consent/sign",
+        json={
+            "doc_type": "media_consent",
+            "doc_version": "v2026-08-26",
+            "student_id": student_id,
+        },
+        headers={**HEADERS, "Cookie": f"auth_session={token}"},
+    )
+    assert sign_media.status == 201
+
+    withdraw = await client.post(
+        "/api/consent/withdraw",
+        json={"doc_type": "media_consent", "student_id": student_id},
+        headers={**HEADERS, "Cookie": f"auth_session={token}"},
+    )
+    assert withdraw.status == 200
+
+    # Rows landed with the correct student linkage (version from YAML SoT).
+    conn = sqlite3.connect(os.environ["DREAMER_DB_PATH"])
+    try:
+        rows = conn.execute(
+            "SELECT doc_type, doc_version, action, student_id "
+            "FROM consent_log WHERE student_id = ? ORDER BY rowid",
+            (student_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    assert [(r[0], r[1], r[2]) for r in rows] == [
+        ("privacy_policy", "v2026-08-26", "agreed"),
+        ("media_consent", "v2026-08-26", "agreed"),
+        ("media_consent", "v2026-08-26", "withdrawn"),
+    ]
+    assert all(r[3] == student_id for r in rows)

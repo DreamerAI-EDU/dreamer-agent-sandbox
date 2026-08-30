@@ -432,7 +432,7 @@ EXPECTED_SCHEMA = {
         ("id", "TEXT"), ("parent_id", "TEXT"), ("teacher_id", "TEXT"),
         ("first_name", "TEXT"), ("age_band", "TEXT"), ("lang_code", "TEXT"),
         ("pin_hash", "TEXT"), ("pin_lock_until", "TEXT"),
-        ("created_at", "TEXT"),
+        ("failed_pin_count", "INT"), ("created_at", "TEXT"),
     ],
     "classes": [
         ("id", "TEXT"), ("teacher_id", "TEXT"), ("name", "TEXT"),

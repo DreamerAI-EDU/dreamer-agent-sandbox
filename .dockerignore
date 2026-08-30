@@ -1,9 +1,11 @@
 .git
-node_modules
-frontend/dist
-__pycache__
-.env
+frontend/
 tests/
-*.db
-audit_log.jsonl
+node_modules
 .venv
+.env
+**/.env
+**/__pycache__
+**/*.pyc
+**/*.db
+**/audit_log.jsonl

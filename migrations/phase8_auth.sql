@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS users (
     id            TEXT PRIMARY KEY,           -- uuid
     email         TEXT UNIQUE NOT NULL,       -- normalized lowercase before insert
     password_hash TEXT NOT NULL,              -- Argon2id ($argon2id$ prefix)
-    role          TEXT NOT NULL,              -- 'parent' / 'teacher'
+    role          TEXT NOT NULL,              -- 'parent' / 'teacher' / 'admin'
     email_verified BOOLEAN NOT NULL DEFAULT FALSE,
     email_verify_token TEXT,                  -- single-use email verification token (W2 §4)
     email_verify_expires_at TEXT,             -- ISO timestamp; NULL = no pending verification

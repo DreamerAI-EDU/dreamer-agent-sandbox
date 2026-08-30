@@ -40,6 +40,7 @@ from aiohttp import web
 from . import classes as classes_mod
 from . import consent
 from . import db
+from . import safety as safety_mod
 from . import students as students_mod
 from .email import send_verification_email
 from .security import (
@@ -59,6 +60,7 @@ SESSION_DAYS = 7
 LOCK_FAILURES = 5
 LOCK_MINUTES = 15
 VERIFY_HOURS = 24
+STEP_UP_MINUTES = 10
 
 # Student ids are never echoed in full to the frontend (W2 PR#3 brief §3:
 # "student_id 唔准出現喺任何公開 URL/前端 state" — pin-verify URL paths are
@@ -70,6 +72,7 @@ _ERR_INVALID = {"error": "請求無效"}
 _ERR_INVITE_INVALID = {"error": "連結無效或已過期"}
 _ERR_LOCKED = {"error": "嘗試次數過多，請稍後再試"}
 _ERR_FORBIDDEN = {"error": "無權操作"}
+_ERR_STEP_UP = {"error": "需要重新驗證密碼"}
 
 # Student profile enumerations (B24: no last_name / school / other PII).
 AGE_BANDS = ("P1-P3", "P4-P6", "S1-S3")
@@ -135,6 +138,7 @@ async def csrf_guard(request: web.Request, handler):
             or path.startswith("/api/consent/")
             or path.startswith("/api/classes")
             or path.startswith("/api/students")
+            or path.startswith("/api/teacher/")
             or path == "/api/invites"
             # The parent 1-click confirm link is opened from an email, not
             # from the SPA — no custom header there. Every other invite POST
@@ -384,6 +388,78 @@ async def handle_verify_email(request: web.Request) -> web.Response:
         return web.json_response(_ERR_INVALID, status=400)
 
     return web.json_response({"user": _public_user(user)})
+
+
+# ---------------------------------------------------------------------------
+# Step-up auth (W2 PR#4)
+# ---------------------------------------------------------------------------
+
+def _require_stepped_up(request: web.Request) -> Optional[web.Response]:
+    """Fresh per-request step-up check (sessions.stepped_up_until > now).
+
+    The session row is read on every protected request — the step-up state
+    is never cached outside the request, and no separate cookie/JWT is used.
+    Returns an error response when not stepped up, else None.
+    """
+    token = request.cookies.get(SESSION_COOKIE)
+    session = db.get_session_row(token) if token else None
+    if session is None:
+        return web.json_response(_ERR_AUTH, status=401)
+    until = session["stepped_up_until"]
+    if not until or until <= _now_iso():
+        return web.json_response(_ERR_STEP_UP, status=403)
+    return None
+
+
+async def handle_step_up(request: web.Request) -> web.Response:
+    """POST /api/auth/step-up — re-authenticate the current session.
+
+    Body carries the current account's login password (never a new password
+    or a student PIN). On success the session row gains `stepped_up_until`
+    = now + 10 minutes; the state lives in the server-side session only.
+    Wrong passwords share the login unified wording and flow into the
+    existing failed_logins / lockout machinery (no second counter).
+    """
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+
+    payload = await _read_json(request)
+    if not payload:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    password = payload.get("password")
+    if not isinstance(password, str) or not password:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    ip = _client_ip(request)
+    if ip_rate_limiter.is_blocked(ip):
+        return web.json_response(_ERR_LOCKED, status=429)
+
+    lock_until = user["lock_until"]
+    if lock_until and lock_until > _now_iso():
+        return web.json_response(_ERR_LOCKED, status=429)
+
+    if not verify_password(password, user["password_hash"]):
+        new_count = int(user["failed_logins"] or 0) + 1
+        if new_count >= LOCK_FAILURES:
+            db.set_user_lock(user["id"], _future_iso(minutes=LOCK_MINUTES))
+            logger.warning(
+                "step-up lock triggered email=%s ip=%s failures=%d",
+                user["email"], ip, new_count,
+            )
+        else:
+            db.increment_failed_logins(user["id"], new_count)
+        ip_rate_limiter.record_failure(ip)
+        return web.json_response(_ERR_AUTH, status=401)
+
+    db.reset_failed_logins(user["id"])
+    ip_rate_limiter.reset(ip)
+
+    token = request.cookies.get(SESSION_COOKIE)
+    until = _future_iso(minutes=STEP_UP_MINUTES)
+    db.set_session_stepped_up(token, until)
+    return web.json_response({"ok": True, "expires_at": until})
 
 
 # ---------------------------------------------------------------------------
@@ -1030,6 +1106,144 @@ async def handle_confirm_class_student(request: web.Request) -> web.Response:
 
 
 # ---------------------------------------------------------------------------
+# Safety review API (W2 PR#4) — teacher-only; admin bypasses class filter
+# ---------------------------------------------------------------------------
+
+def _is_teacher_or_admin(user) -> bool:
+    return user["role"] in ("teacher", "admin")
+
+
+async def handle_safety_events_list(request: web.Request) -> web.Response:
+    """GET /api/teacher/safety-events — pointer-only inbox.
+
+    Teacher sees only events for students in their own classes; admin sees
+    all events. `?reviewed=false` filters to unreviewed events (default:
+    all). The list never includes raw_input (B33a pointer-only discipline).
+    """
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+    if not _is_teacher_or_admin(user):
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    unreviewed_only = request.query.get("reviewed", "").lower() == "false"
+    events = safety_mod.list_events_for_teacher(
+        user["id"],
+        admin=user["role"] == "admin",
+        unreviewed_only=unreviewed_only,
+    )
+    return web.json_response({"events": events})
+
+
+async def handle_safety_event_detail(request: web.Request) -> web.Response:
+    """GET /api/teacher/safety-events/{id} — full event incl. raw_input.
+
+    Requires a fresh step-up (re-entered login password, 10-minute window,
+    checked fresh per request). Cross-teacher and unknown ids get the same
+    403 so existence never leaks; cross-teacher access is additionally
+    recorded as a security WARNING. student_id is masked in the response
+    (PR#3 convention) — first_name is enough for the teacher to recognise
+    the child.
+    """
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+    if not _is_teacher_or_admin(user):
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    step_err = _require_stepped_up(request)
+    if step_err is not None:
+        return step_err
+
+    event_id = request.match_info.get("id", "")
+    event = safety_mod.get_event_with_student(event_id)
+    if event is None:
+        # Unknown id — unified 403, same wording as a foreign event.
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+    if user["role"] != "admin" and not safety_mod.event_owned_by_teacher(
+        event_id, user["id"]
+    ):
+        _log_security_warning(
+            "safety_detail_cross_access",
+            user_id=user["id"],
+            target_id=event_id,
+            detail="teacher attempted to view another teacher's safety event",
+        )
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    consent.write_audit_log(
+        {
+            "timestamp": _now_iso(),
+            "level": "INFO",
+            "event": "safety_detail_viewed",
+            "user_id": user["id"],
+            "event_id": event_id,
+            "student_id": event["student_id"],
+        }
+    )
+    return web.json_response(
+        {
+            "event": {
+                "event_id": event["id"],
+                "created_at": event["created_at"],
+                "event_type": event["event_type"],
+                "severity": event["severity"],
+                "raw_input": event["raw_input"],
+                "matched_rule": event["matched_rule"],
+                "age_band": event["age_band"],
+                "lang_code": event["lang_code"],
+                "reviewed": bool(event["reviewed"]),
+                "reviewed_by": event["reviewed_by"],
+                "reviewed_at": event["reviewed_at"],
+                "student_first_name": event["student_first_name"],
+                "student_id": _mask_student_id(event["student_id"]),
+            }
+        }
+    )
+
+
+async def handle_safety_event_review(request: web.Request) -> web.Response:
+    """POST /api/teacher/safety-events/{id}/review — mark reviewed.
+
+    The single sanctioned UPDATE on safety_events. Unknown ids get the same
+    403 as foreign events (no existence leak); cross-teacher review is
+    blocked and recorded as a security WARNING. The review decision itself
+    is stored in safety_events (reviewed / reviewed_by / reviewed_at).
+    """
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+    if not _is_teacher_or_admin(user):
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    event_id = request.match_info.get("id", "")
+    event = safety_mod.get_event_with_student(event_id)
+    if event is None:
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+    if user["role"] != "admin" and not safety_mod.event_owned_by_teacher(
+        event_id, user["id"]
+    ):
+        _log_security_warning(
+            "safety_review_cross_access",
+            user_id=user["id"],
+            target_id=event_id,
+            detail="teacher attempted to review another teacher's safety event",
+        )
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    ok = safety_mod.review_event(
+        event_id,
+        reviewed_by=user["id"],
+        reviewed_at=_now_iso(),
+    )
+    if not ok:
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+    return web.json_response(
+        {"ok": True, "event_id": event_id, "reviewed": True}
+    )
+
+
+# ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
 
@@ -1055,5 +1269,16 @@ def build_app() -> web.Application:
     app.router.add_post("/api/invites", handle_create_invite)
     app.router.add_post("/api/invites/{token}/confirm", handle_confirm_invite)
     app.router.add_post("/api/invites/{token}/resend", handle_resend_invite)
+    # W2 PR#4 — safety review + step-up auth
+    app.router.add_post("/api/auth/step-up", handle_step_up)
+    app.router.add_get(
+        "/api/teacher/safety-events", handle_safety_events_list
+    )
+    app.router.add_get(
+        "/api/teacher/safety-events/{id}", handle_safety_event_detail
+    )
+    app.router.add_post(
+        "/api/teacher/safety-events/{id}/review", handle_safety_event_review
+    )
     app.router.add_get("/legal/{slug}", handle_legal_page)
     return app

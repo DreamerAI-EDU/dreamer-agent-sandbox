@@ -41,7 +41,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     user_id       TEXT NOT NULL REFERENCES users(id),
     expires_at    TEXT NOT NULL,
     created_ip    TEXT,
-    created_at    TEXT NOT NULL
+    created_at    TEXT NOT NULL,
+    stepped_up_until TEXT
 );
 
 CREATE TABLE IF NOT EXISTS teacher_invites (
@@ -289,6 +290,38 @@ def get_session_user(session_id: str) -> Optional[sqlite3.Row]:
             (session_id, _now_iso()),
         )
         return cur.fetchone()
+    finally:
+        conn.close()
+
+
+def get_session_row(session_id: str) -> Optional[sqlite3.Row]:
+    """Return the raw session row (no expiry check) or None.
+
+    Used by the step-up gate: the caller compares `stepped_up_until`
+    against the current time itself so the check is performed fresh on
+    every protected request (never cached outside the request).
+    """
+    ensure_schema()
+    conn = connect()
+    try:
+        cur = conn.execute(
+            "SELECT * FROM sessions WHERE id = ?", (session_id,)
+        )
+        return cur.fetchone()
+    finally:
+        conn.close()
+
+
+def set_session_stepped_up(session_id: str, until_iso: str) -> None:
+    """Mark the session as step-up authorised until `until_iso` (W2 PR#4)."""
+    ensure_schema()
+    conn = connect()
+    try:
+        conn.execute(
+            "UPDATE sessions SET stepped_up_until = ? WHERE id = ?",
+            (until_iso, session_id),
+        )
+        conn.commit()
     finally:
         conn.close()
 

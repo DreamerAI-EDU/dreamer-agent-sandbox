@@ -423,6 +423,7 @@ EXPECTED_SCHEMA = {
     "sessions": [
         ("id", "TEXT"), ("user_id", "TEXT"), ("expires_at", "TEXT"),
         ("created_ip", "TEXT"), ("created_at", "TEXT"),
+        ("stepped_up_until", "TEXT"),
     ],
     "teacher_invites": [
         ("code", "TEXT"), ("created_by", "TEXT"), ("expires_at", "TEXT"),

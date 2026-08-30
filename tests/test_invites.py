@@ -845,3 +845,56 @@ async def test_pin_verify_rejected_until_teacher_confirms(
     assert resp.status == 403
     body = await resp.json()
     assert body["error"] == "等待老師確認"
+
+
+# ---------------------------------------------------------------------------
+# 22+. W2 PR#5 — GET /api/invites/{token} public read-only lookup
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_invite_public_returns_four_public_fields(client, fresh_invite):
+    """Valid token → exactly the four public fields, no student id leak."""
+    token = await _setup_logged_in_user(client)
+    cls = await _create_class_via_api(client, token)
+    await _create_invite(client, token, cls["id"])
+    tok = _latest_invite_token()
+
+    # No cookie, no CSRF header — the token itself is the credential.
+    resp = await client.get(f"/api/invites/{tok}")
+    assert resp.status == 200, await resp.text()
+    body = await resp.json()
+    assert body == {
+        "first_name": "小明",
+        "age_band": "P1-P3",
+        "lang_code": "zh-hk",
+        "parent_email": "parent-x@test.local",
+    }
+    # Exactly the four public keys — the full student id never leaks.
+    assert set(body.keys()) == {"first_name", "age_band", "lang_code",
+                                "parent_email"}
+    assert _invite_row(tok)["student_id"] not in await resp.text()
+
+
+@pytest.mark.asyncio
+async def test_invite_public_fake_token_unified_400(client, fresh_invite):
+    """Unknown token → 400 with the same wording as confirm."""
+    resp = await client.get("/api/invites/totally-fake-token-000")
+    assert resp.status == 400
+    body = await resp.json()
+    assert body["error"] == "連結無效或已過期"
+
+
+@pytest.mark.asyncio
+async def test_invite_public_used_token_400(client, fresh_invite):
+    """A consumed token → 400 with the unified wording."""
+    token = await _setup_logged_in_user(client)
+    cls = await _create_class_via_api(client, token)
+    await _create_invite(client, token, cls["id"])
+    tok = _latest_invite_token()
+    assert (await _confirm(client, tok, privacy=True)).status == 201
+    assert _invite_row(tok)["used_at"] is not None
+
+    resp = await client.get(f"/api/invites/{tok}")
+    assert resp.status == 400
+    body = await resp.json()
+    assert body["error"] == "連結無效或已過期"

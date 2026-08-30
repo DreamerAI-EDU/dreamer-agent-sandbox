@@ -143,6 +143,55 @@ def list_students_for_parent(parent_id: str) -> list[Any]:
         conn.close()
 
 
+def list_all_students() -> list[Any]:
+    """Every student row (admin-only reachable set)."""
+    db.ensure_schema()
+    conn = db.connect()
+    try:
+        cur = conn.execute("SELECT * FROM students ORDER BY created_at")
+        return cur.fetchall()
+    finally:
+        conn.close()
+
+
+def resolve_student_identifier(identifier: str, user: Any) -> tuple[Optional[Any], bool]:
+    """Resolve a full student id or an 8-char mask prefix to a student row
+    within the current user's reachable set (parent = own children, teacher
+    = own classes, admin = all).
+
+    Full ids keep the legacy exact-match path (backwards compatible). A
+    mask prefix must match exactly one reachable student:
+      - (student, False)  unique match — caller proceeds
+      - (None, False)     no match — caller maps to 403
+      - (None, True)      multiple matches — caller maps to 400
+    """
+    if not identifier:
+        return None, False
+    full = get_student_by_id(identifier)
+    if full is not None:
+        return full, False
+    if len(identifier) != 8:
+        return None, False
+
+    if user["role"] == "parent":
+        candidates = list_students_for_parent(user["id"])
+    elif user["role"] == "teacher":
+        from . import classes as classes_mod
+
+        candidates = classes_mod.list_students_for_teacher(user["id"])
+    elif user["role"] == "admin":
+        candidates = list_all_students()
+    else:
+        return None, False
+
+    matches = [s for s in candidates if s["id"].startswith(identifier)]
+    if len(matches) > 1:
+        return None, True
+    if len(matches) == 1:
+        return matches[0], False
+    return None, False
+
+
 def can_access_student(user: Any, student: Any) -> bool:
     """Authorisation helper: parent owns the student, or teacher teaches the
     student's class (teacher branch covers class_students membership)."""

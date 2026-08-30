@@ -4,3 +4,4 @@ httpx>=0.27.0
 python-dotenv>=1.0.0
 aiohttp>=3.9
 argon2-cffi>=23.1
+PyYAML>=6.0

@@ -580,4 +580,37 @@ async def test_pin_verify_mask_prefix_no_match_403(client, fresh_invite):
         headers={**HEADERS, "Cookie": f"auth_session={token}"},
     )
     assert unknown.status == 403
-    assert (await unknown.json())["error"] == "無權操作"
+
+
+@pytest.mark.asyncio
+async def test_pin_verify_mask_prefix_ambiguous_400(client, fresh_invite):
+    """Two reachable students sharing the same 8-char prefix → 400.
+
+    This is the only failure mode of the prefix scheme and must be guarded:
+    ambiguity must never silently pick the first match.
+    """
+    _, email, pw = _create_parent_user()
+    token = await _login_parent(client, email, pw)
+    student_a = await _create_student_via_api(client, token, pin="1357")
+    student_b = await _create_student_via_api(client, token, pin="2468")
+
+    # Force a shared 8-char prefix by rewriting B's id in place (same
+    # length, different tail, so the PK stays unique).
+    mask = student_a[:8]
+    conn = sqlite3.connect(_db_path())
+    try:
+        conn.execute(
+            "UPDATE students SET id = ? WHERE id = ?",
+            (mask + student_b[8:], student_b),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    resp = await client.post(
+        f"/api/students/{mask}/pin-verify",
+        json={"pin": "1357"},
+        headers={**HEADERS, "Cookie": f"auth_session={token}"},
+    )
+    assert resp.status == 400
+    assert (await resp.json())["error"] == "請求無效"

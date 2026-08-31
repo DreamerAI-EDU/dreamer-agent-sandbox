@@ -1,0 +1,11 @@
+.git
+frontend/
+tests/
+node_modules
+.venv
+.env
+**/.env
+**/__pycache__
+**/*.pyc
+**/*.db
+**/audit_log.jsonl

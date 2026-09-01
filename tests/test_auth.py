@@ -10,6 +10,7 @@ import datetime
 import os
 import re
 import sqlite3
+from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
@@ -19,6 +20,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.environ.setdefault("PYTHONPATH", REPO_ROOT)
 
 from auth import db as auth_db  # noqa: E402
+from auth import email as auth_email  # noqa: E402
 from auth.api import build_app  # noqa: E402
 
 HEADERS = {"X-Requested-With": "XMLHttpRequest"}
@@ -505,3 +507,47 @@ def test_students_table_has_no_b24_forbidden_columns(tmp_path, monkeypatch):
     forbidden = {"full_name", "last_name", "school", "dob", "date_of_birth"}
     hits = forbidden & set(cols)
     assert not hits, f"B24 forbidden columns present in students: {hits}"
+
+
+# ---------------------------------------------------------------------------
+# PR#33 — SMTP login user: SAFETY_SMTP_USER with SAFETY_EMAIL_FROM fallback
+# ---------------------------------------------------------------------------
+
+def test_email_smtp_login_uses_smtp_user_when_set(monkeypatch):
+    """SAFETY_SMTP_USER set → SMTP login uses it; From header keeps EMAIL_FROM."""
+    monkeypatch.setenv("SAFETY_SMTP_PASSWORD", "test-app-password")
+    monkeypatch.setenv("SAFETY_SMTP_USER", "login-user@example.com")
+    monkeypatch.setenv("SAFETY_EMAIL_FROM", "from@example.com")
+    monkeypatch.setenv("SAFETY_SMTP_PORT", "465")  # force SMTP_SSL path for mock
+
+    with patch("auth.email.smtplib.SMTP_SSL") as mock_smtp:
+        instance = mock_smtp.return_value.__enter__.return_value
+        result = auth_email.send_email(
+            to_addr="to@example.com", subject="Subject", body="Body"
+        )
+        assert result is True
+        instance.login.assert_called_once_with(
+            "login-user@example.com", "test-app-password"
+        )
+        sent = instance.send_message.call_args[0][0]
+        assert sent["From"] == "from@example.com"
+
+
+def test_email_smtp_login_falls_back_to_email_from(monkeypatch):
+    """SAFETY_SMTP_USER unset → SMTP login falls back to EMAIL_FROM (backward compat)."""
+    monkeypatch.setenv("SAFETY_SMTP_PASSWORD", "test-app-password")
+    monkeypatch.delenv("SAFETY_SMTP_USER", raising=False)
+    monkeypatch.setenv("SAFETY_EMAIL_FROM", "from@example.com")
+    monkeypatch.setenv("SAFETY_SMTP_PORT", "465")  # force SMTP_SSL path for mock
+
+    with patch("auth.email.smtplib.SMTP_SSL") as mock_smtp:
+        instance = mock_smtp.return_value.__enter__.return_value
+        result = auth_email.send_email(
+            to_addr="to@example.com", subject="Subject", body="Body"
+        )
+        assert result is True
+        instance.login.assert_called_once_with(
+            "from@example.com", "test-app-password"
+        )
+        sent = instance.send_message.call_args[0][0]
+        assert sent["From"] == "from@example.com"

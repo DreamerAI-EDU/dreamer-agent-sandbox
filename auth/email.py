@@ -2,7 +2,8 @@
 
 Reuses the B33a SMTP channel configuration — the same SAFETY_SMTP_* /
 SAFETY_EMAIL_* env variables, no second config set (per PR brief §4):
-    SAFETY_EMAIL_FROM      — sender = SMTP user (default info@dreamer-aiedu.net)
+    SAFETY_EMAIL_FROM      — From header (default info@dreamer-aiedu.net)
+    SAFETY_SMTP_USER       — SMTP login user (defaults to SAFETY_EMAIL_FROM)
     SAFETY_SMTP_HOST       — default smtp.gmail.com
     SAFETY_SMTP_PORT       — 465 (SSL, default) or 587 (STARTTLS)
     SAFETY_SMTP_PASSWORD   — app password (the only real secret)
@@ -44,6 +45,9 @@ def send_email(*, to_addr: str, subject: str, body: str) -> bool:
         return False
 
     from_addr = os.environ.get("SAFETY_EMAIL_FROM", "info@dreamer-aiedu.net")
+    smtp_user = os.environ.get("SAFETY_SMTP_USER") or os.environ.get(
+        "SAFETY_EMAIL_FROM", "info@dreamer-aiedu.net"
+    )
     host = os.environ.get("SAFETY_SMTP_HOST", "smtp.gmail.com")
     try:
         port = int(os.environ.get("SAFETY_SMTP_PORT", "465"))
@@ -62,13 +66,13 @@ def send_email(*, to_addr: str, subject: str, body: str) -> bool:
             with smtplib.SMTP_SSL(
                 host, port, timeout=10, context=ssl.create_default_context()
             ) as server:
-                server.login(from_addr, password)
+                server.login(smtp_user, password)
                 server.send_message(msg)
         else:
             # Fallback path: STARTTLS (587)
             with smtplib.SMTP(host, port, timeout=10) as server:
                 server.starttls(context=ssl.create_default_context())
-                server.login(from_addr, password)
+                server.login(smtp_user, password)
                 server.send_message(msg)
         return True
     except Exception:

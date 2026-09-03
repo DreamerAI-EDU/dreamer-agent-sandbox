@@ -776,7 +776,7 @@ async def handle_pin_verify(request: web.Request) -> web.Response:
         )
         return web.json_response(_ERR_FORBIDDEN, status=403)
 
-    statuses = classes_mod.student_class_statuses(student_id)
+    statuses = classes_mod.student_class_statuses(student["id"])
     if statuses and "confirmed" not in statuses:
         return web.json_response({"error": "等待老師確認"}, status=403)
 

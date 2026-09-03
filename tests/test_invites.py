@@ -524,6 +524,38 @@ async def test_confirm_invite_rejects_bad_states(client, fresh_invite):
     assert r_sup.status == 400
 
 
+@pytest.mark.asyncio
+async def test_confirm_invite_duplicate_email_clean_400(
+    client, fresh_invite
+):
+    """Regression: PR-B — confirming an invite whose parent email already
+    owns an account must return a clean 400, never a 500.
+
+    Previously the INSERT hit the users.email unique constraint and
+    surfaced as an unhandled 500. The flow now pre-checks existence and
+    maps it to the unified invalid-token wording.
+    """
+    token = await _setup_logged_in_user(client)
+    cls = await _create_class_via_api(client, token)
+
+    # First invite for this email confirms successfully (account created).
+    await _create_invite(client, token, cls["id"],
+                         parent_email="dup@test.local")
+    tok_first = _latest_invite_token()
+    assert (await _confirm(client, tok_first, privacy=True)).status == 201
+
+    # A second invite for the same email must fail cleanly with 400.
+    await _create_invite(client, token, cls["id"],
+                         parent_email="dup@test.local")
+    tok_second = _latest_invite_token()
+    resp = await _confirm(client, tok_second, privacy=True)
+    assert resp.status == 400, await resp.text()
+    body = await resp.json()
+    assert body["error"] == "連結無效或已過期"
+    # The second token is left unused (no partial write).
+    assert _invite_row(tok_second)["used_at"] is None
+
+
 # ---------------------------------------------------------------------------
 # 19. Confirm with media opt-in → media consent row also written
 # ---------------------------------------------------------------------------
@@ -843,6 +875,42 @@ async def test_pin_verify_rejected_until_teacher_confirms(
         headers={**HEADERS, "Cookie": f"auth_session={parent_token}"},
     )
     assert resp.status == 403
+    body = await resp.json()
+    assert body["error"] == "等待老師確認"
+
+
+@pytest.mark.asyncio
+async def test_pin_verify_mask_prefix_pending_rejected_403(
+    client, fresh_invite
+):
+    """Regression: W2 P1 gate bypass — pending student probed via the
+    8-char mask prefix must still hit the teacher-confirmation gate.
+
+    The existing pending-rejection test uses the full id, so the mask
+    path slipped through: the status lookup was keyed by the raw path
+    identifier, and a mask never matches class_students.student_id →
+    statuses came back empty → the gate was skipped. The lookup must use
+    the resolved full id.
+    """
+    token = await _setup_logged_in_user(client)
+    cls = await _create_class_via_api(client, token)
+    await _create_invite(client, token, cls["id"], pin="1357")
+    tok = _latest_invite_token()
+    student_id = _invite_row(tok)["student_id"]
+    mask = student_id[:8]
+
+    # Parent confirms; teacher has NOT confirmed the binding yet.
+    assert (await _confirm(client, tok, privacy=True)).status == 201
+    parent_token = await _login_parent(
+        client, "parent-x@test.local", CONFIRM_PASSWORD
+    )
+
+    resp = await client.post(
+        f"/api/students/{mask}/pin-verify",
+        json={"pin": "1357"},
+        headers={**HEADERS, "Cookie": f"auth_session={parent_token}"},
+    )
+    assert resp.status == 403, await resp.text()
     body = await resp.json()
     assert body["error"] == "等待老師確認"
 

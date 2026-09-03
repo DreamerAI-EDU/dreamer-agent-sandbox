@@ -396,7 +396,7 @@ async def test_version_bump_re_triggers_re_sign_gate(
 
 
 # ---------------------------------------------------------------------------
-# 10. media withdraw: append-only + audit marker; repeat withdraw is fine
+# 10. media withdraw: prior-agree gate (P3-2) — one audit marker only
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
@@ -414,7 +414,8 @@ async def test_media_withdraw_appends_withdrawn_row_and_audit_marker(
     )
     assert sign.status == 201
 
-    # Withdraw media_consent.
+    # Withdraw media_consent — allowed while a current-version agreed row
+    # covers the scope.
     w1 = await client.post(
         "/api/consent/withdraw",
         json={"doc_type": "media_consent"},
@@ -422,19 +423,23 @@ async def test_media_withdraw_appends_withdrawn_row_and_audit_marker(
     )
     assert w1.status == 200
 
-    # Repeat withdraw still succeeds (append-only, idempotent enough).
+    # Double withdraw now hits the P3-2 prior-agree gate: the latest row is
+    # already `withdrawn`, so there is nothing to withdraw — uniform 400,
+    # zero writes, zero fake WARNING rows.
     w2 = await client.post(
         "/api/consent/withdraw",
         json={"doc_type": "media_consent"},
         headers={**HEADERS, "Cookie": f"auth_session={token}"},
     )
-    assert w2.status == 200
+    assert w2.status == 400
+    body = await w2.json()
+    assert body["error"] == "未有可撤回嘅同意紀錄"
 
-    # All rows survive: agreed + withdrawn + withdrawn; old row untouched.
+    # All rows survive: agreed + withdrawn; old row untouched.
     rows = _consent_rows(
         os.environ["DREAMER_DB_PATH"], user_id=user["id"], doc_type="media_consent"
     )
-    assert [r[3] for r in rows] == ["withdrawn", "withdrawn", "agreed"]
+    assert [r[3] for r in rows] == ["withdrawn", "agreed"]
 
     # Status reflects the latest row.
     status = await client.get(
@@ -445,21 +450,21 @@ async def test_media_withdraw_appends_withdrawn_row_and_audit_marker(
     assert status_body["documents"]["media_consent"]["status"] == "withdrawn"
     assert status_body["documents"]["privacy_policy"]["status"] == "unsigned"
 
-    # Audit log carries the media_takedown_pending marker (human 24h flow).
+    # Audit log carries exactly one media_takedown_pending marker (the
+    # rejected second withdraw must not emit a fake WARNING).
     audit_lines = [
         line for line in (tmp_path / "audit_log.jsonl").read_text(
             encoding="utf-8"
         ).splitlines()
         if line.strip()
     ]
-    assert len(audit_lines) == 2  # one per withdraw
-    for line in audit_lines:
-        record = __import__("json").loads(line)
-        assert record["event"] == "media_takedown_pending"
-        assert record["level"] == "WARNING"
-        assert record["doc_type"] == "media_consent"
-        assert record["user_id"] == user["id"]
-        assert record["student_id"] is None
+    assert len(audit_lines) == 1
+    record = __import__("json").loads(audit_lines[0])
+    assert record["event"] == "media_takedown_pending"
+    assert record["level"] == "WARNING"
+    assert record["doc_type"] == "media_consent"
+    assert record["user_id"] == user["id"]
+    assert record["student_id"] is None
 
 
 # ---------------------------------------------------------------------------

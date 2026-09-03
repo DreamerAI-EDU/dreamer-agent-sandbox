@@ -73,6 +73,8 @@ _ERR_INVITE_INVALID = {"error": "連結無效或已過期"}
 _ERR_LOCKED = {"error": "嘗試次數過多，請稍後再試"}
 _ERR_FORBIDDEN = {"error": "無權操作"}
 _ERR_STEP_UP = {"error": "需要重新驗證密碼"}
+_ERR_NOTHING_TO_WITHDRAW = {"error": "未有可撤回嘅同意紀錄"}
+_ERR_PRIVACY_REQUIRED = {"error": "必須同意私隱政策先可以繼續"}
 
 # Student profile enumerations (B24: no last_name / school / other PII).
 AGE_BANDS = ("P1-P3", "P4-P6", "S1-S3")
@@ -531,8 +533,10 @@ async def handle_consent_sign(request: web.Request) -> web.Response:
 async def handle_consent_withdraw(request: web.Request) -> web.Response:
     """POST /api/consent/withdraw — append withdrawn row (never mutate old).
 
-    media_consent: allowed; writes an audit-log media_takedown_pending
-    marker for the human 24h takedown flow.
+    media_consent: allowed only when a current-version agreed row covers
+    the withdraw scope (P3-2 prior-agree gate); success writes an audit-log
+    media_takedown_pending marker for the human 24h takedown flow. A second
+    withdraw is rejected by the same gate — nothing to withdraw.
     privacy_policy: rejected — withdrawing privacy consent equals an account
     deactivation request, handled manually via info@.
     """
@@ -567,6 +571,15 @@ async def handle_consent_withdraw(request: web.Request) -> web.Response:
     # is only allowed for that student's bound parent.
     if not _consent_student_owned(user, student_id):
         return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    # P3-2 prior-agree gate: without a current-version agreed row covering
+    # this scope there is nothing to withdraw — uniform 400, zero writes,
+    # zero fake WARNING rows. This also collapses the double-withdraw path
+    # (latest row already `withdrawn`) into the same gate.
+    if not consent.has_withdrawable_agreement(
+        user["id"], doc_type, student_id=student_id
+    ):
+        return web.json_response(_ERR_NOTHING_TO_WITHDRAW, status=400)
 
     consent.insert_consent_row(
         user_id=user["id"],
@@ -780,7 +793,9 @@ async def handle_pin_verify(request: web.Request) -> web.Response:
     if statuses and "confirmed" not in statuses:
         return web.json_response({"error": "等待老師確認"}, status=403)
 
-    lock_remaining = students_mod.pin_lock_remaining(student_id)
+    # Lockout bookkeeping is keyed by the resolved full student id — never
+    # by the raw {id} path segment (which may be an 8-char mask prefix).
+    lock_remaining = students_mod.pin_lock_remaining(student["id"])
     if lock_remaining is not None:
         return web.json_response(_ERR_LOCKED, status=429)
 
@@ -791,18 +806,31 @@ async def handle_pin_verify(request: web.Request) -> web.Response:
     if not students_mod.is_valid_pin(pin):
         return web.json_response(_ERR_INVALID, status=400)
 
+    if student["pin_hash"] is None:
+        # Data anomaly: a confirmed student without a PIN hash. Return the
+        # uniform wrong-PIN wording (never a 500 from verify_pin(None)),
+        # do NOT touch the lockout counter (not a guessing failure) and
+        # leave a server-side WARNING trail for the operator.
+        _log_security_warning(
+            "pin_verify_null_pinhash",
+            user_id=user["id"],
+            target_id=student["id"],
+            detail="confirmed student has NULL pin_hash",
+        )
+        return web.json_response({"error": "PIN 不正確"}, status=401)
+
     if not students_mod.verify_pin(pin, student["pin_hash"]):
-        count = students_mod.record_pin_failure(student_id)
-        if count == 0 and students_mod.pin_lock_remaining(student_id) is not None:
+        count = students_mod.record_pin_failure(student["id"])
+        if count == 0 and students_mod.pin_lock_remaining(student["id"]) is not None:
             _log_security_warning(
                 "pin_locked",
                 user_id=user["id"],
-                target_id=student_id,
+                target_id=student["id"],
                 detail="student PIN locked after 10 consecutive failures",
             )
         return web.json_response({"error": "PIN 不正確"}, status=401)
 
-    students_mod.clear_pin_failures(student_id)
+    students_mod.clear_pin_failures(student["id"])
     return web.json_response({"ok": True})
 
 
@@ -981,7 +1009,8 @@ async def handle_confirm_invite(request: web.Request) -> web.Response:
 
     privacy_agreed = payload.get("privacy_policy")
     if not isinstance(privacy_agreed, bool) or not privacy_agreed:
-        return web.json_response(_ERR_INVALID, status=400)
+        # P3-4: explicit wording — privacy_policy is the mandatory gate.
+        return web.json_response(_ERR_PRIVACY_REQUIRED, status=400)
     media_agreed = bool(payload.get("media_consent"))
 
     privacy_doc = consent.get_doc_config("privacy_policy")
@@ -1283,6 +1312,19 @@ async def handle_safety_event_review(request: web.Request) -> web.Response:
     )
     if not ok:
         return web.json_response(_ERR_FORBIDDEN, status=403)
+    # P3-1: a review is a review action — every review must leave an audit
+    # trail (same record shape as safety_detail_viewed, reviewed_by added).
+    consent.write_audit_log(
+        {
+            "timestamp": _now_iso(),
+            "level": "INFO",
+            "event": "safety_event_reviewed",
+            "user_id": user["id"],
+            "event_id": event_id,
+            "student_id": event["student_id"],
+            "reviewed_by": user["id"],
+        }
+    )
     return web.json_response(
         {"ok": True, "event_id": event_id, "reviewed": True}
     )

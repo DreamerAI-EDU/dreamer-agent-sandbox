@@ -195,6 +195,56 @@ def has_current_agreement(user_id: str, doc_type: str) -> bool:
     )
 
 
+def has_withdrawable_agreement(
+    user_id: str,
+    doc_type: str,
+    student_id: Optional[str] = None,
+) -> bool:
+    """P3-2 prior-agree gate: may the user withdraw `doc_type` today?
+
+    True only when a current-version `agreed` row exists that covers the
+    withdraw scope. With a student_id the agreement must belong to that
+    student (account-level NULL rows also cover); without one the latest
+    row for the doc decides — the same scope semantics as the sign path,
+    so a fresh user, a version-stale signer and a second withdraw (whose
+    latest row is already `withdrawn`) are all rejected with the uniform
+    "未有可撤回嘅同意紀錄" 400 instead of writing a new row.
+    """
+    doc = get_doc_config(doc_type)
+    if doc is None:
+        return False
+    current_version = doc["current_version"]
+
+    from . import db
+
+    db.ensure_schema()
+    conn = db.connect()
+    try:
+        if student_id:
+            cur = conn.execute(
+                """SELECT doc_version, action FROM consent_log
+                   WHERE user_id = ? AND doc_type = ?
+                     AND (student_id = ? OR student_id IS NULL)
+                   ORDER BY created_at DESC, rowid DESC LIMIT 1""",
+                (user_id, doc_type, student_id),
+            )
+        else:
+            cur = conn.execute(
+                """SELECT doc_version, action FROM consent_log
+                   WHERE user_id = ? AND doc_type = ?
+                   ORDER BY created_at DESC, rowid DESC LIMIT 1""",
+                (user_id, doc_type),
+            )
+        row = cur.fetchone()
+    finally:
+        conn.close()
+    return bool(
+        row
+        and row["action"] == "agreed"
+        and row["doc_version"] == current_version
+    )
+
+
 def required_consent_gaps(user_id: str) -> list[str]:
     """Doc types that are required:true and lack a current-version agreement.
 

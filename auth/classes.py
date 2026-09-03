@@ -409,6 +409,16 @@ def confirm_invite_flow(
         student_id = invite["student_id"]
         parent_email = invite["parent_email"]
 
+        # Pre-check: the invite's parent email must not already own an
+        # account. Without this, the INSERT below trips the users.email
+        # unique constraint and surfaces as an unhandled 500; a repeat
+        # click / duplicate invite must fail cleanly with 400 instead.
+        already_registered = conn.execute(
+            "SELECT 1 FROM users WHERE email = ?", (parent_email,)
+        ).fetchone()
+        if already_registered is not None:
+            return None
+
         conn.execute(
             """INSERT INTO users
                (id, email, password_hash, role, email_verified,

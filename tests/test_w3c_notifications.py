@@ -480,6 +480,7 @@ async def test_teacher_register_verify_login_landing_chain(
     assert (await landing.json())["classes"] == []  # empty state
 
 
+@pytest.mark.asyncio
 async def test_class_meta_create_and_list_return_new_fields(client, fresh_invite):
     """POST /api/classes accepts W3-C fields; GET /api/classes echoes them."""
     token = await _setup_logged_in_user(
@@ -516,6 +517,7 @@ async def test_class_meta_create_and_list_return_new_fields(client, fresh_invite
     assert c["is_one_on_one"] == 1
 
 
+@pytest.mark.asyncio
 async def test_class_meta_defaults_when_omitted(client, fresh_invite):
     """Old clients that send only a name keep working: monthly / NULL / 0."""
     token = await _setup_logged_in_user(
@@ -530,6 +532,7 @@ async def test_class_meta_defaults_when_omitted(client, fresh_invite):
     assert cls["is_one_on_one"] == 0
 
 
+@pytest.mark.asyncio
 async def test_class_meta_rejects_invalid_enum_values(client, fresh_invite):
     token = await _setup_logged_in_user(
         client,
@@ -550,6 +553,7 @@ async def test_class_meta_rejects_invalid_enum_values(client, fresh_invite):
         assert resp.status == 400, (body, await resp.text())
 
 
+@pytest.mark.asyncio
 async def test_class_list_role_gate_parent_403(client, fresh_invite):
     """Spec §3.1 boundary 4: GET /api/classes is teacher-only — parent gets 403."""
     token = await _setup_logged_in_user(

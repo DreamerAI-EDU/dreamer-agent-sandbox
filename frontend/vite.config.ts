@@ -5,7 +5,7 @@ import { inspectAttr } from 'kimi-plugin-inspect-react'
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => ({
-  base: './',
+  base: '/', // runbook §6 鐵律 1：絕對路徑 assets，深層路由（/teacher）先唔會白屏
   plugins: [mode === 'development' ? inspectAttr() : null, react()].filter(Boolean),
   server: {
     port: 3000,

@@ -9,6 +9,8 @@ import { ConsentPage } from './pages/ConsentPage'
 import { InvitePage } from './pages/InvitePage'
 import { ParentHomePage } from './pages/ParentHomePage'
 import { SafetyPage } from './pages/SafetyPage'
+import { TeacherHomePage } from './pages/TeacherHomePage'
+import { TeacherRegisterPage } from './pages/TeacherRegisterPage'
 import ChatPage from './pages/ChatPage'
 
 createRoot(document.getElementById('root')!).render(
@@ -21,6 +23,8 @@ createRoot(document.getElementById('root')!).render(
           <Route path="/consent" element={<ConsentPage />} />
           <Route path="/home" element={<ParentHomePage />} />
           <Route path="/safety" element={<SafetyPage />} />
+          <Route path="/teacher" element={<TeacherHomePage />} />
+          <Route path="/teacher/register" element={<TeacherRegisterPage />} />
           <Route path="/chat" element={<ChatPage />} />
           <Route path="*" element={<RootGate />} />
         </Routes>

@@ -10,6 +10,8 @@
 // the server's `error` field is shown verbatim.
 
 import type {
+  ClassPendingResponse,
+  ClassesResponse,
   ConsentDocsResponse,
   ConsentStatusResponse,
   InviteConfirmResponse,
@@ -18,11 +20,13 @@ import type {
   MeResponse,
   PinResetResponse,
   PinVerifyResponse,
+  RegisterResponse,
   SafetyEventDetailResponse,
   SafetyEventsResponse,
   SafetyReviewResponse,
   StepUpResponse,
   StudentsResponse,
+  User,
 } from './types';
 
 export class ApiError extends Error {
@@ -86,6 +90,12 @@ export const api = {
   login: (email: string, password: string) =>
     request<LoginResponse>('/api/auth/login', { body: { email, password } }),
   logout: () => request<{ ok: true }>('/api/auth/logout', { body: {} }),
+  register: (inviteCode: string, email: string, password: string) =>
+    request<RegisterResponse>('/api/auth/register', {
+      body: { invite_code: inviteCode, email, password },
+    }),
+  verifyEmail: (token: string) =>
+    request<{ user: User }>('/api/auth/verify-email', { body: { token } }),
   stepUp: (password: string) =>
     request<StepUpResponse>('/api/auth/step-up', { body: { password } }),
 
@@ -111,6 +121,11 @@ export const api = {
       body: payload,
       csrf: false, // backend-exempt; do NOT send X-Requested-With
     }),
+
+  // W3-C teacher console (read-only)
+  classes: () => request<ClassesResponse>('/api/classes'),
+  classPending: (classId: string) =>
+    request<ClassPendingResponse>(`/api/classes/${classId}/pending`),
 
   safetyEvents: (unreviewedOnly: boolean) =>
     request<SafetyEventsResponse>(

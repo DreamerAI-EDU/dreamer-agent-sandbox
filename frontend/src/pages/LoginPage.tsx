@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { api, ApiError } from '../lib/api';
 import { useLang } from '../lib/i18n';
+import { PasswordInput } from '../components/PasswordInput';
 import type { User } from '../lib/types';
 
 export function LoginPage() {
@@ -22,7 +23,9 @@ export function LoginPage() {
       .me()
       .then((me) => {
         if (!alive) return;
-        if (me.user.role === 'teacher' || me.user.role === 'admin') {
+        if (me.user.role === 'teacher') {
+          navigate('/teacher', { replace: true });
+        } else if (me.user.role === 'admin') {
           navigate('/safety', { replace: true });
         } else {
           navigate('/home', { replace: true });
@@ -50,7 +53,9 @@ export function LoginPage() {
         navigate('/consent', { replace: true });
         return;
       }
-      if (resp.user.role === 'teacher' || resp.user.role === 'admin') {
+      if (resp.user.role === 'teacher') {
+        navigate('/teacher', { replace: true });
+      } else if (resp.user.role === 'admin') {
         navigate('/safety', { replace: true });
       } else {
         navigate('/home', { replace: true });
@@ -100,14 +105,12 @@ export function LoginPage() {
               <label className="mb-1 block text-xs font-medium text-black/60" htmlFor="login-password">
                 {copy.password}
               </label>
-              <input
+              <PasswordInput
                 id="login-password"
-                type="password"
                 autoComplete="current-password"
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full rounded-lg border border-black/10 px-3 py-2 text-sm outline-none focus:border-black/30"
               />
             </div>
             {error && <p className="text-sm text-red-600">{error}</p>}

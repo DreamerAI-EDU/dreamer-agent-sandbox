@@ -93,6 +93,36 @@ export interface Copy {
   safetyStepUpBtn: string;
   safetyStepUpWrong: string;
   safetyClose: string;
+  // teacher console (W3-C)
+  teacherConsole: string;
+  myClasses: string;
+  emptyClasses: string;
+  joinCodeLabel: string;
+  pendingLabel: string;
+  confirmedLabel: string;
+  pendingStudentsTitle: string;
+  noPendingStudents: string;
+  ageBandLabel: string;
+  classGroupMonthly: string;
+  classGroupWorkshop: string;
+  classGroupOther: string;
+  oneOnOneBadge: string;
+  // teacher register (W3-C)
+  teacherRegisterTitle: string;
+  teacherRegisterSubtitle: string;
+  inviteCodeLabel: string;
+  registerBtn: string;
+  registerNote: string;
+  teacherSideNote: string;
+  // teacher register — verify step
+  alreadyHaveAccount: string;
+  verifyTitle: string;
+  verifySubtitle: string;
+  verifyCodeLabel: string;
+  verifyBtn: string;
+  verifyDoneTitle: string;
+  verifyDoneDesc: string;
+  goLogin: string;
   // errors / generic
   loading: string;
   retry: string;
@@ -100,7 +130,7 @@ export interface Copy {
   ageBands: Record<string, string>;
 }
 
-const copyEn: Copy = {
+export const copyEn: Copy = {
   brand: 'Dreamer AI',
   backToHome: 'Back',
   signOut: 'Sign out',
@@ -174,6 +204,33 @@ const copyEn: Copy = {
   safetyStepUpBtn: 'Verify',
   safetyStepUpWrong: 'Incorrect password.',
   safetyClose: 'Close',
+  teacherConsole: 'Teacher Console',
+  myClasses: 'My Classes',
+  emptyClasses: 'No classes yet. Ask an admin to create one for you.',
+  joinCodeLabel: 'Join code',
+  pendingLabel: 'Pending',
+  confirmedLabel: 'Confirmed',
+  pendingStudentsTitle: 'Awaiting confirmation',
+  noPendingStudents: 'No pending students.',
+  ageBandLabel: 'Ages',
+  classGroupMonthly: 'Monthly classes',
+  classGroupWorkshop: 'Short workshops',
+  classGroupOther: 'Other',
+  oneOnOneBadge: '1-on-1',
+  teacherRegisterTitle: 'Join Dreamer AI as a teacher',
+  teacherRegisterSubtitle: 'Use the invite code from your school to create your teacher account.',
+  inviteCodeLabel: 'Invite code',
+  registerBtn: 'Create account',
+  registerNote: 'After signing up we email you a verification code — enter it on the next step, then sign in.',
+  teacherSideNote: 'Class schedules and bookings live in your external tools.',
+  alreadyHaveAccount: 'Already have an account?',
+  verifyTitle: 'Verify your email',
+  verifySubtitle: 'We sent a verification code to',
+  verifyCodeLabel: 'Verification code',
+  verifyBtn: 'Verify',
+  verifyDoneTitle: 'Email verified',
+  verifyDoneDesc: 'Your teacher account is ready. Sign in to open your Teacher Console.',
+  goLogin: 'Sign in now',
   loading: 'Loading…',
   retry: 'Retry',
   unexpectedError: 'Something went wrong.',
@@ -258,6 +315,33 @@ const copyHk: Copy = {
   safetyStepUpBtn: '驗證',
   safetyStepUpWrong: '密碼不正確。',
   safetyClose: '關閉',
+  teacherConsole: '老師工作台',
+  myClasses: '我的班級',
+  emptyClasses: '未有班級。請搵管理員幫你開班。',
+  joinCodeLabel: '邀請碼',
+  pendingLabel: '待確認',
+  confirmedLabel: '已確認',
+  pendingStudentsTitle: '等緊確認嘅學生',
+  noPendingStudents: '冇待確認學生。',
+  ageBandLabel: '年齡',
+  classGroupMonthly: '月費持續班',
+  classGroupWorkshop: '短期工作坊',
+  classGroupOther: '其他',
+  oneOnOneBadge: '1對1',
+  teacherRegisterTitle: '以老師身份加入 Dreamer AI',
+  teacherRegisterSubtitle: '用學校畀你嘅邀請碼建立老師帳號。',
+  inviteCodeLabel: '邀請碼',
+  registerBtn: '建立帳號',
+  registerNote: '註冊後我哋會 email 驗證碼畀你——喺下一步輸入，然後登入。',
+  teacherSideNote: '班上時間地點由你嘅外部工具管理。',
+  alreadyHaveAccount: '已經有帳號？',
+  verifyTitle: '驗證你的電郵',
+  verifySubtitle: '我哋已將驗證碼寄到',
+  verifyCodeLabel: '驗證碼',
+  verifyBtn: '驗證',
+  verifyDoneTitle: '電郵已驗證',
+  verifyDoneDesc: '老師帳號已就緒。登入後會嚟到老師工作台。',
+  goLogin: '即刻登入',
   loading: '載入中…',
   retry: '重試',
   unexpectedError: '發生錯誤。',
@@ -342,6 +426,33 @@ const copyCn: Copy = {
   safetyStepUpBtn: '验证',
   safetyStepUpWrong: '密码不正确。',
   safetyClose: '关闭',
+  teacherConsole: '老师工作台',
+  myClasses: '我的班级',
+  emptyClasses: '还没有班级。请联系管理员创建。',
+  joinCodeLabel: '邀请码',
+  pendingLabel: '待确认',
+  confirmedLabel: '已确认',
+  pendingStudentsTitle: '等待确认的学生',
+  noPendingStudents: '没有待确认学生。',
+  ageBandLabel: '年龄',
+  classGroupMonthly: '月费持续班',
+  classGroupWorkshop: '短期工作坊',
+  classGroupOther: '其他',
+  oneOnOneBadge: '1对1',
+  teacherRegisterTitle: '以老师身份加入 Dreamer AI',
+  teacherRegisterSubtitle: '使用学校发给你的邀请码创建老师账号。',
+  inviteCodeLabel: '邀请码',
+  registerBtn: '创建账号',
+  registerNote: '注册后我们会把验证码发到你的邮箱——在下一步输入，然后登录。',
+  teacherSideNote: '上课时间地点由你的外部工具管理。',
+  alreadyHaveAccount: '已有账号？',
+  verifyTitle: '验证你的邮箱',
+  verifySubtitle: '我们已将验证码发送到',
+  verifyCodeLabel: '验证码',
+  verifyBtn: '验证',
+  verifyDoneTitle: '邮箱已验证',
+  verifyDoneDesc: '老师账号已就绪。登录后进入老师工作台。',
+  goLogin: '立即登录',
   loading: '加载中…',
   retry: '重试',
   unexpectedError: '发生错误。',

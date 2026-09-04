@@ -71,6 +71,9 @@ CREATE TABLE IF NOT EXISTS classes (
     teacher_id    TEXT NOT NULL REFERENCES users(id),
     name          TEXT NOT NULL,
     join_code     TEXT NOT NULL,
+    class_type    TEXT NOT NULL DEFAULT 'monthly',
+    grade_band    TEXT,
+    is_one_on_one INTEGER NOT NULL DEFAULT 0,
     created_at    TEXT NOT NULL
 );
 
@@ -136,6 +139,36 @@ def ensure_schema() -> None:
     conn = connect()
     try:
         conn.executescript(_DDL)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# W3-C class metadata columns (boss ruling 2026-09-04): one migration, three
+# columns. Deliberately NOT run from ensure_schema — startup auto-migration is
+# still backlog — so existing VPS DBs need a manual step (see runbook).
+_CLASS_META_COLUMNS = {
+    "class_type": "TEXT NOT NULL DEFAULT 'monthly'",
+    "grade_band": "TEXT",
+    "is_one_on_one": "INTEGER NOT NULL DEFAULT 0",
+}
+
+
+def apply_class_meta_migration() -> None:
+    """Idempotently add the W3-C class metadata columns to an existing DB.
+
+    Checks PRAGMA table_info before every ALTER; safe to re-run. Existing rows
+    get class_type='monthly' / is_one_on_one=0 via the DEFAULT clause.
+    """
+    conn = connect()
+    try:
+        existing = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(classes)")
+        }
+        for col, decl in _CLASS_META_COLUMNS.items():
+            if col not in existing:
+                conn.execute(f"ALTER TABLE classes ADD COLUMN {col} {decl}")
         conn.commit()
     finally:
         conn.close()

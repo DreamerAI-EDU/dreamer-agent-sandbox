@@ -439,7 +439,9 @@ EXPECTED_SCHEMA = {
     ],
     "classes": [
         ("id", "TEXT"), ("teacher_id", "TEXT"), ("name", "TEXT"),
-        ("join_code", "TEXT"), ("created_at", "TEXT"),
+        ("join_code", "TEXT"), ("class_type", "TEXT"),
+        ("grade_band", "TEXT"), ("is_one_on_one", "INTEGER"),
+        ("created_at", "TEXT"),
     ],
     "class_students": [
         ("class_id", "TEXT"), ("student_id", "TEXT"), ("status", "TEXT"),

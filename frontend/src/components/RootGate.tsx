@@ -24,7 +24,9 @@ export function RootGate() {
           setTarget('/consent');
           return;
         }
-        if (me.user.role === 'teacher' || me.user.role === 'admin') {
+        if (me.user.role === 'teacher') {
+          setTarget('/teacher');
+        } else if (me.user.role === 'admin') {
           setTarget('/safety');
         } else {
           setTarget('/home');

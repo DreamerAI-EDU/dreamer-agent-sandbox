@@ -51,6 +51,9 @@ CREATE TABLE IF NOT EXISTS classes (
     teacher_id    TEXT NOT NULL REFERENCES users(id),
     name          TEXT NOT NULL,
     join_code     TEXT NOT NULL,
+    class_type    TEXT NOT NULL DEFAULT 'monthly',   -- monthly / workshop (W3-C)
+    grade_band    TEXT,                              -- P1-P3 / P4-P6 / S1-S3 (W3-C)
+    is_one_on_one INTEGER NOT NULL DEFAULT 0,        -- 0 / 1 (W3-C)
     created_at    TEXT NOT NULL
 );
 

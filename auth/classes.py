@@ -80,6 +80,9 @@ def create_class(
     teacher_id: str,
     name: str,
     join_code: Optional[str] = None,
+    class_type: str = "monthly",
+    grade_band: Optional[str] = None,
+    is_one_on_one: bool = False,
 ) -> str:
     if class_id is None:
         class_id = str(uuid.uuid4())
@@ -89,9 +92,20 @@ def create_class(
     conn = db.connect()
     try:
         conn.execute(
-            """INSERT INTO classes (id, teacher_id, name, join_code, created_at)
-               VALUES (?, ?, ?, ?, ?)""",
-            (class_id, teacher_id, name, join_code, _now_iso()),
+            """INSERT INTO classes
+                   (id, teacher_id, name, join_code, class_type, grade_band,
+                    is_one_on_one, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                class_id,
+                teacher_id,
+                name,
+                join_code,
+                class_type,
+                grade_band,
+                1 if is_one_on_one else 0,
+                _now_iso(),
+            ),
         )
         conn.commit()
     finally:
@@ -115,7 +129,8 @@ def list_classes_for_teacher(teacher_id: str) -> list[dict[str, Any]]:
     conn = db.connect()
     try:
         cur = conn.execute(
-            """SELECT c.id, c.teacher_id, c.name, c.join_code, c.created_at,
+            """SELECT c.id, c.teacher_id, c.name, c.join_code,
+                      c.class_type, c.grade_band, c.is_one_on_one, c.created_at,
                       SUM(CASE WHEN cs.status = 'pending' THEN 1 ELSE 0 END) AS pending_count,
                       SUM(CASE WHEN cs.status = 'confirmed' THEN 1 ELSE 0 END) AS confirmed_count
                FROM classes c
@@ -135,6 +150,9 @@ def list_classes_for_teacher(teacher_id: str) -> list[dict[str, Any]]:
                 "id": row["id"],
                 "name": row["name"],
                 "join_code": row["join_code"],
+                "class_type": row["class_type"],
+                "grade_band": row["grade_band"],
+                "is_one_on_one": int(row["is_one_on_one"] or 0),
                 "pending_count": int(row["pending_count"] or 0),
                 "confirmed_count": int(row["confirmed_count"] or 0),
                 "created_at": row["created_at"],
@@ -599,3 +617,169 @@ def send_invite_email(*, to_addr: str, token: str, base_url: str) -> bool:
         "If this is not for you, you can ignore this email.",
     ])
     return send_email(to_addr=to_addr, subject=subject, body=body)
+
+
+# ---------------------------------------------------------------------------
+# W3-C — lifecycle notifications (通知-1 / 通知-2) + teacher pending console
+# ---------------------------------------------------------------------------
+
+def student_label(info: dict[str, Any]) -> str:
+    """Kid-facing label for notification templates — first name + age band
+    only. The schema has no last name by design (B24), and the label never
+    includes the student id or the parent's name."""
+    return f"{info['first_name']} ({info['age_band']})"
+
+
+def teacher_notify_info(
+    *, class_id: str, student_id: str
+) -> Optional[dict[str, Any]]:
+    """Teacher + class context for the 通知-1 email (after parent confirm)."""
+    db.ensure_schema()
+    conn = db.connect()
+    try:
+        row = conn.execute(
+            """SELECT c.id AS class_id, c.name AS class_name,
+                      t.id AS teacher_id, t.email AS teacher_email,
+                      s.first_name, s.age_band
+               FROM class_students cs
+               JOIN classes c ON c.id = cs.class_id
+               JOIN users t ON t.id = c.teacher_id
+               JOIN students s ON s.id = cs.student_id
+               WHERE cs.class_id = ? AND cs.student_id = ?""",
+            (class_id, student_id),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return None
+    return dict(row)
+
+
+def parent_notify_info(
+    *, class_id: str, student_id: str
+) -> Optional[dict[str, Any]]:
+    """Parent + class context for the 通知-2 email (after teacher confirm)."""
+    db.ensure_schema()
+    conn = db.connect()
+    try:
+        row = conn.execute(
+            """SELECT c.id AS class_id, c.name AS class_name,
+                      p.id AS parent_id, p.email AS parent_email,
+                      s.first_name, s.age_band
+               FROM class_students cs
+               JOIN classes c ON c.id = cs.class_id
+               JOIN students s ON s.id = cs.student_id
+               JOIN users p ON p.id = s.parent_id
+               WHERE cs.class_id = ? AND cs.student_id = ?
+                 AND cs.status = 'confirmed'""",
+            (class_id, student_id),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return None
+    return dict(row)
+
+
+def send_teacher_pending_notice(
+    *, to_addr: str, student_label: str, class_name: str, base_url: str
+) -> bool:
+    """通知-1 — email the teacher after a parent confirms an invite.
+
+    Fail-silent contract: returns False on SMTP failure, never raises.
+    The confirm handler writes an audit row with the outcome either way.
+    """
+    from .email import send_email
+
+    link = f"{base_url.rstrip('/')}/teacher"
+    subject = "[Dreamer AI Edu] 家長已確認邀請 / Parent confirmed an invitation"
+    body = "\n".join([
+        "Dreamer AI Edu 班級通知 / Class Notice",
+        "",
+        "你發出嘅家長邀請已被確認，學生而家等待你確認班級連結。",
+        "A parent has accepted your invitation. The student is now waiting for you to confirm the class link.",
+        "",
+        "學生 / Student: " + student_label,
+        "班別 / Class: " + class_name,
+        "",
+        "待確認連結 / Review link: " + link,
+        "",
+        "登入後喺「我的班級」揀相應班別確認即可。",
+        "Sign in and confirm the student under the matching class.",
+    ])
+    return send_email(to_addr=to_addr, subject=subject, body=body)
+
+
+def send_parent_confirmed_notice(
+    *, to_addr: str, student_label: str, class_name: str
+) -> bool:
+    """通知-2 — email the parent after the teacher confirms the binding.
+
+    Parent-facing, formal tone (W3 spec §7-3, 老板 09-03 拍板). Fail-silent
+    like the rest of the notification channel.
+    """
+    from .email import send_email
+
+    subject = "[Dreamer AI Edu] 老師已確認你嘅子女帳戶 / Teacher confirmed your child's account"
+    body = "\n".join([
+        "Dreamer AI Edu 家長通知 / Parent Notice",
+        "",
+        "老師已確認你子女嘅帳戶連結。佢哋而家可以開始使用 Dreamer AI。",
+        "Your child's account has been confirmed by the teacher and is now ready to use Dreamer AI.",
+        "",
+        "學生 / Student: " + student_label,
+        "班別 / Class: " + class_name,
+        "",
+        "如有任何疑問，請直接聯絡學校老師。",
+        "If you have any questions, please contact the school teacher.",
+    ])
+    return send_email(to_addr=to_addr, subject=subject, body=body)
+
+
+def list_class_pending_students(
+    *, teacher_id: str, class_id: str
+) -> Optional[list[dict[str, Any]]]:
+    """Pending students in a teacher-owned class.
+
+    Returns None when the class does not belong to this teacher (unified
+    with the confirm guard), otherwise the pending list. Full student ids
+    are returned — this is the trusted teacher console surface (same
+    precedent as the safety-review detail view), never the parent-side
+    8-char mask.
+    """
+    db.ensure_schema()
+    conn = db.connect()
+    try:
+        cls = conn.execute(
+            "SELECT teacher_id FROM classes WHERE id = ?", (class_id,)
+        ).fetchone()
+        if cls is None or cls["teacher_id"] != teacher_id:
+            return None
+        rows = conn.execute(
+            """SELECT s.id AS student_id, s.first_name, s.age_band,
+                      s.lang_code, i.parent_email
+               FROM class_students cs
+               JOIN students s ON s.id = cs.student_id
+               LEFT JOIN invites i
+                 ON i.student_id = cs.student_id
+                AND i.class_id = cs.class_id
+                AND i.used_at IS NOT NULL
+               WHERE cs.class_id = ? AND cs.status = 'pending'
+               GROUP BY s.id
+               ORDER BY s.created_at""",
+            (class_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    out = []
+    for row in rows:
+        out.append(
+            {
+                "student_id": row["student_id"],
+                "first_name": row["first_name"],
+                "age_band": row["age_band"],
+                "lang_code": row["lang_code"],
+                "parent_email": row["parent_email"],
+            }
+        )
+    return out

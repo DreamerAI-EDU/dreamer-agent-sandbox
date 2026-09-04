@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { api, ApiError } from '../lib/api';
 import { useLang } from '../lib/i18n';
+import { PasswordInput } from '../components/PasswordInput';
 import type { InvitePublic } from '../lib/types';
 
 type InviteState =
@@ -120,15 +121,13 @@ export function InvitePage() {
               <label className="mb-1 block text-xs font-medium text-black/60" htmlFor="invite-password">
                 {copy.invitePasswordHint}
               </label>
-              <input
+              <PasswordInput
                 id="invite-password"
-                type="password"
                 autoComplete="new-password"
                 required
                 minLength={10}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full rounded-lg border border-black/10 px-3 py-2 text-sm outline-none focus:border-black/30"
               />
               <p className="mt-1 text-xs text-black/40">{copy.passwordPolicy}</p>
             </div>

@@ -22,6 +22,39 @@ export interface LoginResponse {
   missing_consent: string[];
 }
 
+// W3-C teacher console
+export interface ClassSummary {
+  id: string;
+  name: string;
+  join_code: string;
+  class_type: 'monthly' | 'workshop';
+  grade_band: string | null;
+  is_one_on_one: number;
+  created_at: string;
+  pending_count: number;
+  confirmed_count: number;
+}
+
+export interface ClassesResponse {
+  classes: ClassSummary[];
+}
+
+export interface PendingStudent {
+  student_id: string;
+  first_name: string;
+  age_band: string;
+  lang_code: string;
+}
+
+export interface ClassPendingResponse {
+  class_id: string;
+  pending: PendingStudent[];
+}
+
+export interface RegisterResponse {
+  user: User;
+}
+
 export interface ConsentDoc {
   doc_type: string;
   current_version: string;

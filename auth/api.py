@@ -654,7 +654,12 @@ def _resolve_pin(payload: dict[str, Any]) -> tuple[str, str]:
 
 
 async def handle_create_class(request: web.Request) -> web.Response:
-    """POST /api/classes — teacher creates a class (own classes only)."""
+    """POST /api/classes — teacher creates a class (own classes only).
+
+    W3-C: accepts optional class_type (monthly/workshop), grade_band
+    (P1-P3/P4-P6/S1-S3) and is_one_on_one (0/1). Defaults keep old clients
+    working: class_type=monthly, grade_band=NULL, is_one_on_one=0.
+    """
     user = _session_user(request)
     if user is None:
         return web.json_response(_ERR_AUTH, status=401)
@@ -669,7 +674,26 @@ async def handle_create_class(request: web.Request) -> web.Response:
     if not name or len(name) > 60:
         return web.json_response(_ERR_INVALID, status=400)
 
-    class_id = classes_mod.create_class(teacher_id=user["id"], name=name)
+    class_type = str(payload.get("class_type") or "monthly").strip()
+    if class_type not in ("monthly", "workshop"):
+        return web.json_response(_ERR_INVALID, status=400)
+
+    grade_band_raw = payload.get("grade_band")
+    grade_band: Optional[str] = None
+    if grade_band_raw not in (None, ""):
+        grade_band = str(grade_band_raw).strip()
+        if grade_band not in AGE_BANDS:
+            return web.json_response(_ERR_INVALID, status=400)
+
+    is_one_on_one = payload.get("is_one_on_one") in (True, 1, "1", "true")
+
+    class_id = classes_mod.create_class(
+        teacher_id=user["id"],
+        name=name,
+        class_type=class_type,
+        grade_band=grade_band,
+        is_one_on_one=is_one_on_one,
+    )
     cls = classes_mod.get_class_by_id(class_id)
     return web.json_response(
         {
@@ -677,6 +701,9 @@ async def handle_create_class(request: web.Request) -> web.Response:
                 "id": cls["id"],
                 "name": cls["name"],
                 "join_code": cls["join_code"],
+                "class_type": cls["class_type"],
+                "grade_band": cls["grade_band"],
+                "is_one_on_one": int(cls["is_one_on_one"] or 0),
             }
         },
         status=201,
@@ -1047,6 +1074,13 @@ async def handle_confirm_invite(request: web.Request) -> web.Response:
             "class_id": result["class_id"],
         }
     )
+    # W3-C 通知-1 — email the class teacher (class-owner route, never
+    # hardcoded). Fail-silent + audited; never blocks the confirm flow.
+    _notify_teacher_pending(
+        class_id=result["class_id"],
+        student_id=result["student_id"],
+        actor_user_id=parent_user_id,
+    )
     resp = web.json_response(
         {"ok": True, "user": {"id": parent_user_id, "email": result["parent_email"]}},
         status=201,
@@ -1176,7 +1210,134 @@ async def handle_confirm_class_student(request: web.Request) -> web.Response:
             "student_id": student_id,
         }
     )
+    # W3-C 通知-2 — email the parent (formal, parent-facing tone) after the
+    # teacher confirms. Fail-silent + audited; never blocks the response.
+    _notify_parent_confirmed(
+        class_id=class_id,
+        student_id=student_id,
+        actor_user_id=user["id"],
+    )
     return web.json_response({"ok": True, "status": "confirmed"})
+
+
+# ---------------------------------------------------------------------------
+# W3-C lifecycle notifications (通知-1 / 通知-2) + teacher pending console
+# ---------------------------------------------------------------------------
+
+def _notify_teacher_pending(
+    *, class_id: str, student_id: str, actor_user_id: str
+) -> None:
+    """通知-1 — email the class teacher after a parent confirms an invite.
+
+    Recipient routing follows the class owner (classes.teacher_id), never a
+    hardcoded address. Fail-silent contract: SMTP failures only downgrade
+    the audit level, they never raise into the confirm flow.
+    """
+    info = classes_mod.teacher_notify_info(class_id=class_id, student_id=student_id)
+    if info is None:
+        consent.write_audit_log(
+            {
+                "timestamp": _now_iso(),
+                "level": "WARNING",
+                "event": "notify_teacher_pending_skipped",
+                "user_id": actor_user_id,
+                "class_id": class_id,
+                "student_id": student_id,
+                "detail": "teacher_notify_info returned None (no class row)",
+            }
+        )
+        return
+    ok = classes_mod.send_teacher_pending_notice(
+        to_addr=info["teacher_email"],
+        student_label=classes_mod.student_label(info),
+        class_name=info["class_name"],
+        base_url=classes_mod.get_frontend_base_url(),
+    )
+    consent.write_audit_log(
+        {
+            "timestamp": _now_iso(),
+            "level": "INFO" if ok else "WARNING",
+            "event": "notify_teacher_pending",
+            "user_id": actor_user_id,
+            "teacher_id": info["teacher_id"],
+            "class_id": class_id,
+            "student_id": student_id,
+            "to": info["teacher_email"],
+            "ok": ok,
+        }
+    )
+
+
+def _notify_parent_confirmed(
+    *, class_id: str, student_id: str, actor_user_id: str
+) -> None:
+    """通知-2 — email the parent after the teacher confirms the binding.
+
+    Parent-facing, formal tone (spec §7-3). Fail-silent + audited.
+    """
+    info = classes_mod.parent_notify_info(class_id=class_id, student_id=student_id)
+    if info is None:
+        consent.write_audit_log(
+            {
+                "timestamp": _now_iso(),
+                "level": "WARNING",
+                "event": "notify_parent_confirmed_skipped",
+                "user_id": actor_user_id,
+                "class_id": class_id,
+                "student_id": student_id,
+                "detail": "parent_notify_info returned None (not confirmed)",
+            }
+        )
+        return
+    ok = classes_mod.send_parent_confirmed_notice(
+        to_addr=info["parent_email"],
+        student_label=classes_mod.student_label(info),
+        class_name=info["class_name"],
+    )
+    consent.write_audit_log(
+        {
+            "timestamp": _now_iso(),
+            "level": "INFO" if ok else "WARNING",
+            "event": "notify_parent_confirmed",
+            "user_id": actor_user_id,
+            "parent_user_id": info["parent_id"],
+            "class_id": class_id,
+            "student_id": student_id,
+            "to": info["parent_email"],
+            "ok": ok,
+        }
+    )
+
+
+async def handle_class_pending(request: web.Request) -> web.Response:
+    """GET /api/classes/{id}/pending — teacher console pending list.
+
+    Teacher-only; cross-teacher attempts are WARNING-logged then rejected
+    with the unified 403 (DAO returns None for a foreign/unowned class).
+    Returns full student ids — this is the trusted teacher surface, never
+    the parent-side 8-char mask.
+    """
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+    if user["role"] != "teacher":
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    class_id = request.match_info.get("id", "")
+    cls = classes_mod.get_class_by_id(class_id)
+    if cls is not None and cls["teacher_id"] != user["id"]:
+        _log_security_warning(
+            "class_pending_cross_teacher",
+            user_id=user["id"],
+            target_id=class_id,
+            detail="attempted to list pending students of another teacher's class",
+        )
+    pending = classes_mod.list_class_pending_students(
+        teacher_id=user["id"], class_id=class_id
+    )
+    if pending is None:
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+    return web.json_response({"class_id": class_id, "pending": pending})
 
 
 # ---------------------------------------------------------------------------
@@ -1348,6 +1509,7 @@ def build_app() -> web.Application:
     # W2 PR#3 — classes / students / PIN / invites
     app.router.add_post("/api/classes", handle_create_class)
     app.router.add_get("/api/classes", handle_list_classes)
+    app.router.add_get("/api/classes/{id}/pending", handle_class_pending)
     app.router.add_post("/api/classes/{id}/confirm", handle_confirm_class_student)
     app.router.add_post("/api/students", handle_create_student)
     app.router.add_get("/api/students", handle_list_students)

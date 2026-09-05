@@ -119,3 +119,4 @@ All items closed — Day 10 gate ✅ (2026-08-08).
 - [x] `test_concurrent.py` — 10 concurrent stress test, 10/10 PASS
 - [x] Trial WS re-run: verified `done` / `result` / `cost_summary` / UTF-8 round-trip
 - [x] Day 10 gate materials: trial output, test pass log, this doc
+- [x] B18 (2026-09-05 W3-A real-WS trial): top-level `language` field verified on live relay — `zh-hk` request round-tripped full Traditional Chinese text end-to-end (dreamer-api → dreamer-deeptutor unified WS); §2.1 semantics hold on the real container path, not just mock. Doc-work item closed.

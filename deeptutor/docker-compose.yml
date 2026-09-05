@@ -14,8 +14,11 @@ services:
       - "127.0.0.1:${DEEPTUTOR_HTTP_PORT:-8000}:8000"       # Health check + management
       - "127.0.0.1:8001:8001"                                # Backend API (WS + HTTP)
     volumes:
-      # Shared KBs (read-only) — SoT sync source, immutable to the container
-      - ./knowledge_bases:/app/data/kb_sot:ro
+      # Shared KBs (read-only) — SoT sync source, immutable to the container.
+      # Compose file lives in deeptutor/, so repo-root SoT is ../knowledge_bases.
+      # Fixed 0b7c164 split: previously pointed at deeptutor/knowledge_bases
+      # (stale pre-consolidation copies) instead of the real repo-root SoT.
+      - ../knowledge_bases:/app/data/kb_sot:ro
       # KB root (writable): kb_config.json, metadata.json, provider indexes.
       # Single-direction discipline: host SoT -> robocopy -> kb_runtime.
       - ./kb_runtime:/app/data/knowledge_bases

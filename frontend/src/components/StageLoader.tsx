@@ -12,11 +12,12 @@ interface Props {
   stages: ActiveStage[];
   theme: BandTheme;
   lang: Lang;
+  note?: string | null; // real-WS progress kid note (e.g. "探索緊你條問題…")
 }
 
 // Staged loading: LLM round-trips run 56–100s, so kids watch Dibi climb
 // the ladder while named stages tick over — never a dead spinner.
-export function StageLoader({ stages, theme, lang }: Props) {
+export function StageLoader({ stages, theme, lang, note }: Props) {
   const [dots, setDots] = useState(1);
 
   useEffect(() => {
@@ -53,6 +54,16 @@ export function StageLoader({ stages, theme, lang }: Props) {
             </li>
           ))}
         </ol>
+        {note && (
+          <p className="mt-2 flex items-center gap-1.5 text-xs font-medium text-white/75">
+            <span
+              className="inline-block h-1.5 w-1.5 animate-pulse rounded-full"
+              style={{ backgroundColor: theme.accent }}
+              aria-hidden
+            />
+            {note}
+          </p>
+        )}
       </div>
     </div>
   );

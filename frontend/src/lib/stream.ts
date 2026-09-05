@@ -1,25 +1,36 @@
-// Stream seam — the single interface both the mock and the future WS client
+// Stream seam — the single interface both the mock and the real WS client
 // implement, so they are 1:1 swappable behind VITE_BACKEND=mock|ws.
-// W2 PR#6: VITE_BACKEND now defaults to 'backend' (the real backend is the
-// default deployment target). The chat seam is NOT wired to a WS stream yet —
-// any non-'ws' value keeps the scripted MOCK_TURNS demo alive for W3 to
-// replace. The five real REST pages bypass this seam entirely (lib/api.ts).
+// W2 PR#6: VITE_BACKEND defaults to 'backend' (real backend default target);
+// the chat stream stays on the scripted mock for any non-'ws' value.
+// Phase 7 W3-A §4.2: VITE_BACKEND=ws now resolves to the real WS client
+// (GET /api/ws/chat with the auth session cookie; student via query param).
+// The switch lives HERE — components never hardcode which stream they use.
 import type { ChatPayload, Lang } from './mock';
 import { MOCK_TURNS, LANG_CODE } from './mock';
 import type { ActiveStage } from '../components/StageLoader';
+import type { ChatStreamStatus, KidErrorKind } from './chatErrors';
+import { createWsChatStream } from './chatWs';
 
 export type StreamHandlers = {
   onStages: (stages: ActiveStage[]) => void; // ← stage_start / stage_end
   onProgress: (pct: number) => void; // ← progress 0–100 (wired in Step 1, UI expansion later)
-  onContent: (chunk: string) => void; // ← content×N (reserved, not rendered in Step 1 MVP)
+  onProgressNote?: (note: string | null) => void; // ← progress kid note (real WS)
+  onContent: (chunk: string) => void; // ← content×N (true streaming render in W3-A)
   onResult: (payload: ChatPayload) => void; // ← result + done
+  onStatus?: (status: ChatStreamStatus) => void; // ← ws lifecycle (connecting/streaming/disconnected/reconnecting/failed)
+  onError?: (kind: KidErrorKind) => void; // ← kid-safe error class (raw error never surfaces)
 };
+
+export interface StreamContext {
+  student?: string; // 8-char mask prefix passed to the WS handshake
+}
 
 export type PlayStream = (
   input: string,
   band: ChatPayload['age_band'],
   lang: Lang,
   h: StreamHandlers,
+  ctx?: StreamContext,
 ) => () => void;
 
 // Resolve which mock scripted turn matches the user's input; fall back to
@@ -61,7 +72,8 @@ export function playStream(
   });
 
   const content = script.payload[band][lang];
-  // Emit content in chunks (reserved for Step 1.5 streaming render; MVP just collects).
+  // Emit content in chunks (streaming render is wired for the real WS path;
+  // the mock result arrives whole shortly after — chunks stay harmless).
   const chunkSize = 40;
   for (let i = 0; i < content.length; i += chunkSize) {
     const chunk = content.slice(i, i + chunkSize);
@@ -89,12 +101,33 @@ export function playStream(
   return () => timers.forEach(clearTimeout);
 }
 
-// Env switch: VITE_BACKEND=backend (default) → real backend is the default
-// deployment target; the chat stream remains on the mock until W3 wires 'ws'.
+// Env switch — THE single mock→real switch point for the chat stream.
+//   VITE_BACKEND=ws     → real WS client (/api/ws/chat + handshake gate)
+//   anything else       → scripted mock (VITE_BACKEND=mock|backend, historical
+//                          default keeps the demo alive pre-deploy)
 export function createStream(): PlayStream {
   const backend = import.meta.env.VITE_BACKEND ?? 'backend';
   if (backend === 'ws') {
-    console.warn('[stream] VITE_BACKEND=ws not wired until Step 2 deployment; falling back to mock.');
+    console.info('[stream] VITE_BACKEND=ws → real WS chat client');
+    return (input, band, lang, h, ctx) => {
+      // Fill optional lifecycle callbacks so the WS client sees a full handler
+      // set (mock callers keep working untouched).
+      const handlers = {
+        onStages: h.onStages,
+        onProgress: h.onProgress,
+        onProgressNote: h.onProgressNote ?? (() => {}),
+        onContent: h.onContent,
+        onResult: h.onResult,
+        onStatus: h.onStatus ?? (() => {}),
+        onError: h.onError ?? (() => {}),
+      };
+      return createWsChatStream(input, band, lang, handlers, ctx ?? { student: undefined });
+    };
   }
+  console.info(`[stream] VITE_BACKEND=${backend} → scripted mock stream (set =ws for the real backend)`);
   return playStream;
+}
+
+export function isRealWsMode(): boolean {
+  return (import.meta.env.VITE_BACKEND ?? 'backend') === 'ws';
 }

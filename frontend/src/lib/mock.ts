@@ -2,6 +2,29 @@
 // NOTE: lang_code now includes 'zh-cn' (国语) — Hermes contract enum needs the same update.
 export type Lang = 'en' | 'hk' | 'cn';
 
+// cost_summary may arrive in either currency shape:
+//   - HKD shape: the original Hermes mock contract
+//   - USD shape: the real DeepTutor unified WS usage summary
+//     {total_cost_usd, total_tokens, total_calls, prompt_tokens, completion_tokens}
+//     read from result.metadata.metadata.cost_summary (nested) with a flat
+//     result.metadata.cost_summary fallback — the render layer shows the
+//     matching currency label and never invents an exchange rate.
+export type CostSummaryHkd = {
+  tokens_in: number;
+  tokens_out: number;
+  est_cost_hkd: number;
+};
+
+export type CostSummaryUsd = {
+  total_tokens: number;
+  total_calls: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_cost_usd: number;
+};
+
+export type CostSummary = CostSummaryHkd | CostSummaryUsd;
+
 export interface ChatPayload {
   content: string;
   mode: 'DIRECT' | 'CONTEXTUAL' | 'HYBRID';
@@ -9,7 +32,7 @@ export interface ChatPayload {
   age_band: 'P1-P3' | 'P4-P6' | 'S1-S3';
   kid_label: string;
   citations: { kb: string; topic_id: string; title: string }[];
-  cost_summary: { tokens_in: number; tokens_out: number; est_cost_hkd: number };
+  cost_summary: CostSummary;
 }
 
 export interface BandTheme {

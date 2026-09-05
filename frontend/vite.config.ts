@@ -12,7 +12,9 @@ export default defineConfig(({ mode }) => ({
     // W2 PR#6 — dev proxy to the real aiohttp backend on localhost:8001.
     // /legal/* is proxied too so embedded legal pages render in dev.
     proxy: {
-      '/api': 'http://localhost:8001',
+      // Phase 7 W3-A — /api/ws/chat is a WS upgrade; http-proxy needs ws:true
+      // or dev-mode sockets get a 400 on the upgrade request.
+      '/api': { target: 'http://localhost:8001', ws: true, changeOrigin: true },
       '/legal': 'http://localhost:8001',
     },
   },

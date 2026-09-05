@@ -10,6 +10,9 @@ export const STAGE_MAP: Record<string, Record<Lang, string>> = {
   retrieval: { en: 'Looking inside the Dreamer library…', hk: '喺 Dreamer 知識庫搵資料…', cn: '正在翻 Dreamer 知识库…' },
   writing: { en: 'Writing an answer just for you…', hk: '寫緊一個專屬答案俾你…', cn: '正在为你写专属答案…' },
   guard: { en: 'Checking the responsible-use rules…', hk: '睇緊負責任使用守則…', cn: '正在检查负责任使用守则…' },
+  // Real DeepTutor chat stage names (observed on the real container 2026-09-05)
+  exploring: { en: 'Exploring your question…', hk: '探索緊你條問題…', cn: '正在探索你的问题…' },
+  responding: { en: 'Writing your answer…', hk: '寫緊你嘅答案…', cn: '正在写你的答案…' },
 };
 
 const UNKNOWN_NOTE: Record<Lang, string> = {

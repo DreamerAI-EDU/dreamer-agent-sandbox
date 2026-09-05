@@ -33,20 +33,22 @@ kb_runtime/                          # 容器 KB root（rw bind mount，見 §1�
 
 probe 發現：`DEEPTUTOR_KB_ROOT` 環境變數**冇被 DeepTutor 讀取**（legacy env）；KB root 實際由 `workspace_root/knowledge_bases` 決定（即 `/app/data/knowledge_bases`）。而 DeepTutor 會喺 KB root 寫 `kb_config.json`、每 KB `metadata.json`、`.progress.json` 同 `version-N/` index——**ro mount 會擋死成個 reindex**（Errno 30），唔單止 `configs/sync`。
 
-**修正後 compose volumes**（`deeptutor/docker-compose.yml`）：
+**修正後 compose volumes**（`deeptutor/docker-compose.yml`；compose 檔案喺 `deeptutor/` 下，相對路徑以佢為基準）：
 
 ```yaml
     volumes:
-      # Shared KBs (read-only) — SoT sync source, immutable to the container
-      - ./knowledge_bases:/app/data/kb_sot:ro
+      # Shared KBs (read-only) — SoT sync source, immutable to the container.
+      # Compose file lives in deeptutor/, so repo-root SoT is ../knowledge_bases.
+      - ../knowledge_bases:/app/data/kb_sot:ro
       # KB root (writable): kb_config.json, metadata.json, provider indexes.
       # Single-direction discipline: host SoT -> robocopy -> kb_runtime.
       - ./kb_runtime:/app/data/knowledge_bases
 ```
 
-- `deeptutor/knowledge_bases/`（repo SoT）→ 容器 `/app/data/kb_sot`（**ro**，容器永遠寫唔到）
+- `knowledge_bases/`（repo 根 SoT；由 `0b7c164` consolidation 遷移，compose 用 `../knowledge_bases`）→ 容器 `/app/data/kb_sot`（**ro**，容器永遠寫唔到）
 - `deeptutor/kb_runtime/`（生成物，gitignore）→ 容器 `/app/data/knowledge_bases`（**rw**，DeepTutor 正常運作）
-- 單向紀律：host SoT → robocopy → kb_runtime → 容器；`kb_runtime/` 已入 `.gitignore`
+- 單向紀律：repo 根 SoT → robocopy → kb_runtime → 容器；`kb_runtime/` 已入 `.gitignore`
+- 分叉修正記錄：`0b7c164` 遷移 SoT 時漏清 `deeptutor/knowledge_bases/` 舊副本（6 個 tracked md，含 `domain_agent_owner` 禁字段）兼漏改本 mount；2026-09-05 watermark PR 刪舊檔並將 mount 指回真 SoT
 
 ---
 

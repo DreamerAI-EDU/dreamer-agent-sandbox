@@ -245,6 +245,37 @@ def has_withdrawable_agreement(
     )
 
 
+def student_media_consent_withdrawn(
+    user_id: str,
+    student_id: str,
+) -> bool:
+    """True when the student's latest media_consent row is withdrawn.
+
+    Scope matches sign/withdraw: student-bound rows plus account-level
+    NULL rows both cover the student (latest row decides, exactly the
+    has_withdrawable_agreement rule). A withdrawn row means the parent
+    revoked media consent for this child; the W3-A WS chat handshake
+    refuses to open a new session for such a student. No media rows at
+    all (never signed) is NOT a withdrawal — handshake proceeds.
+    """
+    from . import db
+
+    db.ensure_schema()
+    conn = db.connect()
+    try:
+        cur = conn.execute(
+            """SELECT action FROM consent_log
+               WHERE user_id = ? AND doc_type = ?
+                 AND (student_id = ? OR student_id IS NULL)
+               ORDER BY created_at DESC, rowid DESC LIMIT 1""",
+            (user_id, "media_consent", student_id),
+        )
+        row = cur.fetchone()
+    finally:
+        conn.close()
+    return bool(row and row["action"] == "withdrawn")
+
+
 def required_consent_gaps(user_id: str) -> list[str]:
     """Doc types that are required:true and lack a current-version agreement.
 

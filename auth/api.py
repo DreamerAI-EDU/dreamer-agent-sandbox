@@ -816,8 +816,7 @@ async def handle_pin_verify(request: web.Request) -> web.Response:
         )
         return web.json_response(_ERR_FORBIDDEN, status=403)
 
-    statuses = classes_mod.student_class_statuses(student["id"])
-    if statuses and "confirmed" not in statuses:
+    if not classes_mod.student_class_confirmed(student["id"]):
         return web.json_response({"error": "等待老師確認"}, status=403)
 
     # Lockout bookkeeping is keyed by the resolved full student id — never
@@ -1530,5 +1529,11 @@ def build_app() -> web.Application:
     app.router.add_post(
         "/api/teacher/safety-events/{id}/review", handle_safety_event_review
     )
+    # W3-A — real WS chat (server-side handshake gate + DeepTutor relay).
+    # GET (WS upgrade); csrf_guard only protects POSTs. Import is deferred
+    # to keep this module's top-level dependency graph unchanged.
+    from . import ws_chat as ws_chat_mod
+
+    app.router.add_get("/api/ws/chat", ws_chat_mod.handle_ws_chat)
     app.router.add_get("/legal/{slug}", handle_legal_page)
     return app

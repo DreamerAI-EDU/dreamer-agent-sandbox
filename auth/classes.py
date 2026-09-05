@@ -522,6 +522,19 @@ def student_class_statuses(student_id: str) -> list[str]:
         conn.close()
 
 
+def student_class_confirmed(student_id: str) -> bool:
+    """Shared class-confirmed gate (pin-verify + W3-A WS chat handshake).
+
+    True when the student has at least one confirmed class binding, or no
+    class record at all. False only when class records exist and none is
+    confirmed (the teacher has not approved the binding yet — pin probing
+    and chat must both refuse such a student). pin-verify and the WS chat
+    handshake MUST call this single decision — never a copy elsewhere.
+    """
+    statuses = student_class_statuses(student_id)
+    return not (statuses and "confirmed" not in statuses)
+
+
 def confirm_class_student(
     *,
     teacher_id: str,

@@ -228,3 +228,13 @@ temp/
 # Local agent runtime junk (browser profiles, debug logs)
 .agent-browser/
 output/
+
+# W3-B step6: local junk not for VCS
+.python-version
+.venv-py314-bak/
+
+# W3-B step7: SQLite WAL runtime junk + local serve script
+*.db-shm
+*.db-wal
+serve_step7_8001.py
+

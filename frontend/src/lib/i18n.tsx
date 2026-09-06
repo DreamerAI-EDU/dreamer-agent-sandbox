@@ -41,6 +41,7 @@ export interface Copy {
   // invite
   inviteTitle: string;
   inviteSubtitle: string;
+  inviteLang: string;
   inviteName: string;
   inviteAge: string;
   inviteBandLabel: string;
@@ -157,6 +158,7 @@ export const copyEn: Copy = {
   inviteName: 'Child',
   inviteAge: 'Age band',
   inviteBandLabel: 'Age band',
+  inviteLang: 'Language',
   inviteEmail: 'Parent email',
   invitePasswordHint: 'Password',
   invitePrivacyMust: 'I agree to the Privacy Policy',
@@ -268,6 +270,7 @@ const copyHk: Copy = {
   inviteName: '小朋友',
   inviteAge: '年齡組別',
   inviteBandLabel: '年齡組別',
+  inviteLang: '語言',
   inviteEmail: '家長電郵',
   invitePasswordHint: '密碼',
   invitePrivacyMust: '我同意私隱政策',
@@ -379,6 +382,7 @@ const copyCn: Copy = {
   inviteName: '孩子',
   inviteAge: '年龄组别',
   inviteBandLabel: '年龄组别',
+  inviteLang: '语言',
   inviteEmail: '家长邮箱',
   invitePasswordHint: '密码',
   invitePrivacyMust: '我同意隐私政策',

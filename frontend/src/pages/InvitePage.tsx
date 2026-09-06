@@ -9,6 +9,15 @@ import { useLang } from '../lib/i18n';
 import { PasswordInput } from '../components/PasswordInput';
 import type { InvitePublic } from '../lib/types';
 
+// Backend LANG_CODES: en / zh-hk / zh-cn. The invite's UI language is fixed
+// by the teacher when the invite is created (confirm POST carries no
+// lang_code) — this row is read-only display of the fourth public field.
+const LANG_LABELS: Record<string, string> = {
+  en: 'English',
+  'zh-hk': '繁體中文',
+  'zh-cn': '简体中文',
+};
+
 type InviteState =
   | { phase: 'loading' }
   | { phase: 'form'; info: InvitePublic }
@@ -113,6 +122,10 @@ export function InvitePage() {
             <div className="flex justify-between">
               <dt className="text-black/50">{copy.inviteEmail}</dt>
               <dd className="max-w-[200px] truncate font-medium">{info.parent_email}</dd>
+            </div>
+            <div className="flex justify-between">
+              <dt className="text-black/50">{copy.inviteLang}</dt>
+              <dd className="font-medium">{LANG_LABELS[info.lang_code] ?? info.lang_code}</dd>
             </div>
           </dl>
 

@@ -28,6 +28,11 @@ import type {
   StudentsResponse,
   User,
 } from './types';
+import type { ParentPeriod, ParentReportEnvelope } from './parentTypes';
+import type {
+  TeacherClassProgressResponse,
+  TeacherStudentProgressResponse,
+} from './teacherTypes';
 
 export class ApiError extends Error {
   status: number;
@@ -42,6 +47,7 @@ interface RequestOptions {
   method?: 'GET' | 'POST';
   body?: unknown;
   csrf?: boolean; // default true for POST; invite confirm passes false
+  csrfOnGet?: boolean; // W3-B: parent report GET must carry X-Requested-With too
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -53,6 +59,9 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     body = JSON.stringify(options.body);
   }
   if (method === 'POST' && (options.csrf ?? true)) {
+    headers['X-Requested-With'] = 'XMLHttpRequest';
+  }
+  if (method === 'GET' && options.csrfOnGet) {
     headers['X-Requested-With'] = 'XMLHttpRequest';
   }
 
@@ -135,4 +144,25 @@ export const api = {
     request<SafetyEventDetailResponse>(`/api/teacher/safety-events/${eventId}`),
   safetyReview: (eventId: string) =>
     request<SafetyReviewResponse>(`/api/teacher/safety-events/${eventId}/review`, { body: {} }),
+
+  // W3-B parent dashboard
+  parentReport: (studentId: string, period: ParentPeriod) =>
+    request<ParentReportEnvelope>(
+      `/api/parent/report?student_id=${encodeURIComponent(studentId)}&period=${period}`,
+      { csrfOnGet: true }, // instruction: parent report GET also carries X-Requested-With
+    ),
+
+  // W3-B step 3 teacher progress lens
+  teacherClassProgress: (classId: string) =>
+    request<TeacherClassProgressResponse>(
+      `/api/teacher/classes/${encodeURIComponent(classId)}/progress`,
+      { csrfOnGet: true },
+    ),
+  // identifier is the 8-char mask prefix (backend resolves it); full uuid
+  // never enters the URL.
+  teacherStudentProgress: (identifier: string, period: ParentPeriod) =>
+    request<TeacherStudentProgressResponse>(
+      `/api/teacher/student/${encodeURIComponent(identifier)}/progress?period=${period}`,
+      { csrfOnGet: true },
+    ),
 };

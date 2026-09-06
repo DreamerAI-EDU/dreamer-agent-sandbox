@@ -30,7 +30,7 @@ export function AppShell({ user, children }: AppShellProps) {
       <header className="sticky top-0 z-10 border-b border-black/5 bg-white/90 backdrop-blur">
         <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-4">
           <div className="flex items-center gap-3">
-            <span className="text-base font-semibold tracking-tight">{copy.brand}</span>
+            <img src="/logo.png" alt="Dreamer AI" height={40} className="h-10 w-auto" />
             <span className="rounded-full bg-black/5 px-2 py-0.5 text-xs">{roleLabel}</span>
           </div>
           <div className="flex items-center gap-3">

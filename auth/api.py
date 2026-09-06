@@ -40,6 +40,7 @@ from aiohttp import web
 from . import classes as classes_mod
 from . import consent
 from . import db
+from . import reports as reports_mod
 from . import safety as safety_mod
 from . import students as students_mod
 from .email import send_verification_email
@@ -1340,6 +1341,112 @@ async def handle_class_pending(request: web.Request) -> web.Response:
 
 
 # ---------------------------------------------------------------------------
+# W3-B Parent Dashboard + Teacher progress lens (shared reports layer)
+# ---------------------------------------------------------------------------
+
+
+async def handle_parent_report(request: web.Request) -> web.Response:
+    """GET /api/parent/report?student_id=<mask|full>&period=cycle|weekly|journey
+
+    Parent-only. The identifier is resolved inside the parent's reachable set
+    (8-char mask or full id) and the canonical Parent Report envelope is
+    returned with the embedded student_id masked to the fixed-length prefix.
+    """
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+    if user["role"] != "parent":
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    query = request.query
+    identifier = (query.get("student_id") or "").strip()
+    period = (query.get("period") or "cycle").strip()
+    if not identifier:
+        return web.json_response(_ERR_INVALID, status=400)
+    if period not in reports_mod.PARENT_PERIODS:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    student, ambiguous = students_mod.resolve_student_identifier(identifier, user)
+    if ambiguous:
+        return web.json_response(_ERR_INVALID, status=400)
+    if student is None or not students_mod.can_access_student(user, student):
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    report = reports_mod.parent_report_for_student(
+        student, period, include_safety=True, mask_student_id=True
+    )
+    return web.json_response(report)
+
+
+async def handle_teacher_class_progress(request: web.Request) -> web.Response:
+    """GET /api/teacher/classes/{id}/progress - teacher lens class rollups.
+
+    Teacher-only; a foreign/unowned class returns the unified 403 (cross-
+    teacher attempts are WARNING-logged, same discipline as class pending).
+    Full student ids are returned - this is the trusted teacher console
+    surface, never the parent-side 8-char mask.
+    """
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+    if user["role"] != "teacher":
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    class_id = request.match_info.get("id", "")
+    cls = classes_mod.get_class_by_id(class_id)
+    if cls is not None and cls["teacher_id"] != user["id"]:
+        _log_security_warning(
+            "class_progress_cross_teacher",
+            user_id=user["id"],
+            target_id=class_id,
+            detail="attempted to read progress of another teacher's class",
+        )
+    payload = reports_mod.teacher_class_progress(
+        teacher_id=user["id"], class_id=class_id
+    )
+    if payload is None:
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+    return web.json_response(payload)
+
+
+async def handle_teacher_student_progress(request: web.Request) -> web.Response:
+    """GET /api/teacher/student/{id}/progress - teacher drill-down view.
+
+    Teacher-only. The identifier is resolved inside the teacher's reachable
+    set and the teacher must teach that student (unified 403). Response is
+    the canonical Parent Report for the requested period plus a sanitised
+    assessment history - internal labels / confidence / rubric ids / evidence
+    never leave the server (P-series red line).
+    """
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+    if user["role"] != "teacher":
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    query = request.query
+    identifier = (request.match_info.get("id") or "").strip()
+    period = (query.get("period") or "cycle").strip()
+    if not identifier:
+        return web.json_response(_ERR_INVALID, status=400)
+    if period not in reports_mod.PARENT_PERIODS:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    student, ambiguous = students_mod.resolve_student_identifier(identifier, user)
+    if ambiguous:
+        return web.json_response(_ERR_INVALID, status=400)
+    if student is None:
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    payload = reports_mod.teacher_student_progress(
+        teacher_id=user["id"], student=student, period=period
+    )
+    if payload is None:
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+    return web.json_response(payload)
+
+
+# ---------------------------------------------------------------------------
 # Safety review API (W2 PR#4) — teacher-only; admin bypasses class filter
 # ---------------------------------------------------------------------------
 
@@ -1528,6 +1635,14 @@ def build_app() -> web.Application:
     )
     app.router.add_post(
         "/api/teacher/safety-events/{id}/review", handle_safety_event_review
+    )
+    # W3-B — parent dashboard + teacher progress lens (shared reports layer)
+    app.router.add_get("/api/parent/report", handle_parent_report)
+    app.router.add_get(
+        "/api/teacher/classes/{id}/progress", handle_teacher_class_progress
+    )
+    app.router.add_get(
+        "/api/teacher/student/{id}/progress", handle_teacher_student_progress
     )
     # W3-A — real WS chat (server-side handshake gate + DeepTutor relay).
     # GET (WS upgrade); csrf_guard only protects POSTs. Import is deferred

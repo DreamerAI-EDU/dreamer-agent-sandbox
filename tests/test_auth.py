@@ -344,6 +344,29 @@ async def test_email_verify_token_single_use(client, fresh_invite):
 
 
 # ---------------------------------------------------------------------------
+# 11b. Password policy enforced server-side at registration (single source)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_register_weak_password_rejected(client, fresh_invite):
+    """Registration backend enforces the same policy as reset (>=10, letter+digit).
+
+    Frontend hints (copy.passwordPolicy) are UX only; the server is the single
+    authority and must never accept a weak value (8-char letters+digits below
+    the 10-char floor) at signup.
+    """
+    weak = "ab" + "123456"  # 8 chars: letters+digits but below the floor
+    resp = await client.post(
+        "/api/auth/register",
+        json={"invite_code": "invite-ok-001", "email": "weak@test.local",
+              "password": weak},
+        headers=HEADERS,
+    )
+    assert resp.status == 400
+    assert auth_db.get_user_by_email("weak@test.local") is None
+
+
+# ---------------------------------------------------------------------------
 # 12. CSRF custom-header guard
 # ---------------------------------------------------------------------------
 

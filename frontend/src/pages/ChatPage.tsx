@@ -50,6 +50,7 @@ const COPY = {
     send: 'Ask Dibi',
     disclaimer: 'Dreamer AI can make mistakes — check important info with a grown-up.',
     back: 'Back to children',
+    gallery: 'My Gallery',
     hi: (n: string) => `Hi, ${n}!`,
     noProfile: 'Choose a child and enter the PIN to start chatting.',
   },
@@ -59,6 +60,7 @@ const COPY = {
     send: '問 Dibi',
     disclaimer: 'Dreamer AI 有機會答錯——重要資訊記得同大人核實。',
     back: '返回小朋友列表',
+    gallery: '我嘅作品展',
     hi: (n: string) => `${n}，你好呀！`,
     noProfile: '揀小朋友並輸入 PIN 先可以開始對話。',
   },
@@ -68,6 +70,7 @@ const COPY = {
     send: '问 Dibi',
     disclaimer: 'Dreamer AI 可能会答错——重要信息记得和大人核实。',
     back: '返回孩子列表',
+    gallery: '我的作品展',
     hi: (n: string) => `${n}，你好！`,
     noProfile: '选择孩子并输入 PIN 才能开始对话。',
   },
@@ -174,6 +177,15 @@ export default function ChatPage() {
     if (lastQuestionRef.current) ask(lastQuestionRef.current);
   };
 
+  // Gallery deep link keeps the chat session context (mask / name / band).
+  // Only reachable in real WS mode where a PIN-unlocked student exists; the
+  // mock demo has no real portfolio backend behind it.
+  const galleryUrl = profile.student
+    ? `/portfolio?student=${encodeURIComponent(profile.student)}&name=${encodeURIComponent(
+        profile.name || '',
+      )}&band=${encodeURIComponent(theme.band)}`
+    : null;
+
   return (
     <div className="relative flex min-h-screen flex-col bg-[#1a1a2e] font-sans text-white">
       <Starfield />
@@ -225,6 +237,14 @@ export default function ChatPage() {
                 </button>
               ))}
             </div>
+            {galleryUrl && (
+              <Link
+                to={galleryUrl}
+                className="rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white/80 hover:text-white"
+              >
+                {copy.gallery}
+              </Link>
+            )}
             <Link
               to="/home"
               className="rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white/80 hover:text-white"

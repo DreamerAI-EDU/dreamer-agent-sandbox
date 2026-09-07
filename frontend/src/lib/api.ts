@@ -33,6 +33,11 @@ import type {
   TeacherClassProgressResponse,
   TeacherStudentProgressResponse,
 } from './teacherTypes';
+import type {
+  KidPortfolioResponse,
+  ParentPortfolioResponse,
+  ShareCard,
+} from './portfolioTypes';
 
 export class ApiError extends Error {
   status: number;
@@ -164,5 +169,21 @@ export const api = {
     request<TeacherStudentProgressResponse>(
       `/api/teacher/student/${encodeURIComponent(identifier)}/progress?period=${period}`,
       { csrfOnGet: true },
+    ),
+
+  // W4 PR-A portfolio surfaces (GET; backend session gate only)
+  // kid-facing portfolio of the PIN-unlocked child (?student= mask/full id,
+  // resolved inside the acting parent's reachable set).
+  kidPortfolio: (identifier: string) =>
+    request<KidPortfolioResponse>(
+      `/api/student/portfolio?student=${encodeURIComponent(identifier)}`,
+    ),
+  parentPortfolio: (studentId: string) =>
+    request<ParentPortfolioResponse>(
+      `/api/parent/portfolio/${encodeURIComponent(studentId)}`,
+    ),
+  parentShareCard: (studentId: string, itemId: string) =>
+    request<ShareCard>(
+      `/api/parent/portfolio/${encodeURIComponent(studentId)}/share_card/${encodeURIComponent(itemId)}`,
     ),
 };

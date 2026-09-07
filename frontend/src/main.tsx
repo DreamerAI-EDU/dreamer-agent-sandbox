@@ -13,6 +13,7 @@ import { SafetyPage } from './pages/SafetyPage'
 import { TeacherDashboard } from './pages/TeacherDashboard'
 import { TeacherRegisterPage } from './pages/TeacherRegisterPage'
 import ChatPage from './pages/ChatPage'
+import KidPortfolioPage from './pages/KidPortfolioPage'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -28,6 +29,7 @@ createRoot(document.getElementById('root')!).render(
           <Route path="/teacher" element={<TeacherDashboard />} />
           <Route path="/teacher/register" element={<TeacherRegisterPage />} />
           <Route path="/chat" element={<ChatPage />} />
+          <Route path="/portfolio" element={<KidPortfolioPage />} />
           <Route path="*" element={<RootGate />} />
         </Routes>
       </LanguageProvider>

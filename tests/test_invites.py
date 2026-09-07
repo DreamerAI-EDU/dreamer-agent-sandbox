@@ -474,6 +474,29 @@ async def test_confirm_invite_success_creates_parent_and_binding(
 
 
 # ---------------------------------------------------------------------------
+# 17b. Confirm invite rejects weak password server-side (same policy as reset)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_confirm_invite_weak_password_rejected(client, fresh_invite):
+    """Parent confirm enforces the password policy on the backend too.
+
+    The confirm page may show a hint, but the server must reject an 8-char
+    letters+digits value below the 10-char floor and leave the invite
+    unconsumed (no parent row, no consent rows).
+    """
+    token = await _setup_logged_in_user(client)
+    cls = await _create_class_via_api(client, token)
+    await _create_invite(client, token, cls["id"])
+    tok = _latest_invite_token()
+
+    weak = "ab" + "123456"  # 8 chars: letters+digits but below the floor
+    resp = await _confirm(client, tok, password=weak)
+    assert resp.status == 400
+    assert _invite_row(tok)["used_at"] is None
+
+
+# ---------------------------------------------------------------------------
 # 18. Confirm rejects: missing privacy, second use, expired, superseded
 # ---------------------------------------------------------------------------
 

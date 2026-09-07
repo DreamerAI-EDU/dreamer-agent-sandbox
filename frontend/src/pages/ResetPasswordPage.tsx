@@ -82,6 +82,7 @@ export function ResetPasswordPage() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                 />
+                <p className="mt-1 text-xs text-black/40">{copy.passwordPolicy}</p>
               </div>
               {error && <p className="text-sm text-red-600">{error}</p>}
               <button

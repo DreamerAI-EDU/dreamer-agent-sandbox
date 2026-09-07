@@ -21,39 +21,51 @@ interface Props {
   studentId: string;
 }
 
+interface LoadState {
+  studentId: string;
+  status: 'loading' | 'error' | 'ready';
+  envelope: ParentPortfolioResponse | null;
+  message: string;
+}
+
+const IDLE: LoadState = { studentId: '', status: 'loading', envelope: null, message: '' };
+
 export function PortfolioView({ studentId }: Props) {
-  const [envelope, setEnvelope] = useState<ParentPortfolioResponse | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  // Single load-state object: setState only happens in async callbacks
+  // (never synchronously in the effect body — react-hooks/set-state-in-effect).
+  // A stale response for a previously-selected child can never commit: the
+  // cleanup bumps the seq so its callbacks see a mismatched id.
+  const [state, setState] = useState<LoadState>(IDLE);
   const [shareCard, setShareCard] = useState<ShareCard | null>(null);
   const seqRef = useRef(0);
 
   useEffect(() => {
     const seq = ++seqRef.current;
-    setLoading(true);
-    setError('');
-    setEnvelope(null);
     api
       .parentPortfolio(studentId)
       .then((data) => {
-        // stale guard: only the latest request may commit state
         if (seq !== seqRef.current) return;
-        setEnvelope(data);
+        setState({ studentId, status: 'ready', envelope: data, message: '' });
       })
       .catch((err: unknown) => {
         if (seq !== seqRef.current) return;
-        setError(err instanceof ApiError ? err.message : '載入作品失敗');
-      })
-      .finally(() => {
-        if (seq === seqRef.current) setLoading(false);
+        setState({
+          studentId,
+          status: 'error',
+          envelope: null,
+          message: err instanceof ApiError ? err.message : '載入作品失敗',
+        });
       });
     return () => {
-      // mark in-flight request as stale when the child changes / unmounts
       seqRef.current += 1;
     };
   }, [studentId]);
 
-  if (loading && !envelope) {
+  // While the request for the current child is in flight (or stale state
+  // from the previous child is still sitting there) show the loading block.
+  const current = state.studentId === studentId ? state : IDLE;
+
+  if (current.status === 'loading' || !current.envelope) {
     return (
       <div className="rounded-2xl border border-black/5 bg-white px-5 py-10 text-center text-sm text-black/50">
         載入中…
@@ -61,15 +73,15 @@ export function PortfolioView({ studentId }: Props) {
     );
   }
 
-  if (error) {
+  if (current.status === 'error') {
     return (
       <div className="rounded-2xl border border-red-200 bg-red-50 px-5 py-8 text-center text-sm text-red-700">
-        {error}
+        {current.message}
       </div>
     );
   }
 
-  if (!envelope) return null;
+  const envelope = current.envelope;
 
   // Parent-facing empty state (kid page has its own welcome copy).
   if (envelope.empty || envelope.items.length === 0) {

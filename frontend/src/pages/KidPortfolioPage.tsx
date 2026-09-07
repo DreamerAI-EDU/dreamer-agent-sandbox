@@ -15,7 +15,7 @@
 // P4–P6 / S1–S3 use the tighter grid. Empty state is kid-facing welcome
 // copy (the parent empty state lives on /parent · view=portfolio).
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { BAND_THEMES } from '../lib/mock';
 import type { Lang } from '../lib/mock';
@@ -96,13 +96,13 @@ export default function KidPortfolioPage() {
 
   const copy = COPY[lang];
 
-  const load = useCallback(() => {
+  // Fetch only in the effect body — setState happens exclusively inside the
+  // async callbacks (react-hooks/set-state-in-effect). Retry below is an
+  // event handler, so it may reset the error state synchronously.
+  useEffect(() => {
     const student = profile.student;
     if (!student) return;
     const seq = ++seqRef.current;
-    setError(false);
-    setRetrying(false);
-    setItems(null);
     api
       .kidPortfolio(student)
       .then((data) => {
@@ -114,15 +114,29 @@ export default function KidPortfolioPage() {
       .finally(() => {
         if (seq === seqRef.current) setRetrying(false);
       });
-  }, [profile.student]);
-
-  useEffect(() => {
-    if (!profile.student) return;
-    load();
     return () => {
       seqRef.current += 1;
     };
-  }, [profile.student, load]);
+  }, [profile.student]);
+
+  const retry = () => {
+    const student = profile.student;
+    if (!student) return;
+    const seq = ++seqRef.current;
+    setError(false);
+    setRetrying(true);
+    api
+      .kidPortfolio(student)
+      .then((data) => {
+        if (seq === seqRef.current) setItems(data.items);
+      })
+      .catch(() => {
+        if (seq === seqRef.current) setError(true);
+      })
+      .finally(() => {
+        if (seq === seqRef.current) setRetrying(false);
+      });
+  };
 
   const backQuery = (() => {
     const params = new URLSearchParams();
@@ -204,7 +218,7 @@ export default function KidPortfolioPage() {
             <p className="text-lg font-semibold text-white/80">{copy.loadError}</p>
             <button
               type="button"
-              onClick={load}
+              onClick={retry}
               disabled={retrying}
               className="mt-5 inline-block rounded-full border border-white/25 bg-white/10 px-5 py-2 text-sm font-bold text-white hover:bg-white/20 disabled:opacity-50"
             >

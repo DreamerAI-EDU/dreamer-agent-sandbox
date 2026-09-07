@@ -44,7 +44,8 @@ export function ShareCardDialog({ card, onClose }: Props) {
       mountedRef.current = false;
       window.removeEventListener('keydown', onKey);
       // restore export node opacity on unmount regardless of capture state
-      if (exportRef.current) exportRef.current.style.opacity = '0';
+      const exportNode = exportRef.current;
+      if (exportNode) exportNode.style.opacity = '0';
     };
   }, [onClose]);
 

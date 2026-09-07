@@ -25,6 +25,7 @@ agent dependency graph until a report endpoint is actually called.
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Any, Optional
 
@@ -334,4 +335,110 @@ def teacher_student_progress(
         },
         "report": parent_report_for_student(student, period, include_safety=True),
         "assessment_history": history,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Portfolio (W4 PR-A) — student showcase items + parent share_card payloads
+# ---------------------------------------------------------------------------
+
+# Every field a surface may render for one portfolio item. Internal grading
+# fields (internal_label / confidence / rubric_id) exist in portfolio_items
+# but NEVER leave the server on any surface (R1: portfolio is not a report
+# card; see docs/phase6-schemas.md §2 for the frozen shape).
+_PORTFOLIO_ITEM_VIEW = (
+    "item_id",
+    "topic_id",
+    "subject",
+    "title",
+    "description",
+    "evidence_excerpt",
+    "competencies_4d",
+    "growth_note",
+    "kid_label",
+    "achieved_at",
+    "linked_project_id",
+)
+
+
+def _portfolio_items_rows(student_id: str) -> list[dict[str, Any]]:
+    """Raw portfolio_items for one student, newest achievement first."""
+    conn = auth_db.connect()
+    try:
+        rows = conn.execute(
+            """SELECT item_id, topic_id, subject, title, description,
+                      evidence_excerpt, competencies_4d, growth_note, kid_label,
+                      achieved_at, linked_project_id
+               FROM portfolio_items
+               WHERE student_id = ?
+               ORDER BY achieved_at DESC, rowid DESC""",
+            (student_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    items = []
+    for row in rows:
+        item = {key: row[key] for key in _PORTFOLIO_ITEM_VIEW}
+        raw = item["competencies_4d"]
+        try:
+            competencies = json.loads(raw) if isinstance(raw, str) else raw
+        except (ValueError, TypeError):
+            competencies = []
+        if not isinstance(competencies, list):
+            competencies = []
+        item["competencies_4d"] = competencies
+        items.append(item)
+    return items
+
+
+def portfolio_items_for_student(student: Any) -> dict[str, Any]:
+    """Kid-facing portfolio list for one student.
+
+    Empty portfolio never errors: ``items: []`` + ``empty: true`` (pdf-spec
+    §6.4 / W4 instruction Step 1). No student id and no share_card payload
+    on this surface (R2: the child interface has no share affordance).
+    """
+    items = _portfolio_items_rows(student["id"])
+    return {"items": items, "empty": not items}
+
+
+def share_card_for_item(item: dict[str, Any], student: Any) -> dict[str, Any]:
+    """Single self-contained share_card payload for one portfolio item.
+
+    Same-source rule (R3): the share_card whitelist/blacklist lives ONLY in
+    ``agents.portfolio_agent.PortfolioAgent._build_share_card`` — this data
+    layer reuses that implementation instead of re-declaring card fields.
+    display_name is read from students.first_name (B24 / R6); unknown-name
+    fallback ("Dreamer Explorer") also lives in the agent.
+    """
+    from agents.portfolio_agent import PortfolioAgent  # lazy (module doc)
+
+    agent = PortfolioAgent(db_path=auth_db._db_path())
+    return agent._build_share_card(
+        item, display_name=student["first_name"], lang_code=student["lang_code"]
+    )
+
+
+def parent_portfolio_for_student(student: Any) -> dict[str, Any]:
+    """Parent-facing portfolio: the shared item view plus one share_card
+    payload per item, in the same order, for the parent-mediated share flow
+    (R2). Student id is masked on this surface (W3-B parent convention).
+    """
+    items = _portfolio_items_rows(student["id"])
+    return {
+        "student": {
+            "student_id": student["id"][:8],
+            "display_name": student["first_name"],  # B24: first_name only
+            "age_band": student["age_band"],
+            "lang_code": student["lang_code"],
+            "media_consent": (
+                media_consent_status_for_student(student["parent_id"], student["id"])
+                if student["parent_id"]
+                else "unsigned"
+            ),
+        },
+        "items": items,
+        "share_cards": [share_card_for_item(item, student) for item in items],
+        "empty": not items,
     }

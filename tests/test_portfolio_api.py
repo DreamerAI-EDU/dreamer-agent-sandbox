@@ -453,3 +453,78 @@ async def test_share_card_same_source_parity_with_agent(world, client):
     agent_card.pop("generated_at")
     assert api_card == agent_card
     assert set(api_card) == SHARE_CARD_WHITELIST - {"generated_at"}
+
+
+# ---------------------------------------------------------------------------
+# W4 PR-C — parent portfolio PDF endpoint (/api/parent/portfolio/{id}/pdf)
+# ---------------------------------------------------------------------------
+
+
+def _pdf_text(resp_body: bytes) -> str:
+    from io import BytesIO
+
+    from pypdf import PdfReader
+
+    reader = PdfReader(BytesIO(resp_body))
+    return "\n".join(page.extract_text() or "" for page in reader.pages)
+
+
+@pytest.mark.asyncio
+async def test_portfolio_pdf_own_child_200_pdpo_clean(world, client):
+    resp = await client.get(
+        f"/api/parent/portfolio/{SID_A}/pdf", headers=_cookie_header(P1)
+    )
+    assert resp.status == 200
+    assert resp.headers["Content-Type"].startswith("application/pdf")
+    assert "portfolio-" in resp.headers.get("Content-Disposition", "")
+    body = await resp.read()
+    text = _pdf_text(body)
+    # §3 sections + CJK round-trip
+    for probe in ("作品集", "阿明", "乘法小挑戰", "分數披薩工程", "成長點滴", "成長：", "Dreamer AI"):
+        assert probe in text, f"PDF missing {probe}"
+    # §6.3 PDPO scan — seeded internal identifiers must never appear
+    for banned in (
+        SID_A, SID_A[:8], "rub-internal-001", "rub-internal-002",
+        "confidence", "exemplary", "achieved",
+    ):
+        assert banned.lower() not in text.lower(), f"PDF leaked {banned}"
+
+
+@pytest.mark.asyncio
+async def test_portfolio_pdf_empty_portfolio_200_single_page(world, client):
+    resp = await client.get(
+        f"/api/parent/portfolio/{SID_A2}/pdf", headers=_cookie_header(P1)
+    )
+    assert resp.status == 200
+    body = await resp.read()
+    from io import BytesIO
+
+    from pypdf import PdfReader
+
+    pages = PdfReader(BytesIO(body)).pages
+    assert len(pages) == 1
+    text = pages[0].extract_text() or ""
+    assert "繼續探索新項目" in text
+    assert "作品亮點" not in text
+
+
+@pytest.mark.asyncio
+async def test_portfolio_pdf_cross_child_403(world, client):
+    resp = await client.get(
+        f"/api/parent/portfolio/{SID_A}/pdf", headers=_cookie_header(P2)
+    )
+    assert resp.status == 403
+
+
+@pytest.mark.asyncio
+async def test_portfolio_pdf_teacher_403(world, client):
+    resp = await client.get(
+        f"/api/parent/portfolio/{SID_A}/pdf", headers=_cookie_header(T1)
+    )
+    assert resp.status == 403
+
+
+@pytest.mark.asyncio
+async def test_portfolio_pdf_unauth_401(world, client):
+    resp = await client.get(f"/api/parent/portfolio/{SID_A}/pdf")
+    assert resp.status == 401

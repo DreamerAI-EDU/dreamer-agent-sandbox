@@ -43,10 +43,13 @@ from . import db
 from . import reports as reports_mod
 from . import safety as safety_mod
 from . import students as students_mod
-from .email import send_verification_email
+from .email import send_reset_email, send_verification_email
 from .security import (
     dummy_verify,
+    forgot_email_limiter,
+    forgot_ip_limiter,
     hash_password,
+    hash_reset_token,
     ip_rate_limiter,
     new_session_token,
     new_verify_token,
@@ -61,6 +64,7 @@ SESSION_DAYS = 7
 LOCK_FAILURES = 5
 LOCK_MINUTES = 15
 VERIFY_HOURS = 24
+RESET_TOKEN_MINUTES = 60  # W4 PR-D §3.2 — password reset link lifetime
 STEP_UP_MINUTES = 10
 
 # Student ids are never echoed in full to the frontend (W2 PR#3 brief §3:
@@ -395,6 +399,101 @@ async def handle_verify_email(request: web.Request) -> web.Response:
         return web.json_response(_ERR_INVALID, status=400)
 
     return web.json_response({"user": _public_user(user)})
+
+
+# ---------------------------------------------------------------------------
+# Forgot-password / reset-password (W4 PR-D, B-新2)
+# ---------------------------------------------------------------------------
+
+async def handle_forgot_password(request: web.Request) -> web.Response:
+    """POST /api/auth/forgot-password — request a password-reset email.
+
+    Anti-enumeration: the response is identical whether or not the email is
+    registered (200 + {"ok": true}), and the unknown-email path burns a dummy
+    Argon2 verify so CPU timing does not reveal account existence either.
+    Rate limited per-email (3/hour) and per-IP (30/hour) — boss ruling
+    2026-09-07. New tokens invalidate any older pending one (single valid
+    link at a time).
+    """
+    payload = await _read_json(request)
+    if not payload:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    email = str(payload.get("email") or "").strip().lower()
+    if not email:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    ip = _client_ip(request)
+
+    # Limit BEFORE the lookup so registered and unregistered emails behave
+    # identically; every request counts (bombers repeat successes too).
+    if not forgot_email_limiter.allow(email) or not forgot_ip_limiter.allow(ip):
+        return web.json_response(_ERR_LOCKED, status=429)
+
+    user = db.get_user_by_email(email)
+    if user is None:
+        # Timing equalizer for unknown email (same philosophy as login).
+        dummy_verify("reset-dummy-password-not-a-real-one")
+        return web.json_response({"ok": True})
+
+    raw_token = new_verify_token()
+    db.insert_password_reset_token(
+        user_id=user["id"],
+        token_hash=hash_reset_token(raw_token),
+        expires_at=_future_iso(minutes=RESET_TOKEN_MINUTES),
+    )
+
+    base_url = classes_mod.get_frontend_base_url()
+    link = f"{base_url.rstrip('/')}/reset?token={raw_token}"
+    # users has no lang_code; account language comes from its students rows
+    # (teacher_id / parent_id). None → email falls back to zh-hk (§3.3).
+    lang = db.get_user_lang_code(user["id"]) or "zh-hk"
+    sent = send_reset_email(to_addr=email, link=link, lang=lang)
+    if not sent:
+        logger.warning(
+            "reset email not sent for user=%s (SMTP unavailable)", user["id"]
+        )
+    return web.json_response({"ok": True})
+
+
+async def handle_reset_password(request: web.Request) -> web.Response:
+    """POST /api/auth/reset-password — consume a reset token, set new password.
+
+    Side effects on success: token marked used_at (single-use, no replay),
+    ALL of the user's sessions revoked (old cookies immediately 401), and an
+    audit-log row is written — the token itself is never logged (plaintext or
+    hash).
+    """
+    payload = await _read_json(request)
+    if not payload:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    token = str(payload.get("token") or "").strip()
+    password = payload.get("password")
+    if not token or not isinstance(password, str) or not password:
+        return web.json_response(_ERR_INVALID, status=400)
+    if validate_password_strength(password) is not None:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    user = db.consume_password_reset_token(hash_reset_token(token))
+    if user is None:
+        # Unknown / expired / already-used token — unified wording.
+        return web.json_response(_ERR_INVITE_INVALID, status=400)
+
+    db.update_user_password(user["id"], hash_password(password))
+    db.revoke_all_sessions(user["id"])
+
+    consent.write_audit_log(
+        {
+            "timestamp": _now_iso(),
+            "level": "INFO",
+            "event": "password_reset",
+            "user_id": user["id"],
+            "target_id": None,
+            "message": "password reset via emailed link",
+        }
+    )
+    return web.json_response({"ok": True})
 
 
 # ---------------------------------------------------------------------------
@@ -1802,6 +1901,8 @@ def build_app() -> web.Application:
     app.router.add_post("/api/auth/logout", handle_logout)
     app.router.add_get("/api/auth/me", handle_me)
     app.router.add_post("/api/auth/verify-email", handle_verify_email)
+    app.router.add_post("/api/auth/forgot-password", handle_forgot_password)
+    app.router.add_post("/api/auth/reset-password", handle_reset_password)
     app.router.add_get("/api/consent/docs", handle_consent_docs)
     app.router.add_post("/api/consent/sign", handle_consent_sign)
     app.router.add_post("/api/consent/withdraw", handle_consent_withdraw)

@@ -100,6 +100,15 @@ def new_verify_token() -> str:
     return secrets.token_urlsafe(32)
 
 
+def hash_reset_token(token: str) -> str:
+    """SHA-256 hex digest of a reset token (the only form the DB stores).
+
+    Three-iron-rule: the plaintext token appears only in the emailed reset
+    link; the database holds the hash so a DB leak cannot replay resets.
+    """
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
 def constant_time_eq(a: str, b: str) -> bool:
     """Constant-time string comparison."""
     return hmac.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
@@ -155,3 +164,44 @@ class IpRateLimiter:
 
 # Module-level singleton used by the API layer.
 ip_rate_limiter = IpRateLimiter()
+
+
+class SlidingWindowLimiter:
+    """Process-local sliding-window request limiter for the forgot-password
+    path (W4 PR-D, boss ruling 2026-09-07: 3/email/hour + 30/IP/hour).
+
+    Unlike IpRateLimiter (failure counters), every request counts here — a
+    successful forgot-password request is exactly what an email bomber wants
+    to repeat, so hits are recorded regardless of outcome. Thread-safe via an
+    RLock; entries pruned lazily on each hit.
+    """
+
+    def __init__(self, max_calls: int, window_seconds: int) -> None:
+        self._max = max_calls
+        self._window = window_seconds
+        self._lock = threading.RLock()
+        # key -> list[epoch seconds of recent hits]
+        self._hits: dict[str, list[float]] = {}
+
+    def allow(self, key: str) -> bool:
+        """Record a hit for `key`; True if still under the limit, False if
+        the window is exhausted (the rejected call is not counted)."""
+        now = time.time()
+        with self._lock:
+            window = [t for t in self._hits.get(key, []) if now - t < self._window]
+            if len(window) >= self._max:
+                self._hits[key] = window
+                return False
+            window.append(now)
+            self._hits[key] = window
+            return True
+
+    def reset(self, key: str) -> None:
+        with self._lock:
+            self._hits.pop(key, None)
+
+
+# Module-level singletons used by the forgot-password endpoint (boss ruling
+# 2026-09-07: per-email stricter, per-IP looser to spare shared NATs).
+forgot_email_limiter = SlidingWindowLimiter(max_calls=3, window_seconds=3600)
+forgot_ip_limiter = SlidingWindowLimiter(max_calls=30, window_seconds=3600)

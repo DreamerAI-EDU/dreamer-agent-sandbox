@@ -1447,6 +1447,133 @@ async def handle_teacher_student_progress(request: web.Request) -> web.Response:
 
 
 # ---------------------------------------------------------------------------
+# W4 Portfolio API (PR-A) — kid view + parent view + single share_card
+# ---------------------------------------------------------------------------
+
+
+async def handle_student_portfolio(request: web.Request) -> web.Response:
+    """GET /api/student/portfolio?student=<mask|full> — kid-facing portfolio.
+
+    The platform has no separate student login (users role = parent/teacher/
+    admin; children are PIN-unlocked rows reached through the acting parent's
+    session — same model as the WS chat handshake). This surface therefore
+    accepts a parent session acting on behalf of the unlocked child:
+      * parent + own child       -> 200 (items only, never share_cards)
+      * parent + another child   -> unified 403
+      * teacher / admin session  -> unified 403 (W4 teacher view is out of
+        scope; cross-role attempts are WARNING-logged)
+    Kid-facing output carries NO student id and NO share_card payload (R2:
+    the child interface has no share affordance).
+    """
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+    if user["role"] != "parent":
+        _log_security_warning(
+            "portfolio_student_role_denied",
+            user_id=user["id"],
+            detail="non-parent session attempted the kid portfolio surface",
+        )
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    identifier = (request.query.get("student") or "").strip()
+    if not identifier:
+        return web.json_response(_ERR_INVALID, status=400)
+    student, ambiguous = students_mod.resolve_student_identifier(identifier, user)
+    if ambiguous:
+        return web.json_response(_ERR_INVALID, status=400)
+    if student is None or not students_mod.can_access_student(user, student):
+        _log_security_warning(
+            "portfolio_student_cross_access",
+            user_id=user["id"],
+            target_id=identifier,
+            detail="attempted to read another child's portfolio via kid surface",
+        )
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    payload = reports_mod.portfolio_items_for_student(student)
+    return web.json_response(payload)
+
+
+async def handle_parent_portfolio(request: web.Request) -> web.Response:
+    """GET /api/parent/portfolio/{student_id} — parent dashboard portfolio.
+
+    Parent-only; the identifier is resolved inside the parent's reachable set
+    (8-char mask or full id). Response = the same shared item view as the kid
+    surface plus one share_card payload per item (whitelist-only, R3) for the
+    parent-mediated share flow (R2).
+    """
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+    if user["role"] != "parent":
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    identifier = (request.match_info.get("student_id") or "").strip()
+    if not identifier:
+        return web.json_response(_ERR_INVALID, status=400)
+    student, ambiguous = students_mod.resolve_student_identifier(identifier, user)
+    if ambiguous:
+        return web.json_response(_ERR_INVALID, status=400)
+    if student is None or not students_mod.can_access_student(user, student):
+        _log_security_warning(
+            "portfolio_parent_cross_access",
+            user_id=user["id"],
+            target_id=identifier,
+            detail="attempted to read another parent's child portfolio",
+        )
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    payload = reports_mod.parent_portfolio_for_student(student)
+    return web.json_response(payload)
+
+
+async def handle_parent_share_card(request: web.Request) -> web.Response:
+    """GET /api/parent/portfolio/{student_id}/share_card/{item_id} — one card.
+
+    Parent-only, child must be reachable AND the item must belong to that
+    child (unknown/foreign item -> unified 403, no existence oracle). The
+    payload is the single share_card whitelist contract consumed by the W4
+    renderers (R3 / R4).
+    """
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+    if user["role"] != "parent":
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    identifier = (request.match_info.get("student_id") or "").strip()
+    item_id = (request.match_info.get("item_id") or "").strip()
+    if not identifier or not item_id:
+        return web.json_response(_ERR_INVALID, status=400)
+    student, ambiguous = students_mod.resolve_student_identifier(identifier, user)
+    if ambiguous:
+        return web.json_response(_ERR_INVALID, status=400)
+    if student is None or not students_mod.can_access_student(user, student):
+        _log_security_warning(
+            "portfolio_share_card_cross_access",
+            user_id=user["id"],
+            target_id=identifier,
+            detail="attempted to read another parent's child share_card",
+        )
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    items = reports_mod.portfolio_items_for_student(student)["items"]
+    item = next((it for it in items if it["item_id"] == item_id), None)
+    if item is None:
+        _log_security_warning(
+            "portfolio_share_card_unknown_item",
+            user_id=user["id"],
+            target_id=item_id,
+            detail="share_card requested for unknown/foreign portfolio item",
+        )
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    card = reports_mod.share_card_for_item(item, student)
+    return web.json_response(card)
+
+
+# ---------------------------------------------------------------------------
 # Safety review API (W2 PR#4) — teacher-only; admin bypasses class filter
 # ---------------------------------------------------------------------------
 
@@ -1643,6 +1770,15 @@ def build_app() -> web.Application:
     )
     app.router.add_get(
         "/api/teacher/student/{id}/progress", handle_teacher_student_progress
+    )
+    # W4 PR-A — portfolio surfaces (kid view + parent view + single share_card)
+    app.router.add_get("/api/student/portfolio", handle_student_portfolio)
+    app.router.add_get(
+        "/api/parent/portfolio/{student_id}", handle_parent_portfolio
+    )
+    app.router.add_get(
+        "/api/parent/portfolio/{student_id}/share_card/{item_id}",
+        handle_parent_share_card,
     )
     # W3-A — real WS chat (server-side handshake gate + DeepTutor relay).
     # GET (WS upgrade); csrf_guard only protects POSTs. Import is deferred

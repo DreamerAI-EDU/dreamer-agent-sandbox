@@ -1573,6 +1573,73 @@ async def handle_parent_share_card(request: web.Request) -> web.Response:
     return web.json_response(card)
 
 
+async def handle_parent_portfolio_pdf(request: web.Request) -> web.Response:
+    """GET /api/parent/portfolio/{student_id}/pdf — kid-safe PDF download.
+
+    Parent-only, same reachable-set gate as the JSON portfolio surface.
+    The renderer receives ONLY share_card payloads (R3 whitelist, produced
+    by the reports layer) plus display_name / generated_at — the function
+    signature has no student / db handle, so a direct DB read is impossible
+    from inside the render path (R4). growth_note (already kid-safe in the
+    item view) is appended to each card for the growth section; every other
+    internal field stays out of the PDF.
+
+    spec §6 gates: A4 pages, five sections, PDPO text-scan clean, empty
+    portfolio renders cover+summary only, pagination holds <= 6 items/page
+    (P4-P6+) / <= 4 (P1-P3) — covered by tests/test_portfolio_pdf.py.
+    """
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+    if user["role"] != "parent":
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    identifier = (request.match_info.get("student_id") or "").strip()
+    if not identifier:
+        return web.json_response(_ERR_INVALID, status=400)
+    student, ambiguous = students_mod.resolve_student_identifier(identifier, user)
+    if ambiguous:
+        return web.json_response(_ERR_INVALID, status=400)
+    if student is None or not students_mod.can_access_student(user, student):
+        _log_security_warning(
+            "portfolio_pdf_cross_access",
+            user_id=user["id"],
+            target_id=identifier,
+            detail="attempted to download another parent's child portfolio PDF",
+        )
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    from agents.portfolio_pdf import render_portfolio_pdf  # renderer import stays lazy
+
+    view = reports_mod.parent_portfolio_for_student(student)
+    items_by_id = {item["item_id"]: item for item in view["items"]}
+    pdf_cards: list[dict[str, Any]] = []
+    for card in view["share_cards"]:
+        row = dict(card)
+        growth_note = items_by_id.get(card["item_id"], {}).get("growth_note")
+        if growth_note:
+            row["growth_note"] = growth_note
+        pdf_cards.append(row)
+
+    generated_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    pdf = render_portfolio_pdf(
+        pdf_cards,
+        display_name=view["student"]["display_name"],
+        generated_at=generated_at,
+        lang_code=view["student"]["lang_code"],
+        age_band=view["student"]["age_band"],
+    )
+    filename = f"portfolio-{view['student']['student_id']}.pdf"  # 8-char mask only
+    return web.Response(
+        body=pdf,
+        content_type="application/pdf",
+        headers={
+            "Content-Disposition": f'inline; filename="{filename}"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Safety review API (W2 PR#4) — teacher-only; admin bypasses class filter
 # ---------------------------------------------------------------------------
@@ -1779,6 +1846,9 @@ def build_app() -> web.Application:
     app.router.add_get(
         "/api/parent/portfolio/{student_id}/share_card/{item_id}",
         handle_parent_share_card,
+    )
+    app.router.add_get(
+        "/api/parent/portfolio/{student_id}/pdf", handle_parent_portfolio_pdf
     )
     # W3-A — real WS chat (server-side handshake gate + DeepTutor relay).
     # GET (WS upgrade); csrf_guard only protects POSTs. Import is deferred

@@ -103,6 +103,11 @@ export const api = {
   me: () => request<MeResponse>('/api/auth/me'),
   login: (email: string, password: string) =>
     request<LoginResponse>('/api/auth/login', { body: { email, password } }),
+  // W4 PR-D forgot-password: unauthenticated public endpoints (CSRF header on).
+  forgotPassword: (email: string) =>
+    request<{ ok: true }>('/api/auth/forgot-password', { body: { email } }),
+  resetPassword: (token: string, password: string) =>
+    request<{ ok: true }>('/api/auth/reset-password', { body: { token, password } }),
   logout: () => request<{ ok: true }>('/api/auth/logout', { body: {} }),
   register: (inviteCode: string, email: string, password: string) =>
     request<RegisterResponse>('/api/auth/register', {

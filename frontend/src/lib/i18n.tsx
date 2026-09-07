@@ -26,6 +26,19 @@ export interface Copy {
   loginBtn: string;
   loginError: string;
   loginNote: string;
+  // forgot-password (W4 PR-D)
+  forgotTitle: string;
+  forgotSubtitle: string;
+  forgotBtn: string;
+  forgotSent: string;
+  resetTitle: string;
+  resetSubtitle: string;
+  newPassword: string;
+  confirmPassword: string;
+  resetBtn: string;
+  resetDone: string;
+  resetInvalid: string;
+  backToLogin: string;
   // consent
   consentTitle: string;
   consentSubtitle: string;
@@ -142,6 +155,18 @@ export const copyEn: Copy = {
   loginBtn: 'Sign in',
   loginError: 'Unable to sign in',
   loginNote: 'Wrong password too many times will lock the account temporarily.',
+  forgotTitle: 'Reset your password',
+  forgotSubtitle: 'Enter your account email and we will send you a reset link.',
+  forgotBtn: 'Send reset link',
+  forgotSent: 'If an account exists for this email, a reset link has been sent.',
+  resetTitle: 'Set a new password',
+  resetSubtitle: 'Choose a new password for your account.',
+  newPassword: 'New password',
+  confirmPassword: 'Confirm new password',
+  resetBtn: 'Reset password',
+  resetDone: 'Password updated. Please sign in with your new password.',
+  resetInvalid: 'This link is invalid or has expired.',
+  backToLogin: 'Back to sign in',
   consentTitle: 'Consent required',
   consentSubtitle: 'Please review and agree to the documents below to continue.',
   consentPrivacy: 'Privacy Policy',
@@ -254,6 +279,18 @@ const copyHk: Copy = {
   loginBtn: '登入',
   loginError: '無法登入',
   loginNote: '密碼錯太多次會暫時鎖定帳號。',
+  forgotTitle: '重設密碼',
+  forgotSubtitle: '輸入帳號 email，我哋會寄重設連結俾你。',
+  forgotBtn: '寄出重設連結',
+  forgotSent: '如帳號存在，重設連結已寄出。',
+  resetTitle: '設定新密碼',
+  resetSubtitle: '為帳號設定新密碼。',
+  newPassword: '新密碼',
+  confirmPassword: '確認新密碼',
+  resetBtn: '重設密碼',
+  resetDone: '密碼已更新，請用新密碼登入。',
+  resetInvalid: '此連結無效或已過期。',
+  backToLogin: '返回登入',
   consentTitle: '需要簽署同意書',
   consentSubtitle: '請查閱並同意以下文件後繼續。',
   consentPrivacy: '私隱政策',
@@ -366,6 +403,18 @@ const copyCn: Copy = {
   loginBtn: '登录',
   loginError: '无法登录',
   loginNote: '密码错误次数过多会暂时锁定账号。',
+  forgotTitle: '重置密码',
+  forgotSubtitle: '输入账号邮箱，我们会发送重置链接给你。',
+  forgotBtn: '发送重置链接',
+  forgotSent: '如账号存在，重置链接已发送。',
+  resetTitle: '设置新密码',
+  resetSubtitle: '为账号设置新密码。',
+  newPassword: '新密码',
+  confirmPassword: '确认新密码',
+  resetBtn: '重置密码',
+  resetDone: '密码已更新，请用新密码登录。',
+  resetInvalid: '此链接无效或已过期。',
+  backToLogin: '返回登录',
   consentTitle: '需要签署同意书',
   consentSubtitle: '请查阅并同意以下文件后继续。',
   consentPrivacy: '隐私政策',

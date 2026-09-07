@@ -5,6 +5,8 @@ import './index.css'
 import { LanguageProvider } from './lib/i18n'
 import { RootGate } from './components/RootGate'
 import { LoginPage } from './pages/LoginPage'
+import { ForgotPasswordPage } from './pages/ForgotPasswordPage'
+import { ResetPasswordPage } from './pages/ResetPasswordPage'
 import { ConsentPage } from './pages/ConsentPage'
 import { InvitePage } from './pages/InvitePage'
 import { ParentHomePage } from './pages/ParentHomePage'
@@ -21,6 +23,8 @@ createRoot(document.getElementById('root')!).render(
       <LanguageProvider>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/forgot" element={<ForgotPasswordPage />} />
+          <Route path="/reset" element={<ResetPasswordPage />} />
           <Route path="/invite/:token" element={<InvitePage />} />
           <Route path="/consent" element={<ConsentPage />} />
           <Route path="/home" element={<ParentHomePage />} />

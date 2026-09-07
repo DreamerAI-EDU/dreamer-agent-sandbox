@@ -97,3 +97,57 @@ def send_verification_email(*, to_addr: str, token: str) -> bool:
         "If you did not register, you can ignore this email.",
     ])
     return send_email(to_addr=to_addr, subject=subject, body=body)
+
+
+def send_reset_email(*, to_addr: str, link: str, lang: str = "zh-hk") -> bool:
+    """Send the password-reset message (single-use link token, 60 min).
+
+    Copy follows the account's lang_code (en / zh-hk / zh-cn); unknown or
+    missing lang falls back to bilingual en + zh-hk per W4 spec §3.3. The
+    plaintext token rides only inside `link`; the DB never sees it.
+    """
+    subject = "[Dreamer AI Edu] 重設密碼 / Password Reset"
+
+    if lang == "en":
+        body = "\n".join([
+            "Dreamer AI Edu Password Reset",
+            "",
+            "Reset within 60 minutes (the link is single-use).",
+            "",
+            "Reset link: " + link,
+            "",
+            "If you did not request this, you can ignore this email.",
+        ])
+    elif lang == "zh-cn":
+        body = "\n".join([
+            "Dreamer AI Edu 密码重置",
+            "",
+            "请在 60 分钟内完成重置（链接只能使用一次）。",
+            "",
+            "重置链接：" + link,
+            "",
+            "如非本人申请，请忽略此邮件。",
+        ])
+    elif lang == "zh-hk":
+        body = "\n".join([
+            "Dreamer AI Edu 密碼重設",
+            "",
+            "請喺 60 分鐘內完成重設（連結只能使用一次）。",
+            "",
+            "重設連結：" + link,
+            "",
+            "如非你本人申請，請忽略此電郵。",
+        ])
+    else:
+        body = "\n".join([
+            "Dreamer AI Edu 密碼重設 / Password Reset",
+            "",
+            "請喺 60 分鐘內完成重設（連結只能使用一次）。",
+            "Please reset within 60 minutes (the link is single-use).",
+            "",
+            "重設連結 / Reset link: " + link,
+            "",
+            "如非你本人申請，請忽略此電郵。",
+            "If you did not request this, you can ignore this email.",
+        ])
+    return send_email(to_addr=to_addr, subject=subject, body=body)

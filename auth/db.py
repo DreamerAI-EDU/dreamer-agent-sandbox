@@ -114,6 +114,18 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id, expires_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_teacher_invites_expires ON teacher_invites(expires_at);
 CREATE INDEX IF NOT EXISTS idx_consent_log_user ON consent_log(user_id, created_at DESC);
+
+-- W4 PR-D: forgot-password reset tokens — DB stores ONLY the SHA-256 hash of
+-- the raw token (three-iron-rule); plaintext appears only in the email link.
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+    token_hash TEXT PRIMARY KEY,           -- SHA-256 hex of the raw token (never the raw token)
+    user_id    TEXT NOT NULL REFERENCES users(id),
+    expires_at TEXT NOT NULL,              -- ISO timestamp; now + RESET_TOKEN_MINUTES
+    used_at    TEXT,                       -- ISO timestamp; single-use marker
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_password_reset_user ON password_reset_tokens(user_id, expires_at);
 """
 
 
@@ -459,5 +471,115 @@ def consume_email_verify_token(
             "SELECT * FROM users WHERE id = ?", (row["id"],)
         )
         return cur.fetchone()
+    finally:
+        conn.close()
+
+
+def revoke_all_sessions(user_id: str) -> None:
+    """Delete every session row for a user (password-reset side effect).
+
+    The user must re-login everywhere after a reset; existing cookies are
+    useless once their session rows are gone.
+    """
+    ensure_schema()
+    conn = connect()
+    try:
+        conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def update_user_password(user_id: str, password_hash: str) -> None:
+    """Replace the user's Argon2id password hash and clear lockout state."""
+    ensure_schema()
+    conn = connect()
+    try:
+        conn.execute(
+            "UPDATE users SET password_hash = ?, failed_logins = 0, "
+            "lock_until = NULL WHERE id = ?",
+            (password_hash, user_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_user_lang_code(user_id: str) -> Optional[str]:
+    """Best-effort account language for email copy (W4 PR-D §3.3).
+
+    users has no lang_code column; the account's language lives on its
+    students rows (teacher via teacher_id, parent via parent_id). Return the
+    first matching student's lang_code, or None when no student is linked
+    (caller falls back to zh-hk)."""
+    ensure_schema()
+    conn = connect()
+    try:
+        cur = conn.execute(
+            "SELECT lang_code FROM students "
+            "WHERE parent_id = ? OR teacher_id = ? "
+            "ORDER BY created_at ASC LIMIT 1",
+            (user_id, user_id),
+        )
+        row = cur.fetchone()
+        return row["lang_code"] if row is not None else None
+    finally:
+        conn.close()
+
+
+def insert_password_reset_token(
+    user_id: str, token_hash: str, expires_at: str
+) -> None:
+    """Store a new reset token hash, invalidating any older pending ones.
+
+    New-application-wastes-old: every pending (unused) row for the user is
+    deleted first so only one valid reset link exists at a time.
+    """
+    ensure_schema()
+    conn = connect()
+    try:
+        conn.execute(
+            "DELETE FROM password_reset_tokens WHERE user_id = ? AND used_at IS NULL",
+            (user_id,),
+        )
+        conn.execute(
+            """INSERT INTO password_reset_tokens
+               (token_hash, user_id, expires_at, used_at, created_at)
+               VALUES (?, ?, ?, NULL, ?)""",
+            (token_hash, user_id, expires_at, _now_iso()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def consume_password_reset_token(
+    token_hash: str,
+) -> Optional[sqlite3.Row]:
+    """Atomically consume a single-use password reset token.
+
+    Returns the joined user row on success (token valid, not expired, not yet
+    used); marks used_at so the same token can never be reused. Returns None on
+    unknown / expired / already-used tokens.
+    """
+    ensure_schema()
+    conn = connect()
+    try:
+        cur = conn.execute(
+            """SELECT u.* FROM password_reset_tokens t
+               JOIN users u ON u.id = t.user_id
+               WHERE t.token_hash = ? AND t.used_at IS NULL
+                 AND t.expires_at > ?""",
+            (token_hash, _now_iso()),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        conn.execute(
+            "UPDATE password_reset_tokens SET used_at = ? WHERE token_hash = ?",
+            (_now_iso(), token_hash),
+        )
+        conn.commit()
+        return row
     finally:
         conn.close()

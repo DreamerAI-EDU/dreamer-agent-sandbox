@@ -1,7 +1,7 @@
 // W2 PR#6 — login page (real POST /api/auth/login).
 
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { api, ApiError } from '../lib/api';
 import { useLang } from '../lib/i18n';
 import { PasswordInput } from '../components/PasswordInput';
@@ -123,6 +123,11 @@ export function LoginPage() {
             </button>
           </form>
           <p className="mt-4 text-xs text-black/40">{copy.loginNote}</p>
+          <p className="mt-3 text-center text-xs">
+            <Link to="/forgot" className="text-black/50 underline-offset-2 hover:underline">
+              {copy.forgotTitle}
+            </Link>
+          </p>
         </div>
       </div>
     </div>

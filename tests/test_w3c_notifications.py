@@ -195,7 +195,11 @@ async def _confirm(client, token, *, password=CONFIRM_PASSWORD):
     """Parent 1-click confirm — deliberately NO CSRF header (email link)."""
     return await client.post(
         f"/api/invites/{token}/confirm",
-        json={"password": password, "privacy_policy": True},
+        json={
+            "password": password,
+            "privacy_policy": True,
+            "chat_consent": True,
+        },
     )
 
 

@@ -473,11 +473,12 @@ async def _assert_upgrade_ok(client, mock_upstream, session, student_id):
 
 
 @pytest.mark.asyncio
-async def test_media_withdrawn_chat_unsigned_opens(client, mock_upstream):
-    """Media withdrawn, chat never signed -> chat still opens.
+async def test_media_withdrawn_chat_unsigned_denied(client, tmp_path):
+    """Media withdrawn + chat unsigned -> 403 by default-deny (PR-D).
 
-    Core W6 decoupling assertion: withdrawing media_consent must NOT stop
-    the AI chat. (Chat unsigned = not a withdrawal, handshake proceeds.)
+    Decoupling survives: the refusal is caused by the UNSIGNED chat
+    consent (required:true now), NOT by the media withdrawal. With a chat
+    agreed row the same media-withdrawn student opens (see the next test).
     """
     session, student_id = _confirmed_trio()
     parent_id = auth_db.get_session_user(session)["id"]
@@ -497,16 +498,24 @@ async def test_media_withdrawn_chat_unsigned_opens(client, mock_upstream):
         student_id=student_id,
     )
 
-    await _assert_upgrade_ok(client, mock_upstream, session, student_id)
+    with pytest.raises(aiohttp.WSServerHandshakeError) as ei:
+        await client.ws_connect(
+            f"/api/ws/chat?student={student_id[:8]}",
+            headers={"Cookie": f"auth_session={session}"},
+        )
+    assert ei.value.status == 403
+    assert any(
+        e["event"] == "ws_chat_rejected" for e in _audit_events(tmp_path)
+    )
 
 
 @pytest.mark.asyncio
-async def test_media_agreed_chat_unsigned_opens(client, mock_upstream):
-    """Media agreed, chat unsigned (new-student default) -> chat opens.
+async def test_media_agreed_chat_unsigned_denied(client, tmp_path):
+    """Media agreed, chat unsigned -> 403 (PR-D default-deny).
 
-    A student who never signed chat_consent is NOT treated as withdrawn;
-    the agree-first enforcement lives in the consent UI flow (PR-D), not
-    in this backend gate.
+    Since the registry flip, a missing chat_consent row is NOT treated as
+    'not withdrawn, proceed'; it is treated as 'not agreed, deny'. This is
+    the enforcement the registration UI (required checkbox) pairs with.
     """
     session, student_id = _confirmed_trio()
     parent_id = auth_db.get_session_user(session)["id"]
@@ -519,7 +528,15 @@ async def test_media_agreed_chat_unsigned_opens(client, mock_upstream):
         student_id=student_id,
     )
 
-    await _assert_upgrade_ok(client, mock_upstream, session, student_id)
+    with pytest.raises(aiohttp.WSServerHandshakeError) as ei:
+        await client.ws_connect(
+            f"/api/ws/chat?student={student_id[:8]}",
+            headers={"Cookie": f"auth_session={session}"},
+        )
+    assert ei.value.status == 403
+    assert any(
+        e["event"] == "ws_chat_rejected" for e in _audit_events(tmp_path)
+    )
 
 
 @pytest.mark.asyncio
@@ -552,10 +569,18 @@ async def test_media_withdrawn_chat_agreed_opens(client, mock_upstream):
 async def test_confirmed_student_upgrades_and_relays(client, mock_upstream):
     """Full happy path: gate passes, relay echoes the mock sequence.
 
-    Also locks the W6 PR-C2 default: a brand-new student with NO consent
-    rows at all (media and chat both unsigned) is NOT treated as
-    withdrawn — the handshake proceeds.
+    PR-D default-deny: a brand-new student needs a current chat_consent
+    agreed row (the registration required checkbox writes it) before the
+    handshake proceeds; media rows are irrelevant to this gate.
     """
     session, student_id = _confirmed_trio()
+    parent_id = auth_db.get_session_user(session)["id"]
+    consent_mod.insert_consent_row(
+        user_id=parent_id,
+        doc_type="chat_consent",
+        doc_version=CHAT_VERSION,
+        action="agreed",
+        student_id=student_id,
+    )
 
     await _assert_upgrade_ok(client, mock_upstream, session, student_id)

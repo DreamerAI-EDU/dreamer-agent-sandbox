@@ -80,6 +80,7 @@ _ERR_FORBIDDEN = {"error": "無權操作"}
 _ERR_STEP_UP = {"error": "需要重新驗證密碼"}
 _ERR_NOTHING_TO_WITHDRAW = {"error": "未有可撤回嘅同意紀錄"}
 _ERR_PRIVACY_REQUIRED = {"error": "必須同意私隱政策先可以繼續"}
+_ERR_CHAT_CONSENT_REQUIRED = {"error": "必須同意 AI 對話服務同意書先可以繼續"}
 
 # Student profile enumerations (B24: no last_name / school / other PII).
 AGE_BANDS = ("P1-P3", "P4-P6", "S1-S3")
@@ -1120,8 +1121,10 @@ async def handle_confirm_invite(request: web.Request) -> web.Response:
     """POST /api/invites/{token}/confirm — parent 1-click confirm.
 
     Called from the email link (no X-Requested-With, CSRF-exempt by design).
-    privacy_policy agreement is mandatory: without it the whole confirm is
-    rejected and no rows are written. Creates the parent account (verified)
+    privacy_policy and chat_consent agreements are both mandatory (W6
+    PR-D: one checkbox binds the two required consents; the API keeps
+    both flags explicit so no caller can half-sign): without both the
+    whole confirm is rejected and no rows are written. Creates the parent account (verified)
     + consent rows + parent binding + session in one transaction.
     """
     token = request.match_info.get("token", "")
@@ -1137,11 +1140,17 @@ async def handle_confirm_invite(request: web.Request) -> web.Response:
     if not isinstance(privacy_agreed, bool) or not privacy_agreed:
         # P3-4: explicit wording — privacy_policy is the mandatory gate.
         return web.json_response(_ERR_PRIVACY_REQUIRED, status=400)
+    chat_agreed = payload.get("chat_consent")
+    if not isinstance(chat_agreed, bool) or not chat_agreed:
+        # W6 PR-D: register binds privacy + chat to one required checkbox;
+        # the API keeps both flags explicit so no caller can half-sign.
+        return web.json_response(_ERR_CHAT_CONSENT_REQUIRED, status=400)
     media_agreed = bool(payload.get("media_consent"))
 
     privacy_doc = consent.get_doc_config("privacy_policy")
+    chat_doc = consent.get_doc_config("chat_consent")
     media_doc = consent.get_doc_config("media_consent")
-    if privacy_doc is None or media_doc is None:
+    if privacy_doc is None or chat_doc is None or media_doc is None:
         return web.json_response(_ERR_INVALID, status=400)
 
     parent_user_id = str(uuid.uuid4())
@@ -1152,6 +1161,7 @@ async def handle_confirm_invite(request: web.Request) -> web.Response:
         parent_user_id=parent_user_id,
         password_hash=hash_password(password),
         privacy_version=privacy_doc["current_version"],
+        chat_version=chat_doc["current_version"],
         media_version=media_doc["current_version"],
         media_agreed=media_agreed,
         session_id=session_id,

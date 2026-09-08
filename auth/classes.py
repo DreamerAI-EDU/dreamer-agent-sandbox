@@ -382,6 +382,7 @@ def confirm_invite_flow(
     parent_user_id: str,
     password_hash: str,
     privacy_version: str,
+    chat_version: str,
     media_version: str,
     media_agreed: bool,
     session_id: str,
@@ -394,8 +395,10 @@ def confirm_invite_flow(
     Steps (all-or-nothing inside one SQLite connection):
       1. validate token (exists, unused, not expired, not superseded)
       2. create parent user (email_verified=TRUE)
-      3. append consent_log rows — privacy_policy is mandatory agreed;
-         media_consent only when the parent opted in (voluntary)
+      3. append consent_log rows — privacy_policy AND chat_consent are
+         mandatory agreed (W6 PR-D: register binds both required consents
+         to one checkbox); media_consent only when the parent opted in
+         (voluntary)
       4. bind students.parent_id
       5. mark invites.used_at
       6. open a session for the parent
@@ -452,6 +455,17 @@ def confirm_invite_flow(
                 student_id,
                 "privacy_policy",
                 privacy_version,
+                "agreed",
+                ip,
+                user_agent,
+                now,
+            ),
+            (
+                str(uuid.uuid4()),
+                parent_user_id,
+                student_id,
+                "chat_consent",
+                chat_version,
                 "agreed",
                 ip,
                 user_agent,

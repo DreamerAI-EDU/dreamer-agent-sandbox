@@ -267,12 +267,19 @@ async def _create_invite(
     return await resp.json()
 
 
-async def _confirm(client, token, *, privacy=True, media=False,
+async def _confirm(client, token, *, privacy=True, chat=True, media=False,
                    password=CONFIRM_PASSWORD):
-    """Parent 1-click confirm — deliberately NO CSRF header (email link)."""
+    """Parent 1-click confirm — deliberately NO CSRF header (email link).
+
+    W6 PR-D: the register checkbox binds privacy_policy + chat_consent;
+    the helper sends both when consenting (pass chat=False to simulate a
+    half-sign caller).
+    """
     payload = {"password": password}
     if privacy is not None:
         payload["privacy_policy"] = privacy
+    if chat:
+        payload["chat_consent"] = True
     if media:
         payload["media_consent"] = True
     return await client.post(f"/api/invites/{token}/confirm", json=payload)
@@ -457,13 +464,13 @@ async def test_confirm_invite_success_creates_parent_and_binding(
     student = _student_row(student_id)
     assert student["parent_id"] == parent_id      # binding applied
 
-    # consent_log: privacy agreed, linked to the student, current version.
+    # consent_log: privacy + chat both agreed (W6 PR-D register binds
+    # the two required consents), linked to the student, current version.
     rows = _consent_rows(parent_id)
-    assert len(rows) == 1
-    assert rows[0][0] == "privacy_policy"
-    assert rows[0][1] == "v2026-08-26"
-    assert rows[0][2] == "agreed"
-    assert rows[0][3] == student_id
+    assert len(rows) == 2
+    assert {r[0] for r in rows} == {"privacy_policy", "chat_consent"}
+    assert all(r[2] == "agreed" for r in rows)
+    assert all(r[3] == student_id for r in rows)
 
     # invite marked used; class_students still pending until teacher confirm.
     assert _invite_row(tok)["used_at"] is not None
@@ -597,13 +604,40 @@ async def test_confirm_invite_with_media_opt_in_writes_media_row(
     parent_id = (await resp.json())["user"]["id"]
 
     rows = _consent_rows(parent_id)
-    assert len(rows) == 2
+    assert len(rows) == 3
     assert [(r[0], r[1], r[2]) for r in rows] == [
         ("privacy_policy", "v2026-08-26", "agreed"),
+        ("chat_consent", "v2026-09-08", "agreed"),
         ("media_consent", "v2026-08-26", "agreed"),
     ]
     student_id = _invite_row(tok)["student_id"]
     assert all(r[3] == student_id for r in rows)
+
+
+# ---------------------------------------------------------------------------
+# 19b. Confirm rejects half-sign: chat_consent missing (W6 PR-D)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_confirm_invite_half_sign_chat_missing_rejected(
+    client, fresh_invite
+):
+    """privacy_policy alone (no chat_consent) -> 400, no rows written.
+
+    W6 PR-D: the register checkbox binds privacy + chat to one required
+    agreement; the API keeps both flags explicit so no caller can
+    half-sign. The invite stays unconsumed.
+    """
+    token = await _setup_logged_in_user(client)
+    cls = await _create_class_via_api(client, token)
+    await _create_invite(client, token, cls["id"])
+    tok = _latest_invite_token()
+
+    resp = await _confirm(client, tok, privacy=True, chat=False)
+    assert resp.status == 400
+    assert _invite_row(tok)["used_at"] is None
+    # No parent row yet -> nothing in consent_log for this invite.
+    assert _consent_rows("") == []
 
 
 # ---------------------------------------------------------------------------

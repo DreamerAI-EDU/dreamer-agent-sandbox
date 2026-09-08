@@ -47,6 +47,8 @@ DOC_TYPES = ("privacy_policy", "media_consent", "chat_consent")
 LEGAL_ROUTES = {
     "privacy-policy": "privacy_policy",
     "media-consent": "media_consent",
+    # W6 PR-D: standalone consent page for the AI chat tutoring feature.
+    "chat-consent": "chat_consent",
 }
 
 _ERR_INVALID = {"error": "請求無效"}

@@ -23,6 +23,6 @@ documents:
     title_en: "Media Consent Form"
   chat_consent:
     current_version: "v2026-09-08"
-    required: false         # W6 PR-C2：唔郁 login gate（D-W6-3 re-sign 流程歸 PR-D）
+    required: true          # W6 PR-D default-deny flip：chat gate 讀呢個 flag，未簽唔開 AI 對話
     title_zh: "AI 對話服務同意書"
     title_en: "AI Chat Service Consent"

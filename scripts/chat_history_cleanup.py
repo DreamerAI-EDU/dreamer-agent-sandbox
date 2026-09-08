@@ -185,6 +185,10 @@ def run_host(container: str, apply: bool, marker_path: Path) -> dict[str, Any]:
     cmd.append("--json")
     proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
     report = json.loads(proc.stdout)
+    # Marker is written only on apply runs — a dry-run marker would fool the
+    # retention health check into thinking the deletion job actually ran.
+    if not apply:
+        return report
     marker_path.parent.mkdir(parents=True, exist_ok=True)
     marker = {
         "run_at": report["run_at"],

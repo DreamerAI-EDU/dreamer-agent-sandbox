@@ -63,6 +63,10 @@ export function InvitePage() {
       await api.inviteConfirm(token, {
         password,
         privacy_policy: privacyAgreed,
+        // W6 PR-D: the single required checkbox binds BOTH required
+        // consents — privacy_policy + chat_consent. Backend rejects
+        // half-sign callers.
+        chat_consent: privacyAgreed,
         media_consent: mediaAgreed,
       });
       navigate('/home', { replace: true });
@@ -153,10 +157,19 @@ export function InvitePage() {
                 className="mt-0.5 h-4 w-4 accent-black"
               />
               <span>
-                {copy.invitePrivacyMust}{' '}
-                <a href="/legal/privacy-policy" target="_blank" rel="noreferrer" className="underline underline-offset-2">
-                  {copy.readPolicy}
-                </a>
+                <span>
+                  {copy.invitePrivacyMust}{' '}
+                  <span className="text-black/40">{copy.inviteConsentRequiredTag}</span>
+                </span>
+                <span className="mt-0.5 block text-xs text-black/50">
+                  <a href="/legal/privacy-policy" target="_blank" rel="noreferrer" className="underline underline-offset-2">
+                    {copy.consentPrivacy}
+                  </a>
+                  {' · '}
+                  <a href="/legal/chat-consent" target="_blank" rel="noreferrer" className="underline underline-offset-2">
+                    {copy.consentChat}
+                  </a>
+                </span>
               </span>
             </label>
             <label className="flex items-start gap-2 text-sm">
@@ -167,8 +180,11 @@ export function InvitePage() {
                 className="mt-0.5 h-4 w-4 accent-black"
               />
               <span>
-                {copy.inviteMedia}{' '}
-                <a href="/legal/media-consent" target="_blank" rel="noreferrer" className="underline underline-offset-2">
+                <span>
+                  {copy.inviteMedia}{' '}
+                  <span className="text-black/40">{copy.inviteConsentOptionalTag}</span>
+                </span>
+                <a href="/legal/media-consent" target="_blank" rel="noreferrer" className="mt-0.5 block text-xs underline underline-offset-2 text-black/50">
                   {copy.readPolicy}
                 </a>
               </span>

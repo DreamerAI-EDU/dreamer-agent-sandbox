@@ -47,6 +47,8 @@ DOC_TYPES = ("privacy_policy", "media_consent", "chat_consent")
 LEGAL_ROUTES = {
     "privacy-policy": "privacy_policy",
     "media-consent": "media_consent",
+    # W6 PR-D: standalone consent page for the AI chat tutoring feature.
+    "chat-consent": "chat_consent",
 }
 
 _ERR_INVALID = {"error": "請求無效"}
@@ -192,6 +194,47 @@ def has_current_agreement(user_id: str, doc_type: str) -> bool:
         latest
         and latest["action"] == "agreed"
         and latest["doc_version"] == current_version
+    )
+
+
+def student_has_current_agreement(
+    user_id: str,
+    doc_type: str,
+    student_id: str,
+) -> bool:
+    """True when the student's latest row for doc_type is an agreed row on
+    the current version.
+
+    Scope matches sign / withdraw / _student_consent_withdrawn: student-
+    bound rows plus account-level NULL rows both cover the student (latest
+    row decides). Used by the default-deny chat gate (W6 PR-D): a required
+    chat_consent is satisfied only by a current-version `agreed` row —
+    `unsigned`, `withdrawn` or a stale version all keep the gate closed.
+    """
+    doc = get_doc_config(doc_type)
+    if doc is None:
+        return False
+    current_version = doc["current_version"]
+
+    from . import db
+
+    db.ensure_schema()
+    conn = db.connect()
+    try:
+        cur = conn.execute(
+            """SELECT doc_version, action FROM consent_log
+               WHERE user_id = ? AND doc_type = ?
+                 AND (student_id = ? OR student_id IS NULL)
+               ORDER BY created_at DESC, rowid DESC LIMIT 1""",
+            (user_id, doc_type, student_id),
+        )
+        row = cur.fetchone()
+    finally:
+        conn.close()
+    return bool(
+        row
+        and row["action"] == "agreed"
+        and row["doc_version"] == current_version
     )
 
 

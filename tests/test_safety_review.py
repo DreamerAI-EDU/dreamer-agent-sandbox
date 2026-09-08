@@ -250,12 +250,14 @@ async def _create_invite(
     return await resp.json()
 
 
-async def _confirm(client, token, *, privacy=True, media=False,
+async def _confirm(client, token, *, privacy=True, chat=True, media=False,
                    password=CONFIRM_PASSWORD):
     """Parent 1-click confirm — deliberately NO CSRF header (email link)."""
     payload = {"password": password}
     if privacy is not None:
         payload["privacy_policy"] = privacy
+    if chat:
+        payload["chat_consent"] = True
     if media:
         payload["media_consent"] = True
     return await client.post(f"/api/invites/{token}/confirm", json=payload)

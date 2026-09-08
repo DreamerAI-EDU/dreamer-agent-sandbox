@@ -16,8 +16,13 @@ Gate order (spec v1.4 §1.1, same state sources as pin-verify):
                    inside the caller's reachable set
     4. class     — classes.student_class_confirmed() (the single shared
                    decision with pin-verify — never a second copy)
-    5. consent   — the student's latest media_consent row is not
-                   withdrawn (consent.student_media_consent_withdrawn)
+    5. consent   — the student may open AI chat (W6 PR-C2 decoupled:
+                   the gate hangs off chat_consent, not media_consent).
+                   Default-deny (PR-D, yaml chat_consent required: true):
+                   a current-version agreed row must cover the student —
+                   unsigned / withdrawn / stale version all refuse. Before
+                   the flip (required: false) the legacy rule applies:
+                   only an explicit chat_consent withdrawal refuses.
 
 On success the request upgrades and frames relay bidirectionally to the
 DeepTutor unified endpoint (/api/v1/ws). One chat connection = one
@@ -198,7 +203,21 @@ async def handle_ws_chat(request: web.Request) -> web.Response:
             target_id=student["id"],
         )
 
-    if consent_mod.student_chat_consent_withdrawn(
+    chat_doc = consent_mod.get_doc_config("chat_consent")
+    if chat_doc is not None and chat_doc.get("required"):
+        # Default-deny: a current-version agreed row must cover the
+        # student. Unsigned / withdrawn / stale version all refuse.
+        if not consent_mod.student_has_current_agreement(
+            user["id"], "chat_consent", student["id"]
+        ):
+            return _reject(
+                403,
+                api_mod._ERR_FORBIDDEN,
+                gate="chat_consent_required",
+                user_id=user["id"],
+                target_id=student["id"],
+            )
+    elif consent_mod.student_chat_consent_withdrawn(
         user["id"], student["id"]
     ):
         return _reject(

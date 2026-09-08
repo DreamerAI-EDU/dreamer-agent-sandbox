@@ -135,7 +135,7 @@ export const api = {
 
   invitePublic: (token: string) =>
     request<InvitePublic>(`/api/invites/${token}`, { method: 'GET' }),
-  inviteConfirm: (token: string, payload: { password: string; privacy_policy: boolean; media_consent: boolean }) =>
+  inviteConfirm: (token: string, payload: { password: string; privacy_policy: boolean; chat_consent: boolean; media_consent: boolean }) =>
     request<InviteConfirmResponse>(`/api/invites/${token}/confirm`, {
       body: payload,
       csrf: false, // backend-exempt; do NOT send X-Requested-With

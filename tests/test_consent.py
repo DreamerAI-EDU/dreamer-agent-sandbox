@@ -153,7 +153,7 @@ async def test_docs_registry_and_legal_pages_pair_with_yaml(
 
     cc = documents["chat_consent"]
     assert cc["current_version"] == "v2026-09-08"
-    assert cc["required"] is False
+    assert cc["required"] is True
     assert cc["title_zh"] == "AI 對話服務同意書"
     assert cc["title_en"] == "AI Chat Service Consent"
 
@@ -175,6 +175,18 @@ async def test_docs_registry_and_legal_pages_pair_with_yaml(
     assert MEDIA_HTML_SNIPPET in mc_html
     assert "withdraw consent at any time" in mc_html
     assert "24 小時內" in mc_html
+
+    # W6 PR-D: chat-consent legal page ships on the same route + version
+    # injection pipeline. The version literal must NEVER leak as {{VERSION}}.
+    cc_page = await client.get("/legal/chat-consent")
+    assert cc_page.status == 200
+    cc_html = await cc_page.text()
+    assert "v2026-09-08" in cc_html
+    assert "{{VERSION}}" not in cc_html
+    assert "Effective Date 生效日期：8 September 2026" in cc_html
+    assert "90 日" in cc_html
+    assert "本人<strong>同意</strong>" in cc_html
+    assert "info@dreamer-aiedu.com" in cc_html
 
     # Unknown legal slug → 404.
     missing = await client.get("/legal/not-a-page")
@@ -307,23 +319,34 @@ async def test_login_re_sign_gate_toggles_with_privacy_signature(
     await _register_teacher(client)
     user = auth_db.get_user_by_email("teacher@test.local")
 
-    # Fresh user: privacy_policy required, unsigned → gate on.
+    # Fresh user: both required docs (privacy + chat) unsigned → gate on.
     login1 = await _login(client)
     assert login1.status == 200
     body1 = await login1.json()
     assert body1["consent_required"] is True
-    assert body1["missing_consent"] == ["privacy_policy"]
+    assert body1["missing_consent"] == ["privacy_policy", "chat_consent"]
     token1 = _session_cookie(login1)
 
-    # Sign privacy_policy at the current version.
+    # Signing ONLY privacy_policy still leaves chat_consent missing (PR-D).
     resp = await client.post(
         "/api/consent/sign",
         json={"doc_type": "privacy_policy", "doc_version": "v2026-08-26"},
         headers={**HEADERS, "Cookie": f"auth_session={token1}"},
     )
     assert resp.status == 201
+    login_mid = await _login(client)
+    body_mid = await login_mid.json()
+    assert body_mid["consent_required"] is True
+    assert body_mid["missing_consent"] == ["chat_consent"]
 
-    # Next login: gate off, nothing missing.
+    # Sign chat_consent too → gate off, nothing missing.
+    resp2 = await client.post(
+        "/api/consent/sign",
+        json={"doc_type": "chat_consent", "doc_version": "v2026-09-08"},
+        headers={**HEADERS, "Cookie": f"auth_session={token1}"},
+    )
+    assert resp2.status == 201
+
     login2 = await _login(client)
     assert login2.status == 200
     body2 = await login2.json()
@@ -344,8 +367,9 @@ async def test_media_consent_does_not_trigger_re_sign_gate(
     login = await _login(client)
     assert login.status == 200
     body = await login.json()
-    # Missing list contains only the required doc — media_consent is optional.
-    assert body["missing_consent"] == ["privacy_policy"]
+    # Missing list holds the required docs (privacy + chat) — media_consent
+    # is optional and never appears.
+    assert body["missing_consent"] == ["privacy_policy", "chat_consent"]
 
 
 # ---------------------------------------------------------------------------
@@ -359,14 +383,19 @@ async def test_version_bump_re_triggers_re_sign_gate(
     await _register_teacher(client)
     user = auth_db.get_user_by_email("teacher@test.local")
 
-    # Sign at v2026-08-26 → gate off.
+    # Sign both required docs → gate off.
     login1 = await _login(client)
     token1 = _session_cookie(login1)
-    await client.post(
-        "/api/consent/sign",
-        json={"doc_type": "privacy_policy", "doc_version": "v2026-08-26"},
-        headers={**HEADERS, "Cookie": f"auth_session={token1}"},
-    )
+    for doc_type, doc_version in (
+        ("privacy_policy", "v2026-08-26"),
+        ("chat_consent", "v2026-09-08"),
+    ):
+        resp = await client.post(
+            "/api/consent/sign",
+            json={"doc_type": doc_type, "doc_version": doc_version},
+            headers={**HEADERS, "Cookie": f"auth_session={token1}"},
+        )
+        assert resp.status == 201
     login_ok = await _login(client)
     assert (await login_ok.json())["consent_required"] is False
 

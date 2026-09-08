@@ -69,8 +69,14 @@ export function ConsentPage() {
     [pending],
   );
   const mediaDoc = useMemo(() => pending.find((p) => p.docType === 'media_consent'), [pending]);
+  const chatDoc = useMemo(() => pending.find((p) => p.docType === 'chat_consent'), [pending]);
+  // W6 PR-D: every required doc gates submit (privacy + chat once the
+  // registry flips chat_consent.required to true); voluntary docs never do.
+  const chatMissing = useMemo(() => (chatDoc ? !!chatDoc.doc.required : false), [chatDoc]);
   const privacyAgreed = !!agreed['privacy_policy'];
-  const canSubmit = !privacyMissing || privacyAgreed;
+  const chatAgreed = !!agreed['chat_consent'];
+  const canSubmit =
+    (!privacyMissing || privacyAgreed) && (!chatMissing || chatAgreed);
 
   const submit = async () => {
     if (!canSubmit || busy) return;
@@ -143,7 +149,11 @@ export function ConsentPage() {
                       )}
                     </h2>
                     <p className="mt-1 text-sm text-black/50">
-                      {isPrivacy ? copy.consentPrivacyDesc : copy.consentMediaDesc}
+                      {isPrivacy
+                        ? copy.consentPrivacyDesc
+                        : docType === 'chat_consent'
+                          ? copy.consentChatDesc
+                          : copy.consentMediaDesc}
                     </p>
                     <p className="mt-1 text-xs text-black/40">Version {doc.current_version}</p>
                     <a
@@ -162,7 +172,11 @@ export function ConsentPage() {
                       onChange={(e) => setAgreed((prev) => ({ ...prev, [docType]: e.target.checked }))}
                       className="h-4 w-4 accent-black"
                     />
-                    {isPrivacy ? copy.consentPrivacy : copy.consentMedia}
+                    {isPrivacy
+                      ? copy.consentPrivacy
+                      : docType === 'chat_consent'
+                        ? copy.consentChat
+                        : copy.consentMedia}
                   </label>
                 </div>
               </div>

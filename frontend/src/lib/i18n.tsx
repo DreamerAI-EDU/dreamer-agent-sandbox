@@ -46,6 +46,8 @@ export interface Copy {
   consentPrivacyDesc: string;
   consentMedia: string;
   consentMediaDesc: string;
+  consentChat: string;
+  consentChatDesc: string;
   consentRequired: string;
   consentBtn: string;
   consentBtnDisabled: string;
@@ -61,7 +63,9 @@ export interface Copy {
   inviteEmail: string;
   invitePasswordHint: string;
   invitePrivacyMust: string;
+  inviteConsentRequiredTag: string;
   inviteMedia: string;
+  inviteConsentOptionalTag: string;
   inviteBtn: string;
   inviteInvalidTitle: string;
   inviteInvalidDesc: string;
@@ -173,6 +177,8 @@ export const copyEn: Copy = {
   consentPrivacyDesc: 'Required — how we collect and use your data.',
   consentMedia: 'Media Consent',
   consentMediaDesc: 'Optional — allow the use of child media in class materials.',
+  consentChat: 'AI Chat Service Consent',
+  consentChatDesc: 'Required — how AI chat messages are handled.',
   consentRequired: 'Required',
   consentBtn: 'Agree & continue',
   consentBtnDisabled: 'Privacy Policy must be agreed',
@@ -186,8 +192,10 @@ export const copyEn: Copy = {
   inviteLang: 'Language',
   inviteEmail: 'Parent email',
   invitePasswordHint: 'Password',
-  invitePrivacyMust: 'I agree to the Privacy Policy',
-  inviteMedia: 'I agree to the Media Consent (optional)',
+  invitePrivacyMust: 'I agree to the Privacy Policy and the AI Chat Service Consent',
+  inviteConsentRequiredTag: '[Required]',
+  inviteMedia: 'I agree to the Media Consent',
+  inviteConsentOptionalTag: '[Optional]',
   inviteBtn: 'Activate account',
   inviteInvalidTitle: 'This invitation link is invalid or has expired',
   inviteInvalidDesc: 'Please ask the teacher to send a new invitation link.',
@@ -297,6 +305,8 @@ const copyHk: Copy = {
   consentPrivacyDesc: '必須 — 我哋點樣收集同使用你嘅資料。',
   consentMedia: '媒體同意書',
   consentMediaDesc: '可選 — 容許課堂教材使用小朋友嘅媒體。',
+  consentChat: 'AI 對話服務同意書',
+  consentChatDesc: '必需 — AI 對話內容嘅處理方式。',
   consentRequired: '必須',
   consentBtn: '同意並繼續',
   consentBtnDisabled: '必須同意私隱政策',
@@ -310,8 +320,10 @@ const copyHk: Copy = {
   inviteLang: '語言',
   inviteEmail: '家長電郵',
   invitePasswordHint: '密碼',
-  invitePrivacyMust: '我同意私隱政策',
-  inviteMedia: '我同意媒體同意書（可選）',
+  invitePrivacyMust: '我同意《私隱政策》及《AI 對話服務同意書》',
+  inviteConsentRequiredTag: '【必需】',
+  inviteMedia: '我同意《媒體同意書》',
+  inviteConsentOptionalTag: '【自願】',
   inviteBtn: '啟用帳號',
   inviteInvalidTitle: '呢條邀請連結無效或已過期',
   inviteInvalidDesc: '請搵老師重新發送邀請連結。',
@@ -421,6 +433,8 @@ const copyCn: Copy = {
   consentPrivacyDesc: '必须 — 我们如何收集和使用你的数据。',
   consentMedia: '媒体同意书',
   consentMediaDesc: '可选 — 允许课堂教材使用孩子的媒体。',
+  consentChat: 'AI 对话服务同意书',
+  consentChatDesc: '必需 — AI 对话内容的处理方式。',
   consentRequired: '必须',
   consentBtn: '同意并继续',
   consentBtnDisabled: '必须同意隐私政策',
@@ -434,8 +448,10 @@ const copyCn: Copy = {
   inviteLang: '语言',
   inviteEmail: '家长邮箱',
   invitePasswordHint: '密码',
-  invitePrivacyMust: '我同意隐私政策',
-  inviteMedia: '我同意媒体同意书（可选）',
+  invitePrivacyMust: '我同意《隐私政策》及《AI 对话服务同意书》',
+  inviteConsentRequiredTag: '【必需】',
+  inviteMedia: '我同意《媒体同意书》',
+  inviteConsentOptionalTag: '【自願】',
   inviteBtn: '启用账号',
   inviteInvalidTitle: '此邀请链接无效或已过期',
   inviteInvalidDesc: '请联系老师重新发送邀请链接。',

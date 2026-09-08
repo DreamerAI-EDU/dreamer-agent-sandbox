@@ -119,10 +119,24 @@ export const api = {
     request<StepUpResponse>('/api/auth/step-up', { body: { password } }),
 
   consentDocs: () => request<ConsentDocsResponse>('/api/consent/docs'),
-  consentStatus: () => request<ConsentStatusResponse>('/api/consent/status'),
+  consentStatus: (studentId?: string) =>
+    request<ConsentStatusResponse>(
+      studentId
+        ? `/api/consent/status?student=${encodeURIComponent(studentId)}`
+        : '/api/consent/status',
+    ),
   consentSign: (docType: string, docVersion: string) =>
     request<{ ok: true; doc_type: string }>('/api/consent/sign', {
       body: { doc_type: docType, doc_version: docVersion },
+    }),
+  // W6 PR-E: per-child withdrawal — the dashboard only holds the 8-char
+  // masked Student.id; the backend resolves it inside the parent's
+  // reachable set (auth/api.py _consent_resolve_student).
+  consentWithdraw: (docType: string, studentId?: string) =>
+    request<{ ok: true }>('/api/consent/withdraw', {
+      body: studentId
+        ? { doc_type: docType, student_id: studentId }
+        : { doc_type: docType },
     }),
 
   students: () => request<StudentsResponse>('/api/students'),

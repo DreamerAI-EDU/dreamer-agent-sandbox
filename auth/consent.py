@@ -378,6 +378,62 @@ def status_for_user(user_id: str) -> dict[str, dict[str, Any]]:
     return out
 
 
+def status_for_student(
+    user_id: str,
+    student_id: str,
+) -> dict[str, dict[str, Any]]:
+    """Per-document status for /api/consent/status?student=<mask|id>.
+
+    Scope matches sign / withdraw / the chat gate (PR-E): the student is
+    covered by his own consent rows plus account-level NULL rows — the
+    latest row decides. A student with no covering rows at all reports
+    `unsigned`, same vocabulary as status_for_user.
+    """
+    from . import db
+
+    db.ensure_schema()
+    conn = db.connect()
+    try:
+        cur = conn.execute(
+            """SELECT doc_type, doc_version, action, created_at
+               FROM consent_log
+               WHERE user_id = ? AND (student_id = ? OR student_id IS NULL)
+               ORDER BY created_at DESC, rowid DESC""",
+            (user_id, student_id),
+        )
+        rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    latest: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        doc_type = row["doc_type"]
+        if doc_type not in latest:
+            latest[doc_type] = {
+                "doc_type": doc_type,
+                "doc_version": row["doc_version"],
+                "action": row["action"],
+                "created_at": row["created_at"],
+            }
+
+    docs = load_consent_docs()
+    out: dict[str, dict[str, Any]] = {}
+    for doc_type, cfg in docs["documents"].items():
+        entry = latest.get(doc_type)
+        out[doc_type] = {
+            "doc_type": doc_type,
+            "current_version": cfg["current_version"],
+            "required": bool(cfg.get("required")),
+            "title_zh": cfg.get("title_zh", ""),
+            "title_en": cfg.get("title_en", ""),
+            "status": (
+                entry["action"] if entry else "unsigned"
+            ),
+            "doc_version": entry["doc_version"] if entry else None,
+        }
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Audit log (media takedown downstream marker)
 # ---------------------------------------------------------------------------

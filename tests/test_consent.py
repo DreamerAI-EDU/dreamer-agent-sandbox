@@ -13,6 +13,7 @@ test 13 enforces this repo-wide).
 from __future__ import annotations
 
 import datetime
+import json
 import os
 import re
 import sqlite3
@@ -735,3 +736,178 @@ async def test_consent_own_parent_sign_withdraw_own_student_ok(
         ("media_consent", "v2026-08-26", "withdrawn"),
     ]
     assert all(r[3] == student_id for r in rows)
+
+
+# ---------------------------------------------------------------------------
+# 17-20. W6 PR-E — per-student status + mask-prefix resolution.
+# The parent dashboard only holds the 8-char masked Student.id; sign /
+# withdraw / status?student must accept the mask, resolve it inside the
+# caller's reachable set, and never leak full ids to the client.
+# ---------------------------------------------------------------------------
+
+def _mask_of(full_id: str) -> str:
+    return full_id[:8]
+
+
+# 17. per-student status + withdraw round-trip via mask (PR-E happy path)
+@pytest.mark.asyncio
+async def test_consent_status_and_withdraw_via_mask(client, tmp_path):
+    parent_id, email, pw = _create_parent_user("parent-pr-e@test.local")
+    student_id = _create_db_student(parent_id=parent_id, first_name="小明")
+    token = await _login_parent(client, email, pw)
+    mask = _mask_of(student_id)
+    headers = {**HEADERS, "Cookie": f"auth_session={token}"}
+
+    # Fresh student: per-student status reports unsigned for everything.
+    status = await client.get(
+        f"/api/consent/status?student={mask}", headers=headers
+    )
+    assert status.status == 200
+    docs = (await status.json())["documents"]
+    assert docs["media_consent"]["status"] == "unsigned"
+    assert docs["chat_consent"]["status"] == "unsigned"
+
+    # Sign media consent scoped to the student, using the mask.
+    sign = await client.post(
+        "/api/consent/sign",
+        json={
+            "doc_type": "media_consent",
+            "doc_version": "v2026-08-26",
+            "student_id": mask,
+        },
+        headers=headers,
+    )
+    assert sign.status == 201, await sign.text()
+
+    # The row is stored against the FULL student id — never the mask.
+    conn = sqlite3.connect(os.environ["DREAMER_DB_PATH"])
+    try:
+        rows = conn.execute(
+            "SELECT doc_version, action, student_id FROM consent_log "
+            "WHERE doc_type = 'media_consent' AND student_id = ?",
+            (student_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    assert rows == [("v2026-08-26", "agreed", student_id)]
+
+    # Per-student status (mask == full id) now shows agreed.
+    for param in (mask, student_id):
+        status = await client.get(
+            f"/api/consent/status?student={param}", headers=headers
+        )
+        assert status.status == 200
+        assert (await status.json())["documents"]["media_consent"]["status"] == "agreed"
+
+    # Withdraw via the mask → per-student status flips to withdrawn, and the
+    # media takedown audit marker carries the full student id.
+    withdraw = await client.post(
+        "/api/consent/withdraw",
+        json={"doc_type": "media_consent", "student_id": mask},
+        headers=headers,
+    )
+    assert withdraw.status == 200, await withdraw.text()
+
+    status = await client.get(
+        f"/api/consent/status?student={mask}", headers=headers
+    )
+    assert (await status.json())["documents"]["media_consent"]["status"] == "withdrawn"
+
+    audit = tmp_path / "audit_log.jsonl"
+    events = [
+        json.loads(line)
+        for line in audit.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    marker = [e for e in events if e.get("event") == "media_takedown_pending"]
+    assert len(marker) == 1
+    assert marker[0]["student_id"] == student_id
+
+    # Double withdraw through the mask collapses into the uniform 400.
+    again = await client.post(
+        "/api/consent/withdraw",
+        json={"doc_type": "media_consent", "student_id": mask},
+        headers=headers,
+    )
+    assert again.status == 400
+
+
+# 18. account-level rows cover the student; per-student status honours the
+# same scope as the chat gate (student rows + NULL rows, latest decides).
+@pytest.mark.asyncio
+async def test_consent_status_student_account_level_null_covers(client):
+    parent_id, email, pw = _create_parent_user("parent-pr-e2@test.local")
+    student_id = _create_db_student(parent_id=parent_id)
+    token = await _login_parent(client, email, pw)
+    mask = _mask_of(student_id)
+    headers = {**HEADERS, "Cookie": f"auth_session={token}"}
+
+    # Account-level chat_consent signature (no student_id).
+    sign = await client.post(
+        "/api/consent/sign",
+        json={"doc_type": "chat_consent", "doc_version": "v2026-09-08"},
+        headers=headers,
+    )
+    assert sign.status == 201, await sign.text()
+
+    status = await client.get(
+        f"/api/consent/status?student={mask}", headers=headers
+    )
+    assert status.status == 200
+    docs = (await status.json())["documents"]
+    assert docs["chat_consent"]["status"] == "agreed"
+    # Student-scoped rows (none here) must not mask the NULL agreement.
+    assert docs["privacy_policy"]["status"] == "unsigned"
+
+
+# 19. foreign student's mask → 403, and the status endpoint stays silent on
+# id existence (uniform 403, no hint).
+@pytest.mark.asyncio
+async def test_consent_status_foreign_student_mask_forbidden(client):
+    parent_a, _, _ = _create_parent_user("parent-pr-e3-a@test.local")
+    student_id = _create_db_student(parent_id=parent_a)
+    _, email_b, pw_b = _create_parent_user("parent-pr-e3-b@test.local")
+    token_b = await _login_parent(client, email_b, pw_b)
+
+    resp = await client.get(
+        f"/api/consent/status?student={_mask_of(student_id)}",
+        headers={**HEADERS, "Cookie": f"auth_session={token_b}"},
+    )
+    assert resp.status == 403
+
+    # A random 8-char mask that does not exist must look identical.
+    resp = await client.get(
+        "/api/consent/status?student=ffffffff",
+        headers={**HEADERS, "Cookie": f"auth_session={token_b}"},
+    )
+    assert resp.status == 403
+
+
+# 20. ambiguous mask (two reachable students sharing the prefix) → 400
+@pytest.mark.asyncio
+async def test_consent_status_ambiguous_mask_bad_request(client):
+    parent_id, email, pw = _create_parent_user("parent-pr-e4@test.local")
+    token = await _login_parent(client, email, pw)
+    prefix = "abcd1234"
+    now = (
+        datetime.datetime.now(datetime.timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    conn = sqlite3.connect(os.environ["DREAMER_DB_PATH"])
+    try:
+        for suffix, name in (("0000aaaaaaaaaaaa", "甲"), ("0000bbbbbbbbbbbb", "乙")):
+            conn.execute(
+                "INSERT INTO students (id, parent_id, first_name, age_band, "
+                "lang_code, created_at) VALUES (?, ?, ?, 'P1-P3', 'zh-hk', ?)",
+                (prefix + suffix, parent_id, name, now),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    resp = await client.get(
+        f"/api/consent/status?student={prefix}",
+        headers={**HEADERS, "Cookie": f"auth_session={token}"},
+    )
+    assert resp.status == 400

@@ -67,6 +67,18 @@ LEARNING_TABLES: tuple[str, ...] = (
     "obs_events",
 )
 
+# Time column per learning table — must mirror the real migration schemas
+# (migrations/phase3_assessment.sql + phase4/phase5 files), NOT a test
+# fixture. progress_snapshots is an upsert table with only updated_at.
+LEARNING_TIME_COLUMNS: dict[str, str] = {
+    "assessment_logs": "created_at",
+    "progress_snapshots": "updated_at",
+    "portfolio_items": "created_at",
+    "plan_proposals": "created_at",
+    "session_logs": "created_at",
+    "obs_events": "created_at",
+}
+
 DEFAULT_DB = Path(__file__).resolve().parent.parent / "dreamer.db"
 DEFAULT_MARKER = Path(__file__).resolve().parent.parent / "state" / "retention_last_run.json"
 
@@ -138,14 +150,15 @@ def apply_safety_deletes(conn: sqlite3.Connection, ids: list[str]) -> int:
 # ---------------------------------------------------------------------------
 
 def _student_last_activity_sql() -> str:
-    """Overall max(created_at) per student across the six learning tables.
+    """Overall max(activity time) per student across the six learning tables.
 
-    UNION ALL + outer MAX avoids per-table ordering surprises and stays
-    valid even when some tables are empty (empty GROUP BY simply yields no
-    rows for that table).
+    The time column is per-table (progress_snapshots is an upsert table with
+    only updated_at; the other five carry created_at). UNION ALL + outer MAX
+    avoids per-table ordering surprises and stays valid even when some tables
+    are empty (empty GROUP BY simply yields no rows for that table).
     """
     branches = "\n  UNION ALL\n".join(
-        f"SELECT student_id, MAX(created_at) AS last_activity "
+        f"SELECT student_id, MAX({LEARNING_TIME_COLUMNS[t]}) AS last_activity "
         f"FROM {t} GROUP BY student_id"
         for t in LEARNING_TABLES
     )

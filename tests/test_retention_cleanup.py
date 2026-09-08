@@ -64,7 +64,7 @@ def authdb(tmp_path: Path) -> Path:
         CREATE TABLE progress_snapshots (
             student_id TEXT NOT NULL,
             topic_id TEXT NOT NULL,
-            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
             PRIMARY KEY (student_id, topic_id)
         );
         CREATE TABLE portfolio_items (
@@ -118,7 +118,7 @@ def _seed_learning(conn: sqlite3.Connection, student: str, days_ago: int) -> Non
         (student, _iso(days_ago)),
     )
     conn.execute(
-        "INSERT INTO progress_snapshots (student_id, topic_id, created_at) "
+        "INSERT INTO progress_snapshots (student_id, topic_id, updated_at) "
         "VALUES (?, 't1', ?)",
         (student, _iso(days_ago)),
     )

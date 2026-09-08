@@ -179,9 +179,10 @@ def run_host(container: str, apply: bool, marker_path: Path) -> dict[str, Any]:
     cmd = [
         "docker", "exec", container, "python3", remote,
         "--db", CONTAINER_DB,
-        "--apply" if apply else "--dry-run",
-        "--json",
     ]
+    if apply:
+        cmd.append("--apply")
+    cmd.append("--json")
     proc = subprocess.run(cmd, check=True, capture_output=True, text=True)
     report = json.loads(proc.stdout)
     marker_path.parent.mkdir(parents=True, exist_ok=True)
@@ -205,6 +206,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument(
         "--apply", action="store_true",
         help="Actually delete. Default is dry-run (report only).",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Explicit dry-run (default behaviour; accepted for clarity).",
     )
     parser.add_argument(
         "--host", action="store_true",

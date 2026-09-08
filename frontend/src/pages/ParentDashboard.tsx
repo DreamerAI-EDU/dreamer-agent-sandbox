@@ -32,6 +32,7 @@ import { PARENT_PERIODS } from '../lib/parentTypes';
 import type { ParentPeriod } from '../lib/parentTypes';
 import { AppShell } from '../components/AppShell';
 import { ChildSwitcher } from '../components/parent/ChildSwitcher';
+import { ParentConsentPanel } from '../components/parent/ParentConsentPanel';
 import { PeriodTabs } from '../components/parent/PeriodTabs';
 import { PortfolioView } from '../components/parent/PortfolioView';
 import { WeeklyDigest } from '../components/parent/WeeklyDigest';
@@ -197,6 +198,8 @@ export function ParentDashboard() {
           selectedId={studentId}
           onChange={handleStudentChange}
         />
+
+        {studentId && <ParentConsentPanel studentId={studentId} />}
 
         {!studentId && (
           <div className="rounded-2xl border border-black/5 bg-white px-5 py-10 text-center text-sm text-black/50">

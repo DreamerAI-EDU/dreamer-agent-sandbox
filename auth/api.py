@@ -220,6 +220,42 @@ def _consent_student_owned(user, student_id: Optional[str]) -> bool:
     return student["parent_id"] == user["id"]
 
 
+def _consent_resolve_student(
+    user: dict[str, Any],
+    raw: Optional[str],
+) -> tuple[Optional[str], Optional[dict], int]:
+    """Resolve a consent student_id (sign / withdraw / status?student).
+
+    Accepts a full students.id (legacy exact path, gate identical to
+    _consent_student_owned) or an 8-char mask prefix resolved within the
+    caller's reachable set — the same resolution used by the PIN routes, so
+    the parent dashboard's mask-only Student.id can drive per-student
+    withdraw without leaking a full id to the client (PR-E).
+
+    Returns (resolved_full_id_or_None, err_payload_or_None, http_status):
+      - raw empty               -> (None, None, 0)  account-level scope
+      - unique reachable match  -> (full_id, None, 0)
+      - ambiguous mask          -> (None, _ERR_INVALID, 400)
+      - no match / not owned    -> (None, _ERR_FORBIDDEN, 403)
+        (unknown ids and foreign students share 403 — no existence hint)
+    """
+    if not raw:
+        return None, None, 0
+    student, ambiguous = students_mod.resolve_student_identifier(raw, user)
+    if ambiguous:
+        return None, _ERR_INVALID, 400
+    if student is None:
+        return None, _ERR_FORBIDDEN, 403
+    # §0 ownership gate (legacy `_consent_student_owned` semantics): only the
+    # bound parent may sign/withdraw/status a student — unknown, unbound and
+    # foreign ids share a uniform 403 (no existence hint). Mask resolution
+    # runs inside the caller's reachable set; the parent check still guards
+    # the full-id exact path.
+    if user["role"] != "parent" or student["parent_id"] != user["id"]:
+        return None, _ERR_FORBIDDEN, 403
+    return student["id"], None, 0
+
+
 def _pin_authorized(user, student) -> bool:
     """Authorisation for PIN endpoints: parent owns the student, the
     teacher teaches a class containing the student, or the caller is an
@@ -614,10 +650,13 @@ async def handle_consent_sign(request: web.Request) -> web.Response:
         # Refuse signing an old / fake / missing version.
         return web.json_response(_ERR_INVALID, status=400)
 
-    # W2 PR#3 §0: when a student_id is supplied the signer must be that
-    # student's bound parent; otherwise 403 (unified, no id-existence hint).
-    if not _consent_student_owned(user, student_id):
-        return web.json_response(_ERR_FORBIDDEN, status=403)
+    # W2 PR#3 §0 / PR-E: a student_id must resolve to the caller's own
+    # child (full id or mask prefix); otherwise 403 (unified, no
+    # id-existence hint). Empty = account-level scope.
+    sid, err, status_code = _consent_resolve_student(user, student_id)
+    if err is not None:
+        return web.json_response(err, status=status_code)
+    student_id = sid
 
     consent.insert_consent_row(
         user_id=user["id"],
@@ -668,10 +707,13 @@ async def handle_consent_withdraw(request: web.Request) -> web.Response:
     if doc is None:
         return web.json_response(_ERR_INVALID, status=400)
 
-    # W2 PR#3 §0: same ownership gate as sign — withdraw with a student_id
-    # is only allowed for that student's bound parent.
-    if not _consent_student_owned(user, student_id):
-        return web.json_response(_ERR_FORBIDDEN, status=403)
+    # W2 PR#3 §0 / PR-E: same ownership gate as sign — a student_id must
+    # resolve to the caller's own child (full id or mask prefix); otherwise
+    # 403. Empty = account-level scope.
+    sid, err, status_code = _consent_resolve_student(user, student_id)
+    if err is not None:
+        return web.json_response(err, status=status_code)
+    student_id = sid
 
     # P3-2 prior-agree gate: without a current-version agreed row covering
     # this scope there is nothing to withdraw — uniform 400, zero writes,
@@ -701,10 +743,24 @@ async def handle_consent_withdraw(request: web.Request) -> web.Response:
 
 
 async def handle_consent_status(request: web.Request) -> web.Response:
-    """GET /api/consent/status — latest per-document consent state."""
+    """GET /api/consent/status — latest per-document consent state.
+
+    Optional ?student=<full-id|mask> (PR-E): when present, resolves the
+    student to the caller's own child and returns that student's per-doc
+    state (student rows + account-level rows, latest row decides); the
+    parent dashboard drives per-student withdraw from this.
+    """
     user = _session_user(request)
     if user is None:
         return web.json_response(_ERR_AUTH, status=401)
+    student_raw = (request.query.get("student") or "").strip() or None
+    if student_raw:
+        sid, err, status_code = _consent_resolve_student(user, student_raw)
+        if err is not None:
+            return web.json_response(err, status=status_code)
+        return web.json_response(
+            {"documents": consent.status_for_student(user["id"], sid)}
+        )
     return web.json_response(
         {"documents": consent.status_for_user(user["id"])}
     )

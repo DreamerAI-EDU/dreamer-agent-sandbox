@@ -53,6 +53,20 @@ export interface Copy {
   consentBtnDisabled: string;
   consentDone: string;
   readPolicy: string;
+  // consent withdraw (W6 PR-E)
+  consentPanelTitle: string;
+  consentNotSigned: string;
+  consentAgreed: string;
+  consentWithdrawn: string;
+  consentWithdrawBtn: string;
+  consentWithdrawingBtn: string;
+  consentDialogTitle: string;
+  consentDialogCancel: string;
+  consentDialogConfirm: string;
+  consentChatEffect: string;
+  consentMediaEffect: string;
+  consentWithdrawSuccess: string;
+  consentWithdrawFailed: string;
   // invite
   inviteTitle: string;
   inviteSubtitle: string;
@@ -184,6 +198,19 @@ export const copyEn: Copy = {
   consentBtnDisabled: 'Privacy Policy must be agreed',
   consentDone: 'Consent saved',
   readPolicy: 'Read the full text',
+  consentPanelTitle: 'Consent & withdrawal',
+  consentNotSigned: 'Not signed',
+  consentAgreed: 'Agreed',
+  consentWithdrawn: 'Withdrawn',
+  consentWithdrawBtn: 'Withdraw',
+  consentWithdrawingBtn: 'Withdrawing…',
+  consentDialogTitle: 'Withdraw consent?',
+  consentDialogCancel: 'Cancel',
+  consentDialogConfirm: 'Withdraw',
+  consentChatEffect: 'AI chat will stop immediately for this child. No new AI chat session can start until you agree again.',
+  consentMediaEffect: 'Media already collected will be taken down within 24 hours.',
+  consentWithdrawSuccess: 'Consent withdrawn.',
+  consentWithdrawFailed: 'Withdrawal failed. Please try again.',
   inviteTitle: 'Welcome to Dreamer AI',
   inviteSubtitle: 'Set your password to activate your parent account.',
   inviteName: 'Child',
@@ -312,6 +339,19 @@ const copyHk: Copy = {
   consentBtnDisabled: '必須同意私隱政策',
   consentDone: '已記錄同意',
   readPolicy: '閱讀全文',
+  consentPanelTitle: '同意及撤回管理',
+  consentNotSigned: '未簽署',
+  consentAgreed: '已同意',
+  consentWithdrawn: '已撤回',
+  consentWithdrawBtn: '撤回同意',
+  consentWithdrawingBtn: '撤回中…',
+  consentDialogTitle: '確認撤回同意？',
+  consentDialogCancel: '取消',
+  consentDialogConfirm: '確認撤回',
+  consentChatEffect: '撤回後，呢位小朋友嘅 AI 對話會即時停止；要重新同意先可以再開始新對話。',
+  consentMediaEffect: '已收集嘅媒體會喺 24 小時內下架。',
+  consentWithdrawSuccess: '已撤回同意。',
+  consentWithdrawFailed: '撤回失敗，請再試一次。',
   inviteTitle: '歡迎加入 Dreamer AI',
   inviteSubtitle: '設定密碼即可啟用家長帳號。',
   inviteName: '小朋友',
@@ -440,6 +480,19 @@ const copyCn: Copy = {
   consentBtnDisabled: '必须同意隐私政策',
   consentDone: '已记录同意',
   readPolicy: '阅读全文',
+  consentPanelTitle: '同意及撤回管理',
+  consentNotSigned: '未签署',
+  consentAgreed: '已同意',
+  consentWithdrawn: '已撤回',
+  consentWithdrawBtn: '撤回同意',
+  consentWithdrawingBtn: '撤回中…',
+  consentDialogTitle: '确认撤回同意？',
+  consentDialogCancel: '取消',
+  consentDialogConfirm: '确认撤回',
+  consentChatEffect: '撤回后，这位孩子的 AI 对话会立即停止；需要重新同意才能再次开始新对话。',
+  consentMediaEffect: '已收集的媒体会在 24 小时内下架。',
+  consentWithdrawSuccess: '已撤回同意。',
+  consentWithdrawFailed: '撤回失败，请再试一次。',
   inviteTitle: '欢迎加入 Dreamer AI',
   inviteSubtitle: '设置密码即可启用家长账号。',
   inviteName: '孩子',

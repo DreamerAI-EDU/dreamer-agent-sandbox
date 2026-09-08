@@ -23,7 +23,12 @@ CREATE INDEX IF NOT EXISTS idx_safety_unreviewed
 CREATE INDEX IF NOT EXISTS idx_safety_student
     ON safety_events(student_id, created_at DESC);
 
--- Retention note (per PDPO risk register):
--- raw_input should be anonymized after 90 days.
--- Implement as a separate cleanup job (not in this migration).
+-- Retention note (per PDPO risk register; W6 PR-B code-vs-doc fix):
+-- Reviewed safety events are DELETED after 90 days by the retention
+-- cleanup job (scripts/retention_cleanup.py). The earlier "anonymized
+-- after 90 days" wording was superseded by the privacy-policy promise of
+-- deletion (90 days, aligned with the AI-chat 90-day retention).
+-- Unreviewed events are NEVER deleted by the retention job; the real
+-- defence is health_monitor --check-retention failing loud when an
+-- unreviewed event is older than 7 days (W6-R1 family).
 -- Parental consent clause for B2C T&C is pending.

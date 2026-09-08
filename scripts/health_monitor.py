@@ -22,12 +22,26 @@ Exit codes: 0 ok / 1 KB fail-loud / 3 not ready (mirrors seed_kb EXIT_*).
 from __future__ import annotations
 
 import argparse
+import datetime
+import json
+import sqlite3
 import sys
 import time
 import urllib.request
 import urllib.error
+from pathlib import Path
 
 import seed_kb  # B22: reuse TutorAPI + manifest semantics (single source of truth)
+
+# --- W6 PR-B retention fail-loud constants -------------------------------
+UNREVIEWED_ALERT_DAYS = 7           # unreviewed safety event age -> fail
+RETENTION_MARKER_MAX_AGE_DAYS = 7   # stale last-run marker -> fail
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_DB = REPO_ROOT / "dreamer.db"
+DEFAULT_RETENTION_MARKERS = (
+    REPO_ROOT / "state" / "retention_last_run.json",
+    REPO_ROOT / "state" / "chat_retention_last_run.json",
+)
 
 
 def check_health(url: str, timeout: int = 5) -> bool:
@@ -117,6 +131,80 @@ def check_kb(
     )
 
 
+def check_retention(
+    db_path: Path = DEFAULT_DB,
+    marker_paths: tuple[Path, ...] = DEFAULT_RETENTION_MARKERS,
+) -> tuple[int, str]:
+    """W6 PR-B retention fail-loud checks. Returns (exit_code, message).
+
+    (1) unreviewed safety_events older than 7 days — the review pipeline
+        is stalled; the retention job would only see this at 90 days,
+        too late. (Same family as the W6-R1 high-risk notification.)
+    (2) retention / chat-retention last-run markers missing or stale —
+        the cron job slipped; a 90-day promise nobody checks is void.
+    """
+    failures: list[str] = []
+
+    # 1. Unreviewed safety events
+    if db_path.exists():
+        try:
+            conn = sqlite3.connect(str(db_path))
+            try:
+                row = conn.execute(
+                    "SELECT MIN(created_at) AS oldest FROM safety_events "
+                    "WHERE reviewed = 0"
+                ).fetchone()
+            finally:
+                conn.close()
+            oldest = row[0] if row else None
+            if oldest:
+                try:
+                    age = datetime.datetime.now(datetime.timezone.utc) - datetime.datetime.strptime(
+                        oldest, "%Y-%m-%d %H:%M:%S"
+                    ).replace(tzinfo=datetime.timezone.utc)
+                    if age.days >= UNREVIEWED_ALERT_DAYS:
+                        failures.append(
+                            f"unreviewed safety event older than "
+                            f"{UNREVIEWED_ALERT_DAYS} days (oldest created_at="
+                            f"{oldest!r}) — review pipeline stalled"
+                        )
+                except ValueError:
+                    failures.append(
+                        f"unreviewed safety event has unparseable created_at "
+                        f"{oldest!r}"
+                    )
+        except sqlite3.Error as exc:
+            failures.append(f"could not read safety_events from {db_path}: {exc}")
+    else:
+        failures.append(f"authdb not found: {db_path} (retention check skipped)")
+
+    # 2. Last-run markers
+    now = datetime.datetime.now(datetime.timezone.utc)
+    for marker_path in marker_paths:
+        if not marker_path.exists():
+            failures.append(
+                f"retention marker missing: {marker_path} — cron never ran?"
+            )
+            continue
+        try:
+            payload = json.loads(marker_path.read_text(encoding="utf-8"))
+            run_at = datetime.datetime.strptime(
+                payload["run_at"], "%Y-%m-%d %H:%M:%S"
+            ).replace(tzinfo=datetime.timezone.utc)
+            age = now - run_at
+            if age.days >= RETENTION_MARKER_MAX_AGE_DAYS:
+                failures.append(
+                    f"retention marker stale: {marker_path} last run "
+                    f"{age.days} days ago (>{RETENTION_MARKER_MAX_AGE_DAYS})"
+                )
+        except (KeyError, ValueError, json.JSONDecodeError) as exc:
+            failures.append(f"retention marker unreadable {marker_path}: {exc}")
+
+    if failures:
+        return 1, "; ".join(failures)
+    return 0, "retention ok: no unreviewed safety backlog, markers fresh"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Dreamer AI health monitor")
     parser.add_argument(
@@ -136,6 +224,20 @@ def main() -> None:
         help="Manifest path for KB structural classification "
              f"(default: {seed_kb.MANIFEST_PATH})",
     )
+    parser.add_argument(
+        "--check-retention", action="store_true",
+        help="W6 PR-B: also run retention fail-loud (unreviewed safety "
+             "backlog >7 days; stale last-run markers)",
+    )
+    parser.add_argument(
+        "--db", default=str(DEFAULT_DB),
+        help=f"Authdb path for --check-retention (default: {DEFAULT_DB})",
+    )
+    parser.add_argument(
+        "--retention-markers", nargs="*", default=[],
+        help="Last-run marker paths for --check-retention (default: "
+             "repo state/retention_last_run.json + chat_retention_last_run.json)",
+    )
     args = parser.parse_args()
 
     if args.once:
@@ -149,7 +251,17 @@ def main() -> None:
                 print(f"[health_monitor --check-kb] {msg}", file=sys.stderr)
                 sys.exit(code)
             print(f"[health_monitor --check-kb] {msg}")
-        else:
+        if args.check_retention:
+            markers = (
+                tuple(Path(p) for p in args.retention_markers)
+                if args.retention_markers else DEFAULT_RETENTION_MARKERS
+            )
+            code, msg = check_retention(Path(args.db), markers)
+            if code != 0:
+                print(f"[health_monitor --check-retention] {msg}", file=sys.stderr)
+                sys.exit(code)
+            print(f"[health_monitor --check-retention] {msg}")
+        if not (args.check_kb or args.check_retention):
             print(f"[health_monitor] {args.url} is healthy")
         sys.exit(0)
 

@@ -178,6 +178,15 @@ def _confirmed_trio():
     _link_student_class(class_id, student_id, "confirmed")
     return _new_session(parent_id), student_id
 
+def _confirmed_trio_full():
+    """Return (parent_id, parent_session, student_id) fully approved."""
+    parent_id = _new_user(role="parent")
+    teacher_id = _new_user(role="teacher")
+    class_id = _new_class(teacher_id)
+    student_id = _new_student(parent_id, teacher_id)
+    _link_student_class(class_id, student_id, "confirmed")
+    return parent_id, _new_session(parent_id), student_id
+
 
 # ---------------------------------------------------------------------------
 # Negative gates — reject before upgrade
@@ -263,6 +272,60 @@ async def test_pending_student_rejected(client, tmp_path):
             headers={"Cookie": f"auth_session={session}"},
         )
     assert ei.value.status == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.asyncio
+async def test_required_unsigned_chat_consent_rejected(client, tmp_path, monkeypatch):
+    """Default-deny flip (required: true): unsigned student -> 403.
+
+    PR-D: when chat_consent is required, the gate needs a current-version
+    agreed row -- no row at all must refuse (not only explicit withdrawal).
+    Simulated by monkeypatching get_doc_config to flip required while the
+    real config yaml still says required: false (safe by default).
+    """
+    parent_id, session, student_id = _confirmed_trio_full()
+    _orig_get_doc = consent_mod.get_doc_config
+
+    def _flip_required(doc_type):
+        cfg = _orig_get_doc(doc_type)
+        return {**cfg, "required": True} if doc_type == "chat_consent" else cfg
+
+    monkeypatch.setattr(consent_mod, "get_doc_config", _flip_required)
+    with pytest.raises(aiohttp.WSServerHandshakeError) as ei:
+        await client.ws_connect(
+            f"/api/ws/chat?student={student_id[:8]}",
+            headers={"Cookie": f"auth_session={session}"},
+        )
+    assert ei.value.status == 403
+
+
+@pytest.mark.asyncio
+async def test_required_agreed_chat_consent_allowed(
+    client, mock_upstream, monkeypatch
+):
+    """Default-deny flip: an agreed current-version row still opens chat.
+
+    Guards against the flip regressing students who already signed.
+    """
+    parent_id, session, student_id = _confirmed_trio_full()
+    consent_mod.insert_consent_row(
+        user_id=parent_id,
+        doc_type="chat_consent",
+        doc_version=CHAT_VERSION,
+        action="agreed",
+        student_id=student_id,
+        ip=None,
+        user_agent=None,
+    )
+    _orig_get_doc = consent_mod.get_doc_config
+
+    def _flip_required(doc_type):
+        cfg = _orig_get_doc(doc_type)
+        return {**cfg, "required": True} if doc_type == "chat_consent" else cfg
+
+    monkeypatch.setattr(consent_mod, "get_doc_config", _flip_required)
+    await _assert_upgrade_ok(client, mock_upstream, session, student_id)
 
 
 @pytest.mark.asyncio

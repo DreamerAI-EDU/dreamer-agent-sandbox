@@ -41,7 +41,7 @@ AUDIT_LOG_PATH = os.environ.get(
 )
 
 # Whitelist of doc types registered in config/consent_docs.yaml.
-DOC_TYPES = ("privacy_policy", "media_consent")
+DOC_TYPES = ("privacy_policy", "media_consent", "chat_consent")
 
 # Legal page -> doc_type mapping for the /legal/* embedded pages.
 LEGAL_ROUTES = {
@@ -245,18 +245,19 @@ def has_withdrawable_agreement(
     )
 
 
-def student_media_consent_withdrawn(
+def _student_consent_withdrawn(
     user_id: str,
     student_id: str,
+    doc_type: str,
 ) -> bool:
-    """True when the student's latest media_consent row is withdrawn.
+    """True when the student's latest row for doc_type is withdrawn.
 
     Scope matches sign/withdraw: student-bound rows plus account-level
     NULL rows both cover the student (latest row decides, exactly the
     has_withdrawable_agreement rule). A withdrawn row means the parent
-    revoked media consent for this child; the W3-A WS chat handshake
-    refuses to open a new session for such a student. No media rows at
-    all (never signed) is NOT a withdrawal — handshake proceeds.
+    revoked this consent for the child; the WS chat handshake refuses to
+    open a new session for such a student. No rows at all (never signed)
+    is NOT a withdrawal — handshake proceeds.
     """
     from . import db
 
@@ -268,12 +269,34 @@ def student_media_consent_withdrawn(
                WHERE user_id = ? AND doc_type = ?
                  AND (student_id = ? OR student_id IS NULL)
                ORDER BY created_at DESC, rowid DESC LIMIT 1""",
-            (user_id, "media_consent", student_id),
+            (user_id, doc_type, student_id),
         )
         row = cur.fetchone()
     finally:
         conn.close()
     return bool(row and row["action"] == "withdrawn")
+
+
+def student_media_consent_withdrawn(
+    user_id: str,
+    student_id: str,
+) -> bool:
+    """True when the student's latest media_consent row is withdrawn."""
+    return _student_consent_withdrawn(user_id, student_id, "media_consent")
+
+
+def student_chat_consent_withdrawn(
+    user_id: str,
+    student_id: str,
+) -> bool:
+    """True when the student's latest chat_consent row is withdrawn.
+
+    W6 PR-C2: the ws_chat handshake gate hangs off chat_consent so a media
+    withdrawal no longer stops AI chat. As with media, no chat rows at all
+    (never signed) is NOT a withdrawal — handshake proceeds; the
+    agree-first enforcement lives in the consent UI flow (PR-D).
+    """
+    return _student_consent_withdrawn(user_id, student_id, "chat_consent")
 
 
 def required_consent_gaps(user_id: str) -> list[str]:

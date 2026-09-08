@@ -9,7 +9,9 @@ WARNING audit trail):
        student (full-id cross account)  -> 403 (ownership)
     5. student pending (teacher has not
        confirmed the class binding)     -> 403 (class_confirmed)
-    6. media consent withdrawn          -> 403 (consent)
+    6. chat consent withdrawn          -> 403 (consent)
+       (W6 PR-C2: consent decoupled — the gate hangs off chat_consent;
+       a media_consent withdrawal no longer stops AI chat)
 Positive:
     7. confirmed student -> upgrade OK, frames relay bidirectionally to
        the (mock) DeepTutor upstream and close cleanly.
@@ -42,6 +44,7 @@ from auth import ws_chat as ws_chat_mod  # noqa: E402
 from auth.api import build_app  # noqa: E402
 
 MEDIA_VERSION = consent_mod.get_doc_config("media_consent")["current_version"]
+CHAT_VERSION = consent_mod.get_doc_config("chat_consent")["current_version"]
 
 
 def _now_iso() -> str:
@@ -263,8 +266,81 @@ async def test_pending_student_rejected(client, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_withdrawn_media_consent_rejected(client, tmp_path):
-    """Latest media_consent row withdrawn -> 403 (consent gate)."""
+async def test_withdrawn_chat_consent_rejected(client, tmp_path):
+    """Latest chat_consent row withdrawn -> 403 (consent gate)."""
+    parent_id = _new_user(role="parent")
+    teacher_id = _new_user(role="teacher")
+    class_id = _new_class(teacher_id)
+    student_id = _new_student(parent_id, teacher_id)
+    _link_student_class(class_id, student_id, "confirmed")
+    session = _new_session(parent_id)
+
+    consent_mod.insert_consent_row(
+        user_id=parent_id,
+        doc_type="chat_consent",
+        doc_version=CHAT_VERSION,
+        action="agreed",
+        student_id=student_id,
+    )
+    consent_mod.insert_consent_row(
+        user_id=parent_id,
+        doc_type="chat_consent",
+        doc_version=CHAT_VERSION,
+        action="withdrawn",
+        student_id=student_id,
+    )
+
+    with pytest.raises(aiohttp.WSServerHandshakeError) as ei:
+        await client.ws_connect(
+            f"/api/ws/chat?student={student_id[:8]}",
+            headers={"Cookie": f"auth_session={session}"},
+        )
+    assert ei.value.status == 403
+    assert any(
+        e["event"] == "ws_chat_rejected" for e in _audit_events(tmp_path)
+    )
+
+
+@pytest.mark.asyncio
+async def test_both_withdrawn_rejected(client, tmp_path):
+    """Media withdrawn AND chat withdrawn -> 403 (chat gate decides)."""
+    parent_id = _new_user(role="parent")
+    teacher_id = _new_user(role="teacher")
+    class_id = _new_class(teacher_id)
+    student_id = _new_student(parent_id, teacher_id)
+    _link_student_class(class_id, student_id, "confirmed")
+    session = _new_session(parent_id)
+
+    for doc_type, version in (
+        ("media_consent", MEDIA_VERSION),
+        ("chat_consent", CHAT_VERSION),
+    ):
+        consent_mod.insert_consent_row(
+            user_id=parent_id,
+            doc_type=doc_type,
+            doc_version=version,
+            action="agreed",
+            student_id=student_id,
+        )
+        consent_mod.insert_consent_row(
+            user_id=parent_id,
+            doc_type=doc_type,
+            doc_version=version,
+            action="withdrawn",
+            student_id=student_id,
+        )
+
+    with pytest.raises(aiohttp.WSServerHandshakeError) as ei:
+        await client.ws_connect(
+            f"/api/ws/chat?student={student_id[:8]}",
+            headers={"Cookie": f"auth_session={session}"},
+        )
+    assert ei.value.status == 403
+
+
+@pytest.mark.asyncio
+async def test_chat_withdrawn_media_agreed_rejected(client, tmp_path):
+    """Chat withdrawn while media agreed -> 403 (withdraw chat stops chat)."""
     parent_id = _new_user(role="parent")
     teacher_id = _new_user(role="teacher")
     class_id = _new_class(teacher_id)
@@ -281,8 +357,15 @@ async def test_withdrawn_media_consent_rejected(client, tmp_path):
     )
     consent_mod.insert_consent_row(
         user_id=parent_id,
-        doc_type="media_consent",
-        doc_version=MEDIA_VERSION,
+        doc_type="chat_consent",
+        doc_version=CHAT_VERSION,
+        action="agreed",
+        student_id=student_id,
+    )
+    consent_mod.insert_consent_row(
+        user_id=parent_id,
+        doc_type="chat_consent",
+        doc_version=CHAT_VERSION,
         action="withdrawn",
         student_id=student_id,
     )
@@ -293,20 +376,14 @@ async def test_withdrawn_media_consent_rejected(client, tmp_path):
             headers={"Cookie": f"auth_session={session}"},
         )
     assert ei.value.status == 403
-    assert any(
-        e["event"] == "ws_chat_rejected" for e in _audit_events(tmp_path)
-    )
 
 
 # ---------------------------------------------------------------------------
-# Positive — confirmed student relays to (mock) DeepTutor
+# Decoupled positive — media state must never stop chat (W6 PR-C2 core)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.asyncio
-async def test_confirmed_student_upgrades_and_relays(client, mock_upstream):
-    """Full happy path: gate passes, relay echoes the mock sequence."""
-    session, student_id = _confirmed_trio()
-
+async def _assert_upgrade_ok(client, mock_upstream, session, student_id):
+    """Handshake passes and frames relay through the mock DeepTutor."""
     ws = await client.ws_connect(
         f"/api/ws/chat?student={student_id[:8]}",
         headers={"Cookie": f"auth_session={session}"},
@@ -330,3 +407,92 @@ async def test_confirmed_student_upgrades_and_relays(client, mock_upstream):
     await ws.close()
     assert mock_upstream.received
     assert mock_upstream.received[0]["message"] == "你好"
+
+
+@pytest.mark.asyncio
+async def test_media_withdrawn_chat_unsigned_opens(client, mock_upstream):
+    """Media withdrawn, chat never signed -> chat still opens.
+
+    Core W6 decoupling assertion: withdrawing media_consent must NOT stop
+    the AI chat. (Chat unsigned = not a withdrawal, handshake proceeds.)
+    """
+    session, student_id = _confirmed_trio()
+    parent_id = auth_db.get_session_user(session)["id"]
+
+    consent_mod.insert_consent_row(
+        user_id=parent_id,
+        doc_type="media_consent",
+        doc_version=MEDIA_VERSION,
+        action="agreed",
+        student_id=student_id,
+    )
+    consent_mod.insert_consent_row(
+        user_id=parent_id,
+        doc_type="media_consent",
+        doc_version=MEDIA_VERSION,
+        action="withdrawn",
+        student_id=student_id,
+    )
+
+    await _assert_upgrade_ok(client, mock_upstream, session, student_id)
+
+
+@pytest.mark.asyncio
+async def test_media_agreed_chat_unsigned_opens(client, mock_upstream):
+    """Media agreed, chat unsigned (new-student default) -> chat opens.
+
+    A student who never signed chat_consent is NOT treated as withdrawn;
+    the agree-first enforcement lives in the consent UI flow (PR-D), not
+    in this backend gate.
+    """
+    session, student_id = _confirmed_trio()
+    parent_id = auth_db.get_session_user(session)["id"]
+
+    consent_mod.insert_consent_row(
+        user_id=parent_id,
+        doc_type="media_consent",
+        doc_version=MEDIA_VERSION,
+        action="agreed",
+        student_id=student_id,
+    )
+
+    await _assert_upgrade_ok(client, mock_upstream, session, student_id)
+
+
+@pytest.mark.asyncio
+async def test_media_withdrawn_chat_agreed_opens(client, mock_upstream):
+    """Media withdrawn but chat agreed -> chat opens (flags independent)."""
+    session, student_id = _confirmed_trio()
+    parent_id = auth_db.get_session_user(session)["id"]
+
+    for doc_type, version, action in (
+        ("media_consent", MEDIA_VERSION, "agreed"),
+        ("media_consent", MEDIA_VERSION, "withdrawn"),
+        ("chat_consent", CHAT_VERSION, "agreed"),
+    ):
+        consent_mod.insert_consent_row(
+            user_id=parent_id,
+            doc_type=doc_type,
+            doc_version=version,
+            action=action,
+            student_id=student_id,
+        )
+
+    await _assert_upgrade_ok(client, mock_upstream, session, student_id)
+
+
+# ---------------------------------------------------------------------------
+# Positive — confirmed student relays to (mock) DeepTutor
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_confirmed_student_upgrades_and_relays(client, mock_upstream):
+    """Full happy path: gate passes, relay echoes the mock sequence.
+
+    Also locks the W6 PR-C2 default: a brand-new student with NO consent
+    rows at all (media and chat both unsigned) is NOT treated as
+    withdrawn — the handshake proceeds.
+    """
+    session, student_id = _confirmed_trio()
+
+    await _assert_upgrade_ok(client, mock_upstream, session, student_id)

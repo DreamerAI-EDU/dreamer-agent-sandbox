@@ -135,7 +135,9 @@ async def test_docs_registry_and_legal_pages_pair_with_yaml(
     assert resp.status == 200
     body = await resp.json()
     documents = body["documents"]
-    assert set(documents) == {"privacy_policy", "media_consent"}
+    assert set(documents) == {
+        "privacy_policy", "media_consent", "chat_consent",
+    }
 
     pp = documents["privacy_policy"]
     assert pp["current_version"] == "v2026-08-26"
@@ -148,6 +150,12 @@ async def test_docs_registry_and_legal_pages_pair_with_yaml(
     assert mc["required"] is False
     assert mc["title_zh"] == "媒體同意書"
     assert mc["title_en"] == "Media Consent Form"
+
+    cc = documents["chat_consent"]
+    assert cc["current_version"] == "v2026-09-08"
+    assert cc["required"] is False
+    assert cc["title_zh"] == "AI 對話服務同意書"
+    assert cc["title_en"] == "AI Chat Service Consent"
 
     # Embedded legal pages are public, carry the same version from the same
     # YAML (never a second hardcoded copy), and hold the approved copy.

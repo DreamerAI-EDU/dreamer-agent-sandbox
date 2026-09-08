@@ -198,13 +198,13 @@ async def handle_ws_chat(request: web.Request) -> web.Response:
             target_id=student["id"],
         )
 
-    if consent_mod.student_media_consent_withdrawn(
+    if consent_mod.student_chat_consent_withdrawn(
         user["id"], student["id"]
     ):
         return _reject(
             403,
             api_mod._ERR_FORBIDDEN,
-            gate="media_consent_withdrawn",
+            gate="chat_consent_withdrawn",
             user_id=user["id"],
             target_id=student["id"],
         )

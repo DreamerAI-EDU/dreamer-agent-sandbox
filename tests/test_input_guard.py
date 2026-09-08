@@ -111,7 +111,7 @@ def test_welfare_s1s3_includes_real_helpline(guard):
     verdict = guard.check("i want to end my life", age_band="S1-S3", lang_code="en")
     assert verdict.is_welfare is True
     assert "18111" in verdict.response_message      # primary: 情緒通 (24h)
-    assert "2382 0777" in verdict.response_message  # backup: Life Hotline youth line
+    assert "2382 0000" in verdict.response_message  # backup: Life Hotline (24h)
     assert "2896 0000" in verdict.response_message  # backup: The Samaritans HK
     assert "TBC" not in verdict.response_message    # no unresolved placeholder
 

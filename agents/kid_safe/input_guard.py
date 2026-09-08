@@ -391,7 +391,7 @@ def _build_welfare_email_body(event: dict) -> str:
         "",
         "求助熱線（如需即時支援）/ Helplines:",
         "情緒通 Emotional Support: 18111（24h）",
-        "生命熱線青少年專線: 2382 0777",
+        "生命熱線 Life Hotline: 2382 0000（24h）",
         "撒瑪利亞會: 2896 0000",
     ])
 

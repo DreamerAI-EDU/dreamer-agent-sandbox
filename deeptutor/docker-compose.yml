@@ -48,7 +48,9 @@ services:
       - WORKSPACE_TTL_HOURS=24              # Cleanup after 24h
       - WORKSPACE_INACTIVE_DAYS=90          # v2: persistent cleanup threshold
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      # v1.5.8 backend listens on 8001 (8000 is not bound in-container);
+      # use upstream healthcheck.py which resolves port from system.json.
+      test: ["CMD", "python", "/app/healthcheck.py"]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -502,8 +502,9 @@ async def test_pin_lockout_keyed_by_full_id_when_masked_prefix_used(
 async def test_media_withdraw_without_prior_agree_400_zero_rows_zero_audit(
     client, fresh_invite, tmp_path
 ):
-    token = await _setup_logged_in_user(client)
-    user = auth_db.get_user_by_email("teacher@test.local")
+    parent_id, email, pw = _create_parent_user("parent-a@test.local")
+    token = await _login_parent(client, email, pw)
+    user = auth_db.get_user_by_email("parent-a@test.local")
 
     resp = await client.post(
         "/api/consent/withdraw",

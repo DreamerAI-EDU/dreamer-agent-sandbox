@@ -33,6 +33,7 @@ os.environ.setdefault("PYTHONPATH", REPO_ROOT)
 
 from auth import db as auth_db  # noqa: E402
 from auth.api import build_app  # noqa: E402
+from tests.scan_utils import scan_payload  # noqa: E402
 
 HEADERS = {"X-Requested-With": "XMLHttpRequest"}
 
@@ -342,11 +343,17 @@ async def test_parent_surface_whitelist_exact_and_negative_scan(world, client):
     # achieved/exemplary are NOT scanned: the sanctioned field name
     # ``achieved_at`` legitimately contains "achieved" — key-level asserts
     # below plus the seeded rubric ids cover the red line.)
-    text = json.dumps(body, ensure_ascii=False)
     for key in ("internal_label", "confidence", "rubric_id"):
         assert key not in body, f"banned key leaked: {key}"
-    for banned in ("rub-internal-001", "rub-internal-002", "0.9", "0.95"):
-        assert banned not in text, f"banned token leaked: {banned}"
+    # Structured scan (W6 #47): numeric tokens are compared as parsed numbers,
+    # not as naked substrings, so an ISO timestamp microsecond fragment such as
+    # "...:50.912345+00:00" can no longer fake a "0.9" leak (see tests/scan_utils.py).
+    leaks = scan_payload(
+        body,
+        text_tokens=("rub-internal-001", "rub-internal-002"),
+        numeric_tokens=(0.9, 0.95),
+    )
+    assert not leaks, f"banned token leaked: {leaks}"
     # positive check: the sanctioned timestamp field is present and rendered
     for it in body["items"]:
         assert "achieved_at" in it
@@ -528,3 +535,45 @@ async def test_portfolio_pdf_teacher_403(world, client):
 async def test_portfolio_pdf_unauth_401(world, client):
     resp = await client.get(f"/api/parent/portfolio/{SID_A}/pdf")
     assert resp.status == 401
+
+
+# ---------------------------------------------------------------------------
+# W6 #47 — red-line scanner regression (CI false red on ISO microseconds)
+# ---------------------------------------------------------------------------
+
+
+def test_redline_scan_ignores_iso_microsecond_fragments():
+    """A clean payload must not turn red because a clock digit looks like 0.9.
+
+    Real sample from the flaky main run 34485104556: the serialised body held
+    ISO timestamps whose microsecond part produced the substring ``0.9``.
+    """
+    payload = {
+        "items": [{"item_id": "pf-manual-1002", "achieved_at": "2026-09-10T13:50:50.912345+00:00"}],
+        "share_cards": [
+            {"item_id": "pf-manual-1002", "generated_at": "2026-09-10T13:50:50.900001Z"},
+            {"item_id": "pf-manual-1001", "generated_at": "2026-09-10T05:10:10.951234-04:00"},
+        ],
+    }
+    assert scan_payload(
+        payload,
+        text_tokens=("rub-internal-001", "rub-internal-002"),
+        numeric_tokens=(0.9, 0.95),
+    ) == []
+
+
+def test_redline_scan_still_catches_leaked_numbers():
+    """The scanner keeps its teeth: real numeric leaks are still reported."""
+    assert scan_payload({"confidence": 0.95}, numeric_tokens=(0.9, 0.95)) == [0.95]
+    assert scan_payload({"score": 0.9}, numeric_tokens=(0.9,)) == [0.9]
+    # 0.900 / 0.9500 are the same leaked value
+    assert scan_payload({"score": 0.900}, numeric_tokens=(0.9,)) == [0.9]
+    # string-encoded numbers are caught too
+    assert scan_payload({"note": "raw score 0.95"}, numeric_tokens=(0.95,)) == [0.95]
+
+
+def test_redline_scan_still_catches_text_leaks():
+    assert scan_payload(
+        {"share_cards": [{"rubric_id": "rub-internal-001"}]},
+        text_tokens=("rub-internal-001",),
+    ) == ["rub-internal-001"]

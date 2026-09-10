@@ -28,6 +28,8 @@ W6 PR-G：平台另設**職員專用**文件 `staff_data_processing`（職員資
 | AI 對話服務同意書 | `chat_consent` | parent | 是 | 允許（停 AI 對話） |
 | 職員資料處理守則 | `staff_data_processing`（W6 PR-G 新增） | teacher, admin | 是 | API 拒絕（職員帳號層事項，電郵 info@） |
 
+> W6 PR-H：簽署（`/api/consent/sign`）同撤回（`/api/consent/withdraw`）兩邊都受 registry `roles:` 限制——登入角色唔係該文件所綁定嘅角色，一律 403，唔會寫入任何 `consent_log` row。即係話老師帳號動唔到家長文件（privacy / media / chat），家長帳號亦動唔到職員守則；`roles` 缺省嘅文件則所有角色通用（守舊行為不變）。
+
 ---
 
 # 一、媒體同意書（Media Consent Form）

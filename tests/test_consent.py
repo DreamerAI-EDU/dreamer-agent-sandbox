@@ -76,6 +76,19 @@ async def _setup_logged_in_user(client):
     return _session_cookie(login)
 
 
+async def _setup_logged_in_parent(client, email="parent-consent@test.local",
+                                  password="test-pass-parent1"):
+    """W6 PR-H: parent-scoped paperwork needs a *parent* session.
+
+    Sign / withdraw are role-scoped by the registry `roles:` key, so the
+    generic teacher session used before PR-H can no longer drive parent
+    documents. Returns (user_id, session_token).
+    """
+    user_id, email, password = _create_parent_user(email, password)
+    token = await _login_parent(client, email, password)
+    return user_id, token
+
+
 def _consent_rows(db_path, *, user_id, doc_type):
     conn = sqlite3.connect(db_path)
     try:
@@ -252,8 +265,8 @@ async def test_consent_sign_requires_login_and_csrf(client, fresh_invite):
 async def test_consent_sign_success_records_ip_and_user_agent(
     client, fresh_invite
 ):
-    token = await _setup_logged_in_user(client)
-    user = auth_db.get_user_by_email("teacher@test.local")
+    user_id, token = await _setup_logged_in_parent(client)
+    user = {"id": user_id}
 
     resp = await client.post(
         "/api/consent/sign",
@@ -288,8 +301,8 @@ async def test_consent_sign_success_records_ip_and_user_agent(
 
 @pytest.mark.asyncio
 async def test_consent_sign_rejects_old_or_fake_version(client, fresh_invite):
-    token = await _setup_logged_in_user(client)
-    user = auth_db.get_user_by_email("teacher@test.local")
+    user_id, token = await _setup_logged_in_parent(client)
+    user = {"id": user_id}
 
     for bad_version in ("v2026-08-25", "v1.0", "latest", ""):
         resp = await client.post(
@@ -312,8 +325,8 @@ async def test_consent_sign_rejects_old_or_fake_version(client, fresh_invite):
 
 @pytest.mark.asyncio
 async def test_consent_sign_rejects_unknown_doc_type(client, fresh_invite):
-    token = await _setup_logged_in_user(client)
-    user = auth_db.get_user_by_email("teacher@test.local")
+    user_id, token = await _setup_logged_in_parent(client)
+    user = {"id": user_id}
 
     resp = await client.post(
         "/api/consent/sign",
@@ -562,8 +575,8 @@ async def test_version_bump_re_triggers_re_sign_gate(
 async def test_media_withdraw_appends_withdrawn_row_and_audit_marker(
     client, fresh_invite, tmp_path
 ):
-    token = await _setup_logged_in_user(client)
-    user = auth_db.get_user_by_email("teacher@test.local")
+    user_id, token = await _setup_logged_in_parent(client)
+    user = {"id": user_id}
 
     # Sign media_consent first.
     sign = await client.post(
@@ -634,8 +647,8 @@ async def test_media_withdraw_appends_withdrawn_row_and_audit_marker(
 async def test_privacy_withdraw_rejected_with_email_pointer(
     client, fresh_invite
 ):
-    token = await _setup_logged_in_user(client)
-    user = auth_db.get_user_by_email("teacher@test.local")
+    user_id, token = await _setup_logged_in_parent(client)
+    user = {"id": user_id}
 
     resp = await client.post(
         "/api/consent/withdraw",
@@ -1032,3 +1045,92 @@ async def test_consent_status_ambiguous_mask_bad_request(client):
         headers={**HEADERS, "Cookie": f"auth_session={token}"},
     )
     assert resp.status == 400
+
+
+# ---------------------------------------------------------------------------
+# 21. W6 PR-H: sign / withdraw are role-scoped by the registry `roles:`
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_teacher_sign_and_withdraw_parent_docs_forbidden(
+    client, fresh_invite
+):
+    """A teacher session must not touch parent paperwork — 403, zero rows.
+
+    `privacy_policy` / `media_consent` / `chat_consent` bind role=parent
+    only, so a teacher (whose own gate is the staff notice) is refused on
+    both sign and withdraw, and no consent row is written either way.
+    """
+    token = await _setup_logged_in_user(client)
+    user = auth_db.get_user_by_email("teacher@test.local")
+
+    for doc_type, doc_version in (
+        ("privacy_policy", "v2026-08-26"),
+        ("media_consent", "v2026-08-26"),
+        ("chat_consent", "v2026-09-08"),
+    ):
+        sign = await client.post(
+            "/api/consent/sign",
+            json={"doc_type": doc_type, "doc_version": doc_version},
+            headers={**HEADERS, "Cookie": f"auth_session={token}"},
+        )
+        assert sign.status == 403, doc_type
+        assert "角色" in (await sign.json())["error"]
+
+        withdraw = await client.post(
+            "/api/consent/withdraw",
+            json={"doc_type": doc_type},
+            headers={**HEADERS, "Cookie": f"auth_session={token}"},
+        )
+        assert withdraw.status == 403, doc_type
+
+        rows = _consent_rows(
+            os.environ["DREAMER_DB_PATH"], user_id=user["id"], doc_type=doc_type
+        )
+        assert rows == [], f"{doc_type} must stay untouched"
+
+
+@pytest.mark.asyncio
+async def test_parent_sign_and_withdraw_staff_notice_forbidden(
+    client, fresh_invite
+):
+    """The staff notice binds teacher / admin — a parent gets 403 both ways.
+
+    Mirror of the PR-G teacher gate: the parent's own documents stay
+    signable, only the staff-scoped notice is out of reach.
+    """
+    user_id, token = await _setup_logged_in_parent(
+        client, email="parent-staff-scope@test.local"
+    )
+
+    sign = await client.post(
+        "/api/consent/sign",
+        json={
+            "doc_type": "staff_data_processing",
+            "doc_version": "v2026-09-10",
+        },
+        headers={**HEADERS, "Cookie": f"auth_session={token}"},
+    )
+    assert sign.status == 403
+
+    withdraw = await client.post(
+        "/api/consent/withdraw",
+        json={"doc_type": "staff_data_processing"},
+        headers={**HEADERS, "Cookie": f"auth_session={token}"},
+    )
+    assert withdraw.status == 403
+
+    rows = _consent_rows(
+        os.environ["DREAMER_DB_PATH"],
+        user_id=user_id,
+        doc_type="staff_data_processing",
+    )
+    assert rows == []
+
+    # Sanity: the same session still signs its own (parent) document.
+    ok = await client.post(
+        "/api/consent/sign",
+        json={"doc_type": "privacy_policy", "doc_version": "v2026-08-26"},
+        headers={**HEADERS, "Cookie": f"auth_session={token}"},
+    )
+    assert ok.status == 201

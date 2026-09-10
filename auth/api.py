@@ -680,6 +680,8 @@ async def handle_consent_withdraw(request: web.Request) -> web.Response:
     withdraw is rejected by the same gate — nothing to withdraw.
     privacy_policy: rejected — withdrawing privacy consent equals an account
     deactivation request, handled manually via info@.
+    staff_data_processing: rejected — it is a condition of holding a staff
+    account (W6 PR-G); routed to info@ like an account-level matter.
     """
     user = _session_user(request)
     if user is None:
@@ -699,6 +701,18 @@ async def handle_consent_withdraw(request: web.Request) -> web.Response:
         return web.json_response(
             {
                 "error": "私隱政策係使用服務嘅前提，唔可以喺度撤回；如要停用帳戶，請電郵 info@dreamer-aiedu.com",
+                "email": "info@dreamer-aiedu.com",
+            },
+            status=400,
+        )
+
+    if doc_type == "staff_data_processing":
+        # W6 PR-G: staff paperwork is not withdrawn through the API — it is a
+        # condition of holding a staff account. Route to info@ so the staff
+        # account / role can be reviewed as an account-level matter.
+        return web.json_response(
+            {
+                "error": "職員資料處理守則唔可以喺度撤回；如對職員帳號或資料處理有疑問，請電郵 info@dreamer-aiedu.com",
                 "email": "info@dreamer-aiedu.com",
             },
             status=400,

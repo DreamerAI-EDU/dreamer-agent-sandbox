@@ -41,7 +41,14 @@ AUDIT_LOG_PATH = os.environ.get(
 )
 
 # Whitelist of doc types registered in config/consent_docs.yaml.
-DOC_TYPES = ("privacy_policy", "media_consent", "chat_consent")
+#   privacy_policy / media_consent / chat_consent -> parent (and child) scope
+#   staff_data_processing                         -> classroom staff scope (W6 PR-G)
+DOC_TYPES = (
+    "privacy_policy",
+    "media_consent",
+    "chat_consent",
+    "staff_data_processing",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +75,8 @@ LEGAL_ROUTES = {
     "media-consent": "media_consent",
     # W6 PR-D: standalone consent page for the AI chat tutoring feature.
     "chat-consent": "chat_consent",
+    # W6 PR-G: staff data-processing notice (teacher / admin scope).
+    "staff-data-processing": "staff_data_processing",
 }
 
 _ERR_INVALID = {"error": "請求無效"}

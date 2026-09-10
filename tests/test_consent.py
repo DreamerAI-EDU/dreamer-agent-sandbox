@@ -3,8 +3,9 @@
 Covers: registry + legal page SoT pairing, docs endpoint auth, sign
 version-check + ip/user_agent capture, unknown doc_type, re-sign gate on
 login (including version bump), media withdraw append-only + audit marker,
-privacy withdraw rejection, and the code-level guard that the consent module
-has no UPDATE/DELETE path on consent_log.
+privacy withdraw rejection, role scoping (W6 PR-F/G: teacher accounts are
+gated by the staff notice only), and the code-level guard that the consent
+module has no UPDATE/DELETE path on consent_log.
 
 No real passwords anywhere: all fixtures use `test-pass-` prefix (guard
 test 13 enforces this repo-wide).
@@ -138,11 +139,13 @@ async def test_docs_registry_and_legal_pages_pair_with_yaml(
     documents = body["documents"]
     assert set(documents) == {
         "privacy_policy", "media_consent", "chat_consent",
+        "staff_data_processing",
     }
 
     pp = documents["privacy_policy"]
     assert pp["current_version"] == "v2026-08-26"
     assert pp["required"] is True
+    assert pp["roles"] == ["parent"]
     assert pp["title_zh"] == "私隱政策"
     assert pp["title_en"] == "Privacy Policy"
 
@@ -155,8 +158,18 @@ async def test_docs_registry_and_legal_pages_pair_with_yaml(
     cc = documents["chat_consent"]
     assert cc["current_version"] == "v2026-09-08"
     assert cc["required"] is True
+    assert cc["roles"] == ["parent"]
     assert cc["title_zh"] == "AI 對話服務同意書"
     assert cc["title_en"] == "AI Chat Service Consent"
+
+    # W6 PR-G: the staff data-processing notice is its own registry entry,
+    # scoped to classroom staff — it is NOT a parent document.
+    sd = documents["staff_data_processing"]
+    assert sd["current_version"] == "v2026-09-10"
+    assert sd["required"] is True
+    assert sd["roles"] == ["teacher", "admin"]
+    assert sd["title_zh"] == "職員資料處理守則"
+    assert sd["title_en"] == "Staff Data Processing Notice"
 
     # Embedded legal pages are public, carry the same version from the same
     # YAML (never a second hardcoded copy), and hold the approved copy.
@@ -188,6 +201,17 @@ async def test_docs_registry_and_legal_pages_pair_with_yaml(
     assert "90 日" in cc_html
     assert "本人<strong>同意</strong>" in cc_html
     assert "info@dreamer-aiedu.com" in cc_html
+
+    # W6 PR-G: the staff notice ships on the same route + version injection
+    # pipeline (the page is public policy copy, like the other two).
+    sd_page = await client.get("/legal/staff-data-processing")
+    assert sd_page.status == 200
+    sd_html = await sd_page.text()
+    assert "v2026-09-10" in sd_html
+    assert "{{VERSION}}" not in sd_html
+    assert "Effective Date 生效日期：10 September 2026" in sd_html
+    assert "職員資料處理守則" in sd_html
+    assert "info@dreamer-aiedu.com" in sd_html
 
     # Unknown legal slug → 404.
     missing = await client.get("/legal/not-a-page")
@@ -379,41 +403,96 @@ async def test_media_consent_does_not_trigger_re_sign_gate(
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_teacher_login_skips_parent_consent_gate(client, fresh_invite):
-    """Teacher / admin logins are never forced onto the parent re-sign page.
+async def test_teacher_gate_uses_staff_notice_not_parent_docs(client, fresh_invite):
+    """W6 PR-F/G: a teacher is gated by the staff notice, never by parent docs.
 
-    The parent/child documents are scoped to role=parent in the registry; a
-    teacher account reports consent_required=false and every document comes
-    back with required=false for that role.
+    The parent/child documents stay scoped to role=parent, so a teacher's
+    missing list contains ONLY staff_data_processing (roles teacher+admin,
+    required:true). Signing it clears the gate; the parent documents were
+    never part of the teacher's gate at any point.
     """
     await _register_teacher(client)
 
     login = await _login(client)
     assert login.status == 200
     body = await login.json()
-    assert body["consent_required"] is False
-    assert body["missing_consent"] == []
+    assert body["consent_required"] is True
+    assert body["missing_consent"] == ["staff_data_processing"]
 
     token = _session_cookie(login)
-    status = await client.get(
-        "/api/consent/status",
-        headers={**HEADERS, "Cookie": f"auth_session={token}"},
-    )
+    headers = {**HEADERS, "Cookie": f"auth_session={token}"}
+    status = await client.get("/api/consent/status", headers=headers)
     assert status.status == 200
     docs = (await status.json())["documents"]
     assert docs["privacy_policy"]["roles"] == ["parent"]
     assert docs["privacy_policy"]["required"] is False
     assert docs["chat_consent"]["required"] is False
     assert docs["media_consent"]["required"] is False
+    assert docs["staff_data_processing"]["roles"] == ["teacher", "admin"]
+    assert docs["staff_data_processing"]["required"] is True
+    assert docs["staff_data_processing"]["status"] == "unsigned"
 
-    docs_resp = await client.get(
-        "/api/consent/docs",
-        headers={**HEADERS, "Cookie": f"auth_session={token}"},
-    )
+    docs_resp = await client.get("/api/consent/docs", headers=headers)
     assert docs_resp.status == 200
     registry = (await docs_resp.json())["documents"]
     assert registry["privacy_policy"]["roles"] == ["parent"]
     assert registry["chat_consent"]["roles"] == ["parent"]
+    assert registry["staff_data_processing"]["roles"] == ["teacher", "admin"]
+
+    # Signing the staff notice is what clears a teacher's gate.
+    sign = await client.post(
+        "/api/consent/sign",
+        json={"doc_type": "staff_data_processing", "doc_version": "v2026-09-10"},
+        headers=headers,
+    )
+    assert sign.status == 201
+    assert (await sign.json())["doc_type"] == "staff_data_processing"
+
+    relogin = await _login(client)
+    assert relogin.status == 200
+    body2 = await relogin.json()
+    assert body2["consent_required"] is False
+    assert body2["missing_consent"] == []
+
+
+@pytest.mark.asyncio
+async def test_staff_notice_withdraw_rejected_with_email_pointer(
+    client, fresh_invite
+):
+    """W6 PR-G: the staff notice is a condition of holding a staff account,
+    so it is not withdrawable through the API (same account-level route as
+    privacy_policy). Nothing is written — the agreed row stays latest.
+    """
+    await _register_teacher(client)
+    login = await _login(client)
+    token = _session_cookie(login)
+    headers = {**HEADERS, "Cookie": f"auth_session={token}"}
+
+    sign = await client.post(
+        "/api/consent/sign",
+        json={"doc_type": "staff_data_processing", "doc_version": "v2026-09-10"},
+        headers=headers,
+    )
+    assert sign.status == 201
+
+    withdraw = await client.post(
+        "/api/consent/withdraw",
+        json={"doc_type": "staff_data_processing"},
+        headers=headers,
+    )
+    assert withdraw.status == 400
+    wbody = await withdraw.json()
+    assert wbody["email"] == "info@dreamer-aiedu.com"
+    assert "撤回" in wbody["error"]
+
+    user = auth_db.get_user_by_email("teacher@test.local")
+    rows = _consent_rows(
+        os.environ["DREAMER_DB_PATH"],
+        user_id=user["id"],
+        doc_type="staff_data_processing",
+    )
+    assert len(rows) == 1
+    assert rows[0][3] == "agreed"
 
 
 # ---------------------------------------------------------------------------

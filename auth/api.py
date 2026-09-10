@@ -379,7 +379,7 @@ async def handle_login(request: web.Request) -> web.Response:
 
     # W2 PR#2 re-sign gate: required documents without a current-version
     # agreed row force the frontend to show the re-sign page.
-    missing = consent.required_consent_gaps(user["id"])
+    missing = consent.required_consent_gaps(user["id"], user["role"])
 
     resp = web.json_response(
         {
@@ -622,6 +622,7 @@ async def handle_consent_docs(request: web.Request) -> web.Response:
             "doc_type": doc_type,
             "current_version": cfg["current_version"],
             "required": bool(cfg.get("required")),
+            "roles": consent.doc_roles(cfg),
             "title_zh": cfg.get("title_zh", ""),
             "title_en": cfg.get("title_en", ""),
         }
@@ -759,10 +760,10 @@ async def handle_consent_status(request: web.Request) -> web.Response:
         if err is not None:
             return web.json_response(err, status=status_code)
         return web.json_response(
-            {"documents": consent.status_for_student(user["id"], sid)}
+            {"documents": consent.status_for_student(user["id"], sid, user["role"])}
         )
     return web.json_response(
-        {"documents": consent.status_for_user(user["id"])}
+        {"documents": consent.status_for_user(user["id"], user["role"])}
     )
 
 

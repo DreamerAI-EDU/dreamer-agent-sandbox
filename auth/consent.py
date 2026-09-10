@@ -43,6 +43,25 @@ AUDIT_LOG_PATH = os.environ.get(
 # Whitelist of doc types registered in config/consent_docs.yaml.
 DOC_TYPES = ("privacy_policy", "media_consent", "chat_consent")
 
+
+# ---------------------------------------------------------------------------
+# Role scope (W6 PR-F) â€” a document may be scoped to one or more account
+# roles via the registry `roles:` key. Documents without the key apply to
+# every role (unchanged behaviour, no silent gate removal); the parent/child
+# documents are scope-limited so classroom staff (teacher / admin) accounts
+# are never blocked by the parent consent gate at login.
+# ---------------------------------------------------------------------------
+ROLES = ("parent", "teacher", "admin")
+
+
+def doc_roles(cfg: dict[str, Any]) -> list[str]:
+    """Roles a document applies to (absent key == all known roles)."""
+    roles = cfg.get("roles")
+    if not roles:
+        return list(ROLES)
+    return list(roles)
+
+
 # Legal page -> doc_type mapping for the /legal/* embedded pages.
 LEGAL_ROUTES = {
     "privacy-policy": "privacy_policy",
@@ -79,6 +98,12 @@ def load_consent_docs() -> dict[str, Any]:
     unknown = set(documents) - set(DOC_TYPES)
     if unknown:
         raise ValueError(f"unknown doc_type(s) in consent registry: {sorted(unknown)}")
+    for doc_type, cfg in documents.items():
+        bad_roles = [r for r in (cfg.get("roles") or []) if r not in ROLES]
+        if bad_roles:
+            raise ValueError(
+                f"unknown role(s) in consent registry for {doc_type}: {bad_roles}"
+            )
     return data
 
 
@@ -342,32 +367,45 @@ def student_chat_consent_withdrawn(
     return _student_consent_withdrawn(user_id, student_id, "chat_consent")
 
 
-def required_consent_gaps(user_id: str) -> list[str]:
-    """Doc types that are required:true and lack a current-version agreement.
+def required_consent_gaps(user_id: str, role: str = "parent") -> list[str]:
+    """Doc types that are required:true, apply to `role`, and lack a
+    current-version agreement.
 
     Used by the login gate: when non-empty, the login response carries
     consent_required=true plus the missing list so the frontend can show the
-    re-sign page.
+    re-sign page. `role` defaults to the most restrictive scope (parent), so a
+    caller that forgets the argument stays fail-closed.
     """
     docs = load_consent_docs()
     gaps = []
     for doc_type, cfg in docs["documents"].items():
+        if role not in doc_roles(cfg):
+            continue
         if cfg.get("required") and not has_current_agreement(user_id, doc_type):
             gaps.append(doc_type)
     return gaps
 
 
-def status_for_user(user_id: str) -> dict[str, dict[str, Any]]:
-    """Per-document status for /api/consent/status."""
+def status_for_user(
+    user_id: str, role: str = "parent"
+) -> dict[str, dict[str, Any]]:
+    """Per-document status for /api/consent/status.
+
+    W6 PR-F: `roles` is echoed so the frontend can hide documents that do not
+    apply to the caller's role, and `required` is evaluated against that role
+    only (a parent/child document is not "required" for a teacher account).
+    """
     docs = load_consent_docs()
     latest = get_latest_consent_rows(user_id)
     out: dict[str, dict[str, Any]] = {}
     for doc_type, cfg in docs["documents"].items():
         entry = latest.get(doc_type)
+        roles = doc_roles(cfg)
         out[doc_type] = {
             "doc_type": doc_type,
             "current_version": cfg["current_version"],
-            "required": bool(cfg.get("required")),
+            "required": bool(cfg.get("required")) and role in roles,
+            "roles": roles,
             "title_zh": cfg.get("title_zh", ""),
             "title_en": cfg.get("title_en", ""),
             "status": (
@@ -381,6 +419,7 @@ def status_for_user(user_id: str) -> dict[str, dict[str, Any]]:
 def status_for_student(
     user_id: str,
     student_id: str,
+    role: str = "parent",
 ) -> dict[str, dict[str, Any]]:
     """Per-document status for /api/consent/status?student=<mask|id>.
 
@@ -420,10 +459,12 @@ def status_for_student(
     out: dict[str, dict[str, Any]] = {}
     for doc_type, cfg in docs["documents"].items():
         entry = latest.get(doc_type)
+        roles = doc_roles(cfg)
         out[doc_type] = {
             "doc_type": doc_type,
             "current_version": cfg["current_version"],
-            "required": bool(cfg.get("required")),
+            "required": bool(cfg.get("required")) and role in roles,
+            "roles": roles,
             "title_zh": cfg.get("title_zh", ""),
             "title_en": cfg.get("title_en", ""),
             "status": (

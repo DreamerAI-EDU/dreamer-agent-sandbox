@@ -19,8 +19,16 @@ export function RootGate() {
         if (!alive) return;
         const status = await api.consentStatus();
         if (!alive) return;
-        const privacy = status.documents['privacy_policy'];
-        if (!privacy || privacy.status !== 'agreed') {
+        // W6 PR-F role scope: only documents that apply to this account's
+        // role can force the re-sign page — parent/child documents never
+        // gate teacher / admin logins.
+        const required = Object.values(status.documents).some(
+          (doc) =>
+            doc.required &&
+            (doc.roles?.includes(me.user.role) ?? true) &&
+            doc.status !== 'agreed',
+        );
+        if (required) {
           setTarget('/consent');
           return;
         }

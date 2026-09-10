@@ -317,11 +317,12 @@ async def test_consent_sign_rejects_unknown_doc_type(client, fresh_invite):
 async def test_login_re_sign_gate_toggles_with_privacy_signature(
     client, fresh_invite
 ):
-    await _register_teacher(client)
-    user = auth_db.get_user_by_email("teacher@test.local")
+    # W6 PR-F role scope: the parent/child registry only applies to
+    # role=parent, so this re-sign flow runs on a parent account.
+    parent_id, email, password = _create_parent_user()
 
-    # Fresh user: both required docs (privacy + chat) unsigned → gate on.
-    login1 = await _login(client)
+    # Fresh parent: both required docs (privacy + chat) unsigned -> gate on.
+    login1 = await _login(client, email=email, password=password)
     assert login1.status == 200
     body1 = await login1.json()
     assert body1["consent_required"] is True
@@ -335,12 +336,12 @@ async def test_login_re_sign_gate_toggles_with_privacy_signature(
         headers={**HEADERS, "Cookie": f"auth_session={token1}"},
     )
     assert resp.status == 201
-    login_mid = await _login(client)
+    login_mid = await _login(client, email=email, password=password)
     body_mid = await login_mid.json()
     assert body_mid["consent_required"] is True
     assert body_mid["missing_consent"] == ["chat_consent"]
 
-    # Sign chat_consent too → gate off, nothing missing.
+    # Sign chat_consent too -> gate off, nothing missing.
     resp2 = await client.post(
         "/api/consent/sign",
         json={"doc_type": "chat_consent", "doc_version": "v2026-09-08"},
@@ -348,7 +349,7 @@ async def test_login_re_sign_gate_toggles_with_privacy_signature(
     )
     assert resp2.status == 201
 
-    login2 = await _login(client)
+    login2 = await _login(client, email=email, password=password)
     assert login2.status == 200
     body2 = await login2.json()
     assert body2["consent_required"] is False
@@ -363,29 +364,70 @@ async def test_login_re_sign_gate_toggles_with_privacy_signature(
 async def test_media_consent_does_not_trigger_re_sign_gate(
     client, fresh_invite
 ):
-    await _register_teacher(client)
+    _parent_id, email, password = _create_parent_user()
 
-    login = await _login(client)
+    login = await _login(client, email=email, password=password)
     assert login.status == 200
     body = await login.json()
-    # Missing list holds the required docs (privacy + chat) — media_consent
+    # Missing list holds the required docs (privacy + chat) -- media_consent
     # is optional and never appears.
     assert body["missing_consent"] == ["privacy_policy", "chat_consent"]
 
 
 # ---------------------------------------------------------------------------
-# 9. Version bump invalidates old agreement → gate re-triggers
+# 8b. W6 PR-F role scope: staff accounts stay outside the parent gate
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_teacher_login_skips_parent_consent_gate(client, fresh_invite):
+    """Teacher / admin logins are never forced onto the parent re-sign page.
+
+    The parent/child documents are scoped to role=parent in the registry; a
+    teacher account reports consent_required=false and every document comes
+    back with required=false for that role.
+    """
+    await _register_teacher(client)
+
+    login = await _login(client)
+    assert login.status == 200
+    body = await login.json()
+    assert body["consent_required"] is False
+    assert body["missing_consent"] == []
+
+    token = _session_cookie(login)
+    status = await client.get(
+        "/api/consent/status",
+        headers={**HEADERS, "Cookie": f"auth_session={token}"},
+    )
+    assert status.status == 200
+    docs = (await status.json())["documents"]
+    assert docs["privacy_policy"]["roles"] == ["parent"]
+    assert docs["privacy_policy"]["required"] is False
+    assert docs["chat_consent"]["required"] is False
+    assert docs["media_consent"]["required"] is False
+
+    docs_resp = await client.get(
+        "/api/consent/docs",
+        headers={**HEADERS, "Cookie": f"auth_session={token}"},
+    )
+    assert docs_resp.status == 200
+    registry = (await docs_resp.json())["documents"]
+    assert registry["privacy_policy"]["roles"] == ["parent"]
+    assert registry["chat_consent"]["roles"] == ["parent"]
+
+
+# ---------------------------------------------------------------------------
+# 9. Version bump invalidates old agreement -> gate re-triggers
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_version_bump_re_triggers_re_sign_gate(
     client, fresh_invite, tmp_path, monkeypatch
 ):
-    await _register_teacher(client)
-    user = auth_db.get_user_by_email("teacher@test.local")
+    parent_id, email, password = _create_parent_user()
 
-    # Sign both required docs → gate off.
-    login1 = await _login(client)
+    # Sign both required docs -> gate off.
+    login1 = await _login(client, email=email, password=password)
     token1 = _session_cookie(login1)
     for doc_type, doc_version in (
         ("privacy_policy", "v2026-08-26"),
@@ -397,7 +439,7 @@ async def test_version_bump_re_triggers_re_sign_gate(
             headers={**HEADERS, "Cookie": f"auth_session={token1}"},
         )
         assert resp.status == 201
-    login_ok = await _login(client)
+    login_ok = await _login(client, email=email, password=password)
     assert (await login_ok.json())["consent_required"] is False
 
     # Ship a new document version in the registry.
@@ -407,19 +449,19 @@ async def test_version_bump_re_triggers_re_sign_gate(
         "  privacy_policy:\n"
         '    current_version: "v2026-08-27"\n'
         "    required: true\n"
-        '    title_zh: "私隱政策"\n'
+        '    title_zh: "\u79c1\u96b1\u653f\u7b56"\n'
         '    title_en: "Privacy Policy"\n'
         "  media_consent:\n"
         '    current_version: "v2026-08-26"\n'
         "    required: false\n"
-        '    title_zh: "媒體同意書"\n'
+        '    title_zh: "\u5a92\u9ad4\u540c\u610f\u66f8"\n'
         '    title_en: "Media Consent Form"\n',
         encoding="utf-8",
     )
     monkeypatch.setattr(consent_mod, "DOCS_PATH", str(yaml_path))
 
     # Old agreed row (v2026-08-26) no longer satisfies the gate.
-    login3 = await _login(client)
+    login3 = await _login(client, email=email, password=password)
     assert login3.status == 200
     body3 = await login3.json()
     assert body3["consent_required"] is True
@@ -427,7 +469,7 @@ async def test_version_bump_re_triggers_re_sign_gate(
 
     # Old row still present (append-only, never mutated) but not current.
     rows = _consent_rows(
-        os.environ["DREAMER_DB_PATH"], user_id=user["id"], doc_type="privacy_policy"
+        os.environ["DREAMER_DB_PATH"], user_id=parent_id, doc_type="privacy_policy"
     )
     assert [r[3] for r in rows] == ["agreed"]
     assert rows[0][2] == "v2026-08-26"

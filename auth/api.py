@@ -81,6 +81,8 @@ _ERR_STEP_UP = {"error": "需要重新驗證密碼"}
 _ERR_NOTHING_TO_WITHDRAW = {"error": "未有可撤回嘅同意紀錄"}
 _ERR_PRIVACY_REQUIRED = {"error": "必須同意私隱政策先可以繼續"}
 _ERR_CHAT_CONSENT_REQUIRED = {"error": "必須同意 AI 對話服務同意書先可以繼續"}
+# W6 PR-H: a document may only be signed / withdrawn by a role it binds.
+_ERR_DOC_ROLE_SCOPE = {"error": "呢份文件唔適用於你嘅帳號角色，唔可以簽署或撤回"}
 
 # Student profile enumerations (B24: no last_name / school / other PII).
 AGE_BANDS = ("P1-P3", "P4-P6", "S1-S3")
@@ -218,6 +220,25 @@ def _consent_student_owned(user, student_id: Optional[str]) -> bool:
     if student["parent_id"] is None:
         return False
     return student["parent_id"] == user["id"]
+
+
+def _consent_doc_role_ok(user: Any, doc: dict[str, Any]) -> bool:
+    """W6 PR-H: role scope gate for sign / withdraw.
+
+    The registry `roles:` key is the single source of truth (see
+    consent.doc_roles): parent paperwork (`roles: ["parent"]`) can never be
+    signed or withdrawn by a teacher / admin session, and the staff notice
+    can never be touched by a parent session. A document without the key
+    still applies to every role, so this guard is a no-op for it.
+
+    The role is read from the session user only — never from the request
+    body — so a caller cannot widen its own scope.
+    """
+    try:
+        role = str(user["role"] or "parent")
+    except (KeyError, IndexError, TypeError):
+        role = "parent"
+    return role in consent.doc_roles(doc)
 
 
 def _consent_resolve_student(
@@ -630,7 +651,11 @@ async def handle_consent_docs(request: web.Request) -> web.Response:
 
 
 async def handle_consent_sign(request: web.Request) -> web.Response:
-    """POST /api/consent/sign — append agreed row; server checks version."""
+    """POST /api/consent/sign — append agreed row; server checks scope + version.
+
+    W6 PR-H: only a role the document binds may sign it (registry `roles:`);
+    an out-of-scope caller gets 403 and no row is written.
+    """
     user = _session_user(request)
     if user is None:
         return web.json_response(_ERR_AUTH, status=401)
@@ -647,6 +672,11 @@ async def handle_consent_sign(request: web.Request) -> web.Response:
     if doc is None:
         # Unknown doc_type — unified invalid wording, no hint of valid keys.
         return web.json_response(_ERR_INVALID, status=400)
+    if not _consent_doc_role_ok(user, doc):
+        # W6 PR-H: a parent-scoped document is not a teacher's to sign (and
+        # the staff notice is not a parent's). Checked before the version so
+        # an out-of-scope caller never gets version feedback.
+        return web.json_response(_ERR_DOC_ROLE_SCOPE, status=403)
     if doc_version != doc["current_version"]:
         # Refuse signing an old / fake / missing version.
         return web.json_response(_ERR_INVALID, status=400)
@@ -682,6 +712,8 @@ async def handle_consent_withdraw(request: web.Request) -> web.Response:
     deactivation request, handled manually via info@.
     staff_data_processing: rejected — it is a condition of holding a staff
     account (W6 PR-G); routed to info@ like an account-level matter.
+    W6 PR-H: sign and withdraw are both role-scoped — a document the caller's
+    role does not bind is rejected with 403 before any doc-specific handling.
     """
     user = _session_user(request)
     if user is None:
@@ -696,6 +728,16 @@ async def handle_consent_withdraw(request: web.Request) -> web.Response:
 
     if doc_type not in consent.DOC_TYPES:
         return web.json_response(_ERR_INVALID, status=400)
+
+    doc = consent.get_doc_config(doc_type)
+    if doc is None:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    # W6 PR-H: role scope is checked before anything doc-specific, so the
+    # privacy / staff refusals below only ever answer the role that document
+    # actually binds (a teacher has no privacy_policy to "withdraw").
+    if not _consent_doc_role_ok(user, doc):
+        return web.json_response(_ERR_DOC_ROLE_SCOPE, status=403)
 
     if doc_type == "privacy_policy":
         return web.json_response(
@@ -717,10 +759,6 @@ async def handle_consent_withdraw(request: web.Request) -> web.Response:
             },
             status=400,
         )
-
-    doc = consent.get_doc_config(doc_type)
-    if doc is None:
-        return web.json_response(_ERR_INVALID, status=400)
 
     # W2 PR#3 §0 / PR-E: same ownership gate as sign — a student_id must
     # resolve to the caller's own child (full id or mask prefix); otherwise

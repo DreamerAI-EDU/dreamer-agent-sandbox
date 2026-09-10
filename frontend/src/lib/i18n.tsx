@@ -340,7 +340,7 @@ const copyHk: Copy = {
   consentChat: 'AI 對話服務同意書',
   consentChatDesc: '必需 — AI 對話內容嘅處理方式。',
   consentStaffData: '職員資料處理守則',
-  consentStaffDataDesc: '職員必簽 — 你查閱同處理學生資料嘅規範。',
+  consentStaffDataDesc: '職員必簽 — 查閱及處理學生資料之規範。',
   consentRequired: '必須',
   consentBtn: '同意並繼續',
   consentBtnDisabled: '必須同意所有必須文件',

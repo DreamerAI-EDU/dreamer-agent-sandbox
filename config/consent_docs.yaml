@@ -10,19 +10,25 @@
 # read current_version from this file — never hardcode the version in two
 # places (test 11 asserts the pairing).
 
+#   - roles: [parent] -> doc is scoped to those roles; classroom staff
+#                        accounts (teacher / admin) never enter this gate.
+
 documents:
   privacy_policy:
     current_version: "v2026-08-26"
     required: true          # 必簽：唔簽完成唔到家長確認
+    roles: ["parent"]
     title_zh: "私隱政策"
     title_en: "Privacy Policy"
   media_consent:
     current_version: "v2026-08-26"
     required: false         # 自願：唔剔都註冊到
+    roles: ["parent"]
     title_zh: "媒體同意書"
     title_en: "Media Consent Form"
   chat_consent:
     current_version: "v2026-09-08"
     required: true          # W6 PR-D default-deny flip：chat gate 讀呢個 flag，未簽唔開 AI 對話
+    roles: ["parent"]
     title_zh: "AI 對話服務同意書"
     title_en: "AI Chat Service Consent"

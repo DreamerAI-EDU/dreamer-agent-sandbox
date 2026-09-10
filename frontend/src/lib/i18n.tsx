@@ -48,6 +48,9 @@ export interface Copy {
   consentMediaDesc: string;
   consentChat: string;
   consentChatDesc: string;
+  // staff data-processing notice (W6 PR-G, teacher / admin scope)
+  consentStaffData: string;
+  consentStaffDataDesc: string;
   consentRequired: string;
   consentBtn: string;
   consentBtnDisabled: string;
@@ -193,9 +196,11 @@ export const copyEn: Copy = {
   consentMediaDesc: 'Optional — allow the use of child media in class materials.',
   consentChat: 'AI Chat Service Consent',
   consentChatDesc: 'Required — how AI chat messages are handled.',
+  consentStaffData: 'Staff Data Processing Notice',
+  consentStaffDataDesc: 'Required for staff — how you may access and handle student data.',
   consentRequired: 'Required',
   consentBtn: 'Agree & continue',
-  consentBtnDisabled: 'Privacy Policy must be agreed',
+  consentBtnDisabled: 'All required documents must be agreed',
   consentDone: 'Consent saved',
   readPolicy: 'Read the full text',
   consentPanelTitle: 'Consent & withdrawal',
@@ -334,9 +339,11 @@ const copyHk: Copy = {
   consentMediaDesc: '可選 — 容許課堂教材使用小朋友嘅媒體。',
   consentChat: 'AI 對話服務同意書',
   consentChatDesc: '必需 — AI 對話內容嘅處理方式。',
+  consentStaffData: '職員資料處理守則',
+  consentStaffDataDesc: '職員必簽 — 你查閱同處理學生資料嘅規範。',
   consentRequired: '必須',
   consentBtn: '同意並繼續',
-  consentBtnDisabled: '必須同意私隱政策',
+  consentBtnDisabled: '必須同意所有必須文件',
   consentDone: '已記錄同意',
   readPolicy: '閱讀全文',
   consentPanelTitle: '同意及撤回管理',
@@ -475,9 +482,11 @@ const copyCn: Copy = {
   consentMediaDesc: '可选 — 允许课堂教材使用孩子的媒体。',
   consentChat: 'AI 对话服务同意书',
   consentChatDesc: '必需 — AI 对话内容的处理方式。',
+  consentStaffData: '职员数据处理守则',
+  consentStaffDataDesc: '职员必签 — 你查阅和处理学生资料的规范。',
   consentRequired: '必须',
   consentBtn: '同意并继续',
-  consentBtnDisabled: '必须同意隐私政策',
+  consentBtnDisabled: '必须同意所有必须文件',
   consentDone: '已记录同意',
   readPolicy: '阅读全文',
   consentPanelTitle: '同意及撤回管理',

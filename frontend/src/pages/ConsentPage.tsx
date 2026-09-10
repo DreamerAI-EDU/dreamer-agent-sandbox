@@ -1,4 +1,6 @@
 // W2 PR#6 — consent re-sign page (real GET /api/consent/docs + POST /api/consent/sign).
+// W6 PR-G: submit gating and per-doc copy are registry-driven, so parent and
+// staff (teacher / admin) documents both flow through this one page.
 
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
@@ -68,14 +70,12 @@ export function ConsentPage() {
     [pending],
   );
   const mediaDoc = useMemo(() => pending.find((p) => p.docType === 'media_consent'), [pending]);
-  const chatDoc = useMemo(() => pending.find((p) => p.docType === 'chat_consent'), [pending]);
-  // W6 PR-D: every required doc gates submit (privacy + chat once the
-  // registry flips chat_consent.required to true); voluntary docs never do.
-  const chatMissing = useMemo(() => (chatDoc ? !!chatDoc.doc.required : false), [chatDoc]);
-  const privacyAgreed = !!agreed['privacy_policy'];
-  const chatAgreed = !!agreed['chat_consent'];
-  const canSubmit =
-    (!privacyMissing || privacyAgreed) && (!chatMissing || chatAgreed);
+  // W6 PR-D / PR-G: the registry decides what gates submit — every document
+  // the server marks required (privacy_policy, chat_consent,
+  // staff_data_processing) must be ticked; voluntary docs (media_consent)
+  // never block. Adding a document to consent_docs.yaml therefore needs no
+  // change in this page.
+  const canSubmit = pending.every((p) => !p.doc.required || !!agreed[p.docType]);
 
   const submit = async () => {
     if (!canSubmit || busy) return;
@@ -129,7 +129,7 @@ export function ConsentPage() {
 
         <div className="mt-6 space-y-4">
           {pending.map(({ docType, doc }) => {
-            const isPrivacy = docType === 'privacy_policy';
+            const { label, desc } = docText(docType, copy);
             const checked = !!agreed[docType];
             return (
               <div key={docType} className="rounded-2xl border border-black/5 bg-white p-5 shadow-sm">
@@ -143,13 +143,7 @@ export function ConsentPage() {
                         </span>
                       )}
                     </h2>
-                    <p className="mt-1 text-sm text-black/50">
-                      {isPrivacy
-                        ? copy.consentPrivacyDesc
-                        : docType === 'chat_consent'
-                          ? copy.consentChatDesc
-                          : copy.consentMediaDesc}
-                    </p>
+                    <p className="mt-1 text-sm text-black/50">{desc}</p>
                     <p className="mt-1 text-xs text-black/40">Version {doc.current_version}</p>
                     <a
                       href={`/legal/${legalSlug(docType)}`}
@@ -167,11 +161,7 @@ export function ConsentPage() {
                       onChange={(e) => setAgreed((prev) => ({ ...prev, [docType]: e.target.checked }))}
                       className="h-4 w-4 accent-black"
                     />
-                    {isPrivacy
-                      ? copy.consentPrivacy
-                      : docType === 'chat_consent'
-                        ? copy.consentChat
-                        : copy.consentMedia}
+                    {label}
                   </label>
                 </div>
               </div>
@@ -202,6 +192,21 @@ function routeByRole(role: string, navigate: (to: string, opts?: { replace?: boo
   if (role === 'teacher') navigate('/teacher', { replace: true });
   else if (role === 'admin') navigate('/safety', { replace: true });
   else navigate('/home', { replace: true });
+}
+
+function docText(docType: string, copy: ReturnType<typeof useLang>['copy']) {
+  // W6 PR-G: copy keyed by doc_type. An unknown (newly registered) doc type
+  // falls back to the media copy rather than rendering a blank card.
+  switch (docType) {
+    case 'privacy_policy':
+      return { label: copy.consentPrivacy, desc: copy.consentPrivacyDesc };
+    case 'chat_consent':
+      return { label: copy.consentChat, desc: copy.consentChatDesc };
+    case 'staff_data_processing':
+      return { label: copy.consentStaffData, desc: copy.consentStaffDataDesc };
+    default:
+      return { label: copy.consentMedia, desc: copy.consentMediaDesc };
+  }
 }
 
 function legalSlug(docType: string): string {

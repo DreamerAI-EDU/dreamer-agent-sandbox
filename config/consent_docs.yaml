@@ -12,6 +12,9 @@
 
 #   - roles: [parent] -> doc is scoped to those roles; classroom staff
 #                        accounts (teacher / admin) never enter this gate.
+#              [teacher, admin] -> staff paperwork: the parent/child docs
+#                        above never bind staff, and this doc never binds
+#                        parents (W6 PR-G). Absent key = every role.
 
 documents:
   privacy_policy:
@@ -32,3 +35,9 @@ documents:
     roles: ["parent"]
     title_zh: "AI 對話服務同意書"
     title_en: "AI Chat Service Consent"
+  staff_data_processing:
+    current_version: "v2026-09-10"
+    required: true          # W6 PR-G：staff 必簽，未簽唔入到後台
+    roles: ["teacher", "admin"]
+    title_zh: "職員資料處理守則"
+    title_en: "Staff Data Processing Notice"

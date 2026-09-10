@@ -33,6 +33,9 @@ export function ConsentPage() {
         if (!alive) return;
         const missing: PendingDoc[] = [];
         for (const [docType, doc] of Object.entries(docsResp.documents)) {
+          // W6 PR-F role scope: a document scoped to other roles never
+          // surfaces here (parent/child docs are not staff paperwork).
+          if (!(doc.roles?.includes(me.user.role) ?? true)) continue;
           const entry = statusResp.documents[docType];
           if (!entry || entry.status !== 'agreed') {
             missing.push({ docType, doc });
@@ -40,11 +43,7 @@ export function ConsentPage() {
         }
         if (missing.length === 0) {
           // Nothing to sign — route by role.
-          if (me.user.role === 'teacher' || me.user.role === 'admin') {
-            navigate('/safety', { replace: true });
-          } else {
-            navigate('/home', { replace: true });
-          }
+          routeByRole(me.user.role, navigate);
           return;
         }
         setPending(missing);
@@ -89,11 +88,7 @@ export function ConsentPage() {
         await api.consentSign(item.docType, item.doc.current_version);
       }
       if (!user) return;
-      if (user.role === 'teacher' || user.role === 'admin') {
-        navigate('/safety', { replace: true });
-      } else {
-        navigate('/home', { replace: true });
-      }
+      routeByRole(user.role, navigate);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : copy.unexpectedError);
     } finally {
@@ -200,6 +195,13 @@ export function ConsentPage() {
       </div>
     </AppShell>
   );
+}
+
+function routeByRole(role: string, navigate: (to: string, opts?: { replace?: boolean }) => void) {
+  // W6 PR-F — teachers land on their own dashboard, never on /safety.
+  if (role === 'teacher') navigate('/teacher', { replace: true });
+  else if (role === 'admin') navigate('/safety', { replace: true });
+  else navigate('/home', { replace: true });
 }
 
 function legalSlug(docType: string): string {

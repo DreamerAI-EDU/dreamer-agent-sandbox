@@ -59,6 +59,8 @@ export interface ConsentDoc {
   doc_type: string;
   current_version: string;
   required: boolean;
+  /** Roles this document applies to (W6 PR-F role scope). */
+  roles: string[];
   title_zh: string;
   title_en: string;
 }
@@ -71,6 +73,8 @@ export interface ConsentStatusEntry {
   doc_type: string;
   current_version: string;
   required: boolean;
+  /** Roles this document applies to (W6 PR-F role scope). */
+  roles: string[];
   title_zh: string;
   title_en: string;
   status: 'unsigned' | 'agreed' | 'withdrawn';

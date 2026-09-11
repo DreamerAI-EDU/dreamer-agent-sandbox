@@ -304,6 +304,139 @@ def _apply_advance(
     return next_week
 
 
+# ---------------------------------------------------------------------------
+# Bridge-3a — kid-facing "Week X / 8" badge (read path, writes nothing)
+# ---------------------------------------------------------------------------
+
+# Badge states. "none" is the neutral state: the kid surface answers 200 with
+# the badge hidden — it is never an error the child can trip over.
+STATE_NONE = "none"
+STATE_ACTIVE = "active"
+STATE_COMPLETED = "completed"
+
+BADGE_STATES: tuple[str, ...] = (STATE_NONE, STATE_ACTIVE, STATE_COMPLETED)
+
+
+def _student_confirmed_classes(student_id: str) -> list[str]:
+    """Class ids the student is a CONFIRMED member of, oldest first.
+
+    Pending invites do not count: the parent has not accepted yet, so the kid
+    surface must stay neutral rather than guess at a class the child is not in.
+    """
+    _prepare()
+    conn = auth_db.connect()
+    try:
+        rows = conn.execute(
+            "SELECT class_id FROM class_students "
+            "WHERE student_id = ? AND status = 'confirmed' "
+            "ORDER BY created_at ASC, class_id ASC",
+            (student_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [str(row["class_id"]) for row in rows]
+
+
+def _resolve_week_state(weeks: list[dict[str, Any]]) -> tuple[Optional[int], str]:
+    """Pure validator: (week_no, state) as the CHILD should see it.
+
+    Healthy states are the Bridge-2 ones — exactly one ``active`` week with
+    everything before it ``completed`` and everything after it ``locked``, or
+    the full 1..8 set ``completed`` (``course_completed``). Anything else
+    (partial mount, gap, two open weeks) degrades to ``(None, "none")``: the
+    badge hides instead of showing a week number the data does not support.
+    """
+    statuses = {week["week_no"]: week["status"] for week in weeks}
+    if set(statuses) != set(ALL_WEEKS):
+        return None, STATE_NONE
+
+    open_weeks = [w for w, s in statuses.items() if s == STATUS_ACTIVE]
+    if len(open_weeks) > 1:
+        return None, STATE_NONE
+
+    current = open_weeks[0] if open_weeks else CURRICULUM_WEEKS + 1
+    for w in range(1, current):
+        if statuses[w] != STATUS_COMPLETED:
+            return None, STATE_NONE
+
+    if not open_weeks:
+        # No open week: either the course is finished, or week 1 never opened.
+        if all(statuses[w] == STATUS_COMPLETED for w in ALL_WEEKS):
+            return CURRICULUM_WEEKS, STATE_COMPLETED
+        return None, STATE_NONE
+
+    for w in range(current + 1, CURRICULUM_WEEKS + 1):
+        if statuses[w] != STATUS_LOCKED:
+            return None, STATE_NONE
+    return current, STATE_ACTIVE
+
+
+def _kid_unit_title(topic_id: str) -> str:
+    """Kid-facing unit title for one week, authored server-side (ruling #1).
+
+    The string comes from ``topic_metadata.topic`` (Bridge-1 source of truth,
+    authored for the child), falling back to the authored subject and then to
+    "" — the internal ``topic_id`` (e.g. "curriculum-wk01") never leaves the
+    server and the frontend never translates one.
+    """
+    if not topic_id:
+        return ""
+    conn = auth_db.connect()
+    try:
+        try:
+            row = conn.execute(
+                "SELECT topic, subject FROM topic_metadata "
+                "WHERE topic_id = ? LIMIT 1",
+                (topic_id,),
+            ).fetchone()
+        except sqlite3.OperationalError:  # topic_metadata not built yet
+            return ""
+    finally:
+        conn.close()
+    if row is None:
+        return ""
+    return str(row["topic"] or row["subject"] or "").strip()
+
+
+def student_week_badge(student_id: str) -> dict[str, Any]:
+    """The kid-facing reading of the student's class curriculum (Bridge-3a).
+
+    Shape: ``{state, week_index, total_weeks, unit_title}``.
+
+      * ``state="none"``       no confirmed class, no mounted course, or a
+                               non-linear row set -> badge stays hidden.
+      * ``state="active"``     ``week_index`` = the ``week_no`` of the class's
+                               ONE active week — the backend states it, the
+                               frontend never derives it (ruling #3).
+      * ``state="completed"``  all 8 weeks done: ``week_index`` = 8 so the
+                               badge reads "8/8 · 完成".
+
+    The payload carries no student id and no internal ``topic_id``.
+    """
+    for class_id in _student_confirmed_classes(student_id):
+        weeks = list_class_curriculum(class_id)
+        if not weeks:
+            continue  # class without a mounted course -> neutral for this one
+        week_no, state = _resolve_week_state(weeks)
+        if state == STATE_NONE or week_no is None:
+            continue
+        topic_id = next(
+            (w["topic_id"] for w in weeks if w["week_no"] == week_no), None
+        )
+        return {
+            "state": state,
+            "week_index": week_no,
+            "total_weeks": CURRICULUM_WEEKS,
+            "unit_title": _kid_unit_title(topic_id or "") if topic_id else "",
+        }
+    return {
+        "state": STATE_NONE,
+        "week_index": None,
+        "total_weeks": CURRICULUM_WEEKS,
+        "unit_title": "",
+    }
+
+
 def advance_week(
     class_id: str,
 ) -> tuple[Optional[dict[str, Any]], Optional[str]]:

@@ -19,6 +19,8 @@ import { AssistantMessage } from '../components/ChatMessage';
 import { StreamingMessage } from '../components/StreamingMessage';
 import { Dibi } from '../components/Dibi';
 import { Starfield } from '../components/Starfield';
+import { ApiError, api } from '../lib/api';
+import type { StudentCurriculumResponse } from '../lib/types';
 import logoWhite from '../assets/dreamer-logo-white.png';
 
 const stream = createStream();
@@ -76,6 +78,25 @@ const COPY = {
   },
 };
 
+// Bridge-3a — "Week X / 8" badge chrome (chat top bar). Only this frame is
+// localized client-side; the unit title always comes from the backend
+// (topic_metadata, label_soften tradition) and is rendered verbatim — the
+// frontend never translates an internal topic_id (North Star #3).
+const WEEK_COPY: Record<Lang, { week: (n: number, t: number) => string; done: (t: number) => string }> = {
+  en: {
+    week: (n, t) => `Week ${n} / ${t}`,
+    done: (t) => `${t}/${t} · Complete`,
+  },
+  hk: {
+    week: (n, t) => `第 ${n} 週 / ${t}`,
+    done: (t) => `${t}/${t} · 完成`,
+  },
+  cn: {
+    week: (n, t) => `第 ${n} 周 / ${t}`,
+    done: (t) => `${t}/${t} · 完成`,
+  },
+};
+
 // Banner tone per error class — layered so auth vs permission vs network
 // reads differently to the grown-up who is standing behind the kid.
 function bannerTone(kind: KidErrorKind): 'auth' | 'permission' | 'soft' {
@@ -105,6 +126,9 @@ export default function ChatPage() {
   const [input, setInput] = useState('');
   const [wsStatus, setWsStatus] = useState<ChatStreamStatus | 'idle'>('idle');
   const [kidError, setKidError] = useState<KidErrorKind | null>(null);
+  const [curriculum, setCurriculum] = useState<{ for: string; data: StudentCurriculumResponse } | null>(
+    null,
+  );
   const bottomRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<(() => void) | null>(null);
   const lastQuestionRef = useRef('');
@@ -113,6 +137,22 @@ export default function ChatPage() {
   const theme = BAND_THEMES[profile.bandIdx];
   const copy = COPY[lang];
   const err = kidError ? ERROR_COPY[kidError] : null;
+
+  // Bridge-3a — top-bar badge text. 'none' / a missing week index / any load
+  // failure all collapse to `null`: the badge is simply hidden (the backend
+  // already answers a neutral 200, so a child never sees an error here).
+  const weekCopy = WEEK_COPY[lang];
+  const curriculumData =
+    curriculum && curriculum.for === profile.student ? curriculum.data : null;
+  let weekBadge: { text: string; unit: string } | null = null;
+  if (curriculumData?.state === 'completed') {
+    weekBadge = { text: weekCopy.done(curriculumData.total_weeks), unit: curriculumData.unit_title };
+  } else if (curriculumData?.state === 'active' && curriculumData.week_index !== null) {
+    weekBadge = {
+      text: weekCopy.week(curriculumData.week_index, curriculumData.total_weeks),
+      unit: curriculumData.unit_title,
+    };
+  }
 
   const activeStreaming =
     wsStatus === 'connecting' || wsStatus === 'streaming' || wsStatus === 'disconnected' || wsStatus === 'reconnecting';
@@ -126,6 +166,36 @@ export default function ChatPage() {
 
   // Unmount cleanup: close the socket, clear backoff timers.
   useEffect(() => () => cancelRef.current?.(), []);
+
+  // Bridge-3a — kid "Week X / 8" badge. Loaded on mount and re-read when the
+  // tab regains focus (a teacher's advance-week shows up without a reload);
+  // re-reads stop on unmount. Silent on failure by design. The response is
+  // tagged with the identifier it was fetched for, so a stale payload can
+  // never paint for a different child.
+  useEffect(() => {
+    const identifier = profile.student;
+    if (!realWs || !identifier) return; // no tag → the derived badge stays null
+    let alive = true;
+    const load = () => {
+      api.studentCurriculum(identifier).then(
+        (resp) => {
+          if (alive) setCurriculum({ for: identifier, data: resp });
+        },
+        (e: unknown) => {
+          if (alive) setCurriculum(null);
+          // 401/403/400 are expected states, not bugs — stay quiet for those.
+          if (!(e instanceof ApiError)) console.warn('Week badge unavailable', e);
+        },
+      );
+    };
+    load();
+    const onFocus = () => load();
+    window.addEventListener('focus', onFocus);
+    return () => {
+      alive = false;
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [profile.student]);
 
   const ask = (text?: string) => {
     const userText = (text ?? input).trim();
@@ -196,6 +266,23 @@ export default function ChatPage() {
           <img src={logoWhite} alt="Dreamer AI Education" className="h-10 w-auto" />
 
           {profile.name && <p className="text-sm font-semibold text-white/80">{copy.hi(profile.name)}</p>}
+
+          {/* Bridge-3a — "Week X / 8" badge. Week frame is localized here,
+              the unit title is backend text rendered verbatim. */}
+          {weekBadge && (
+            <div
+              className="flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-bold text-white/90"
+              style={{ borderColor: `${theme.accent}66`, backgroundColor: `${theme.accent}1f` }}
+              title={weekBadge.unit || undefined}
+            >
+              <span>{weekBadge.text}</span>
+              {weekBadge.unit && (
+                <span className="hidden max-w-[16rem] truncate font-semibold text-white/60 sm:inline">
+                  · {weekBadge.unit}
+                </span>
+              )}
+            </div>
+          )}
 
           <div className="ml-auto flex items-center gap-2">
             <div

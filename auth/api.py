@@ -2271,6 +2271,55 @@ async def handle_advance_week(request: web.Request) -> web.Response:
     return web.json_response(result)
 
 
+async def handle_student_curriculum(request: web.Request) -> web.Response:
+    """GET /api/student/curriculum?student=<mask|full> — kid "Week X / 8" badge.
+
+    Bridge-3a read surface. Same acting-parent model as the kid portfolio
+    (``handle_student_portfolio``): the platform has no separate student login,
+    children are PIN-unlocked rows reached through the parent's session.
+      * parent + own child       -> 200 {state, week_index, total_weeks,
+                                    unit_title}
+      * parent + another child   -> unified 403 (cross-class read attempt,
+                                    WARNING-logged)
+      * teacher / admin session  -> unified 403 (the kid badge is not a staff
+                                    lens)
+      * anonymous                -> 401
+      * no class / no mounted course -> 200 {"state": "none", ...}; the child
+                                    surface never 500s on a neutral state.
+
+    The payload carries no student id, and ``unit_title`` is the authored
+    kid-facing string from topic_metadata — the internal topic_id never crosses
+    the wire (ruling #1).
+    """
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+    if user["role"] != "parent":
+        _log_security_warning(
+            "curriculum_student_role_denied",
+            user_id=user["id"],
+            detail="non-parent session attempted the kid curriculum surface",
+        )
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    identifier = (request.query.get("student") or "").strip()
+    if not identifier:
+        return web.json_response(_ERR_INVALID, status=400)
+    student, ambiguous = students_mod.resolve_student_identifier(identifier, user)
+    if ambiguous:
+        return web.json_response(_ERR_INVALID, status=400)
+    if student is None or not students_mod.can_access_student(user, student):
+        _log_security_warning(
+            "curriculum_student_cross_access",
+            user_id=user["id"],
+            target_id=identifier,
+            detail="attempted to read another child's curriculum week badge",
+        )
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    return web.json_response(curriculum_mod.student_week_badge(student["id"]))
+
+
 # ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
@@ -2340,6 +2389,11 @@ def build_app() -> web.Application:
     )
     app.router.add_get(
         "/api/parent/portfolio/{student_id}/pdf", handle_parent_portfolio_pdf
+    )
+    # Bridge-3a — kid-facing "Week X / 8" badge (read-only kid surface; the
+    # acting-parent gate is the same one the kid portfolio uses).
+    app.router.add_get(
+        "/api/student/curriculum", handle_student_curriculum
     )
     # W3-A — real WS chat (server-side handshake gate + DeepTutor relay).
     # GET (WS upgrade); csrf_guard only protects POSTs. Import is deferred

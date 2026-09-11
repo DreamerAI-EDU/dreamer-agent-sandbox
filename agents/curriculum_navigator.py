@@ -6,7 +6,11 @@ Reads topic_metadata to resolve prerequisites, KB lists, and prerequisite gaps.
 Uses the same SQLite DB as assessment_agent (dreamer.db).
 
 DB tables owned:
-  - topic_metadata: topic prerequisites + kb_list mapping
+  - topic_metadata: topic prerequisites + KB membership
+    (Bridge-1: the schema is the canonical 12-field definition owned by
+     pipeline/topic_metadata_schema.py — this module no longer bootstraps a
+     private 6-column table. Legacy columns kb_list / created_at are still
+     honoured for reads when an old DB happens to have them.)
 Other tables read:
   - progress_snapshots: for check_prereq_gaps (created by assessment_agent)
 """
@@ -17,7 +21,14 @@ import json
 import logging
 import os
 import sqlite3
+import sys
 from typing import Any, Dict, List, Optional
+
+try:  # package context (repo root on sys.path)
+    from pipeline import topic_metadata_schema as _schema
+except ImportError:  # pragma: no cover - bare `agents/` on sys.path
+    sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+    from pipeline import topic_metadata_schema as _schema
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +86,44 @@ def _query_one(
         conn.close()
 
 
+def _phase_list(raw: str) -> List[str]:
+    """Parse the Dreamer 4D phase cell.
+
+    Canonical rows store a JSON array (["Design", "Deliver"]); legacy rows
+    store a bare string ("Dream"). Both must survive a read.
+    """
+    if not raw:
+        return []
+    parsed = _json_list(raw)
+    if parsed:
+        return parsed
+    text = str(raw).strip()
+    return [text] if text else []
+
+
+# Canonical metadata keys returned by CurriculumNavigator.get_topic_metadata
+# (Bridge-1). Order follows pipeline/topic_metadata_schema.CANONICAL_COLUMNS.
+_META_LIST_KEYS = frozenset({
+    "modes_allowed", "prerequisites", "linked_projects",
+    "ib_atl_skills", "ethical_ai_tags",
+})
+_META_PHASE_KEYS = frozenset({"dreamer_phase"})
+
+
+def _row_to_meta(cols: List[str], row: tuple) -> Dict[str, Any]:
+    """Build the metadata dict from a dynamic column selection."""
+    data = dict(zip(cols, row))
+    meta: Dict[str, Any] = {}
+    for col in cols:
+        value = data[col]
+        if col in _META_LIST_KEYS:
+            value = _json_list(value)
+        elif col in _META_PHASE_KEYS:
+            value = _phase_list(value)
+        meta[col] = value
+    return meta
+
+
 # ── Age Band Validation ────────────────────────────────
 
 def validate_age_band(age_band: str) -> str:
@@ -120,27 +169,17 @@ class CurriculumNavigator:
 
     @classmethod
     def _ensure_db(cls, target_path: str) -> None:
-        """Create topic_metadata table if not exist."""
+        """Create / migrate the canonical topic_metadata table (Bridge-1).
+
+        Delegates to the shared schema module so the Navigator and the KB
+        export can never drift apart again. Legacy 6-column tables are
+        migrated in place: missing columns are ADDed, never dropped.
+        """
         if cls._db_ensured and cls._ensured_path == target_path:
             return
         conn = _connect(target_path)
         try:
-            conn.executescript("""
-                PRAGMA journal_mode=WAL;
-
-                CREATE TABLE IF NOT EXISTS topic_metadata (
-                    topic_id        TEXT PRIMARY KEY,
-                    subject         TEXT NOT NULL,
-                    grade_level     TEXT NOT NULL,
-                    prerequisites   TEXT NOT NULL DEFAULT '[]',
-                    kb_list         TEXT NOT NULL DEFAULT '[]',
-                    created_at      TEXT NOT NULL DEFAULT ''
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_topic_grade
-                    ON topic_metadata(grade_level);
-            """)
-            conn.commit()
+            _schema.ensure_schema(conn)
         finally:
             conn.close()
         cls._db_ensured = True
@@ -170,26 +209,62 @@ class CurriculumNavigator:
     def get_topic_metadata(self, topic_id: str) -> Optional[Dict[str, Any]]:
         """Return full metadata dict for a topic, or None if not found.
 
-        Returns dict keys: topic_id, subject, grade_level, prerequisites, kb_list, created_at.
-        prerequisites and kb_list are parsed into Python lists.
+        Bridge-1: the canonical 12 fields (+ document_path / document_hash /
+        exported_at / last_modified) are always present in the returned dict.
+        Legacy keys are kept for existing consumers:
+
+          - ``kb_list``     → ``[kb_name]`` (canonical). The legacy
+                              ``kb_list`` column is only a fallback for
+                              rows with no ``kb_name`` (pre-export sample
+                              rows written by seed_topic_metadata.py).
+          - ``created_at``  → the row's ``created_at`` column when present,
+                              otherwise ``exported_at``.
+
+        List-valued fields (``dreamer_phase`` included) are parsed into
+        Python lists.
         """
         self._bootstrap()
-        row = _query_one(
-            self._db_path,
-            """SELECT topic_id, subject, grade_level, prerequisites, kb_list, created_at
-               FROM topic_metadata WHERE topic_id=?""",
-            (topic_id,),
-        )
+        conn = _connect(self._db_path)
+        try:
+            existing = _schema.column_names(conn)
+            cols = [c for c in _schema.CANONICAL_COLUMNS if c in existing]
+            legacy = [
+                c for c in (_schema.LEGACY_KB_LIST_COLUMN,
+                            _schema.LEGACY_CREATED_AT_COLUMN)
+                if c in existing
+            ]
+            selected = cols + legacy
+            row = conn.execute(
+                f"SELECT {', '.join(selected)} FROM topic_metadata "
+                f"WHERE topic_id=?",
+                (topic_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+
         if row is None:
             return None
-        return {
-            "topic_id": row[0],
-            "subject": row[1],
-            "grade_level": row[2],
-            "prerequisites": _json_list(row[3]),
-            "kb_list": _json_list(row[4]),
-            "created_at": row[5],
-        }
+
+        data = dict(zip(selected, row))
+        meta = _row_to_meta(cols, row)
+
+        # Legacy compatibility layer (see docstring): the canonical kb_name
+        # wins; the legacy kb_list column is only a fallback for rows the KB
+        # export has never touched (kb_name NULL / empty, e.g. the temporary
+        # seed_topic_metadata.py sample rows).
+        kb_name = data.get("kb_name")
+        if kb_name:
+            meta["kb_list"] = [kb_name]
+        elif _schema.LEGACY_KB_LIST_COLUMN in data:
+            meta["kb_list"] = _json_list(data[_schema.LEGACY_KB_LIST_COLUMN])
+        else:
+            meta["kb_list"] = []
+        meta["created_at"] = (
+            data.get(_schema.LEGACY_CREATED_AT_COLUMN)
+            or data.get("exported_at")
+            or ""
+        )
+        return meta
 
     def resolve_kb_list(self, mode: str, topic_id: str) -> List[str]:
         """Return KB list for a topic with mode-specific rules applied.

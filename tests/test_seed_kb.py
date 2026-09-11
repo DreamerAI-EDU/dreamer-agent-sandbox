@@ -344,7 +344,13 @@ def test_check_kb_count_zero_fails(monkeypatch, kb_fs, capsys):
     monkeypatch.setattr(seed, "TutorAPI", _fake_api_factory(
         {"status": "ok", "knowledge_bases_count": 0}, []
     ))
-    args = seed.argparse.Namespace(api_base="http://x", timeout=1.0, wait=1.0)
+    # skip_metadata_index: these tests cover the DeepTutor half only — the
+    # Bridge-1 topic_metadata hop is exercised in
+    # tests/test_bridge1_topic_metadata.py and must not touch a real DB.
+    args = seed.argparse.Namespace(
+        api_base="http://x", timeout=1.0, wait=1.0,
+        skip_metadata_index=True, db=None,
+    )
     assert seed.cmd_check(args) == seed.EXIT_VERIFY_FAIL
     out = capsys.readouterr().out
     assert "KB count = 0" in out
@@ -366,7 +372,13 @@ def test_check_embedding_failure_fails(monkeypatch, kb_fs, capsys):
             raise seed.SeedError("no embedding model")
 
     monkeypatch.setattr(seed, "TutorAPI", _Bad)
-    args = seed.argparse.Namespace(api_base="http://x", timeout=1.0, wait=1.0)
+    # skip_metadata_index: these tests cover the DeepTutor half only — the
+    # Bridge-1 topic_metadata hop is exercised in
+    # tests/test_bridge1_topic_metadata.py and must not touch a real DB.
+    args = seed.argparse.Namespace(
+        api_base="http://x", timeout=1.0, wait=1.0,
+        skip_metadata_index=True, db=None,
+    )
     assert seed.cmd_check(args) == seed.EXIT_VERIFY_FAIL
 
 
@@ -381,7 +393,13 @@ def test_sync_reindex_failure_exits_verify_fail(monkeypatch, kb_fs, capsys):
          {"name": "dreamer-maths-ai", "statistics": {"raw_documents": 1}}],
         reindex_exc=seed.SeedError("reindex boom"),
     ))
-    args = seed.argparse.Namespace(api_base="http://x", timeout=1.0, wait=1.0)
+    # skip_metadata_index: these tests cover the DeepTutor half only — the
+    # Bridge-1 topic_metadata hop is exercised in
+    # tests/test_bridge1_topic_metadata.py and must not touch a real DB.
+    args = seed.argparse.Namespace(
+        api_base="http://x", timeout=1.0, wait=1.0,
+        skip_metadata_index=True, db=None,
+    )
     assert seed.cmd_sync(args) == seed.EXIT_VERIFY_FAIL
     out = capsys.readouterr().out
     assert "reindex boom" in out
@@ -420,7 +438,13 @@ def test_sync_noop_when_nothing_changed(monkeypatch, kb_fs, capsys):
     monkeypatch.setattr(seed, "wait_ready", lambda api, t: True)
     monkeypatch.setattr(seed, "TutorAPI", _Fake)
 
-    args = seed.argparse.Namespace(api_base="http://x", timeout=1.0, wait=1.0)
+    # skip_metadata_index: these tests cover the DeepTutor half only — the
+    # Bridge-1 topic_metadata hop is exercised in
+    # tests/test_bridge1_topic_metadata.py and must not touch a real DB.
+    args = seed.argparse.Namespace(
+        api_base="http://x", timeout=1.0, wait=1.0,
+        skip_metadata_index=True, db=None,
+    )
     # First sync populates state and config.
     assert seed.cmd_sync(args) == seed.EXIT_OK
     assert calls["restart"] == 1
@@ -474,7 +498,13 @@ def test_sync_rebuilds_index_for_changed_kb(monkeypatch, kb_fs, capsys):
     monkeypatch.setattr(seed, "wait_ready", lambda api, t: True)
     monkeypatch.setattr(seed, "TutorAPI", _Fake)
 
-    args = seed.argparse.Namespace(api_base="http://x", timeout=1.0, wait=1.0)
+    # skip_metadata_index: these tests cover the DeepTutor half only — the
+    # Bridge-1 topic_metadata hop is exercised in
+    # tests/test_bridge1_topic_metadata.py and must not touch a real DB.
+    args = seed.argparse.Namespace(
+        api_base="http://x", timeout=1.0, wait=1.0,
+        skip_metadata_index=True, db=None,
+    )
     assert seed.cmd_sync(args) == seed.EXIT_OK
     out = capsys.readouterr().out
     assert "index missing docs" not in out
@@ -562,7 +592,13 @@ def test_check_structural_kb_raw_zero_not_fail(monkeypatch, kb_fs, capsys):
             return {}
 
     monkeypatch.setattr(seed, "TutorAPI", _Fake)
-    args = seed.argparse.Namespace(api_base="http://x", timeout=1.0, wait=1.0)
+    # skip_metadata_index: these tests cover the DeepTutor half only — the
+    # Bridge-1 topic_metadata hop is exercised in
+    # tests/test_bridge1_topic_metadata.py and must not touch a real DB.
+    args = seed.argparse.Namespace(
+        api_base="http://x", timeout=1.0, wait=1.0,
+        skip_metadata_index=True, db=None,
+    )
     assert seed.cmd_check(args) == seed.EXIT_OK
     out = capsys.readouterr().out
     assert "structural KB" in out
@@ -607,7 +643,13 @@ def test_sync_structural_kb_skips_reindex_and_verify(monkeypatch, kb_fs, capsys)
     monkeypatch.setattr(seed, "wait_ready", lambda api, t: True)
     monkeypatch.setattr(seed, "TutorAPI", _Fake)
 
-    args = seed.argparse.Namespace(api_base="http://x", timeout=1.0, wait=1.0)
+    # skip_metadata_index: these tests cover the DeepTutor half only — the
+    # Bridge-1 topic_metadata hop is exercised in
+    # tests/test_bridge1_topic_metadata.py and must not touch a real DB.
+    args = seed.argparse.Namespace(
+        api_base="http://x", timeout=1.0, wait=1.0,
+        skip_metadata_index=True, db=None,
+    )
     assert seed.cmd_sync(args) == seed.EXIT_OK
     out = capsys.readouterr().out
     assert "structural KB" in out

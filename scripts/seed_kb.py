@@ -18,6 +18,15 @@ Design invariants (from spec + probe findings):
     but runtime state fields (index_versions / last_indexed_*) owned by
     DeepTutor are preserved, never clobbered.
   - Idempotent: unchanged doc hashes skip reindex; unchanged config skips restart.
+
+Bridge-1 (2026): the KB pipeline and the Hermes topic_metadata index used to be
+two unconnected pipes — this script mirrored files + reindexed DeepTutor while
+nothing ever populated ``topic_metadata``, so the curriculum index stayed empty
+(and the Navigator had nothing to resolve prerequisites from). Both modes now
+run ``index_topic_metadata()``: ``--check`` as a read-only dry run, ``--sync``
+as the real write. The schema / normalisation rules live in
+``pipeline/topic_metadata_schema.py`` (single source of truth) and
+``pipeline/phase1_kb_export.py``.
 """
 
 from __future__ import annotations
@@ -179,6 +188,27 @@ def validate_frontmatter(md_path: Path, kb_name: str) -> list[str]:
             bad = [m for m in modes if m not in ALLOWED_MODES]
             if bad:
                 errors.append(f"modes_allowed contains invalid values: {bad}")
+
+    # dreamer_phase must be a valid phase set. Cross-phase documents
+    # (wk03 = [Design, Deliver]) are legitimate: normalise to a list before
+    # the set check, never hash the raw value.
+    phases = _schema_module().split_list_value(fm.get("dreamer_phase"))
+    invalid_phases = [
+        p for p in phases if p not in _schema_module().VALID_DREAMER_PHASES
+    ]
+    if invalid_phases:
+        errors.append(
+            f"invalid dreamer_phase values: {invalid_phases} "
+            f"(must be subset of {', '.join(sorted(_schema_module().VALID_DREAMER_PHASES))})"
+        )
+
+    unmapped = _schema_module().unknown_frontmatter_keys(fm)
+    if unmapped:
+        print(
+            f"  [WARNING] {md_path.name}: frontmatter key(s) {unmapped} are "
+            f"not consumed by any topic_metadata column — dropped "
+            f"(extend the canonical schema if they must be indexed)"
+        )
 
     # Body-only checks: legacy rubric words are warnings, IB/ATL are FAIL.
     for word in IB_ATL_WORDS:
@@ -408,6 +438,64 @@ def restart_container() -> None:
     )
 
 
+# --- Bridge-1: topic_metadata index ------------------------------------------
+
+def _schema_module():
+    """Load ``pipeline.topic_metadata_schema`` — the single source of truth
+    for the canonical columns / normalisation rules (no local copies)."""
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+    from pipeline import topic_metadata_schema as mod
+
+    return mod
+
+
+def _export_module():
+    """Load ``pipeline.phase1_kb_export`` (B21 → Hermes index hop)."""
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+    from pipeline import phase1_kb_export as mod
+
+    return mod
+
+
+def index_topic_metadata(dry_run: bool, db_path: str | None = None) -> int:
+    """Bridge-1: feed the KB SoT docs into the Hermes ``topic_metadata`` index.
+
+    Until now the two pipelines never met: ``seed_kb.py`` pushed documents into
+    DeepTutor, while ``topic_metadata`` was only ever filled by the temporary
+    ``scripts/seed_topic_metadata.py`` sample script — so the curriculum index
+    was empty and the Navigator could not resolve prerequisites. Called by
+    ``--check`` (dry run, read-only) and ``--sync`` (real write).
+
+    Returns EXIT_OK / EXIT_VERIFY_FAIL so the caller can fold it into its own
+    exit code (a silent metadata failure would be a false green).
+    """
+    export = _export_module()
+    try:
+        report = export.export_kb(
+            kb_root=str(KB_SOT_DIR), db_path=db_path, dry_run=dry_run
+        )
+    except ValueError as exc:
+        print(f"[FAIL] topic_metadata index: {exc}")
+        return EXIT_VERIFY_FAIL
+
+    mode = "dry-run" if dry_run else "write"
+    print(
+        f"[metadata-index] {mode}: scanned={report['scanned']} "
+        f"indexed={report['indexed']} "
+        f"skipped_no_frontmatter={report['skipped_no_frontmatter']} "
+        f"db={report['db_path']}"
+    )
+    for warning in report["warnings"]:
+        print(f"  [WARN] {warning}")
+    for kept in report.get("preserved", []):
+        print(f"  [keep] {kept}")
+    for error in report["errors"]:
+        print(f"  [FAIL] {error}")
+    return EXIT_VERIFY_FAIL if report["errors"] else EXIT_OK
+
+
 # --- Mode implementations ----------------------------------------------------
 
 def cmd_check(args: argparse.Namespace) -> int:
@@ -430,6 +518,13 @@ def cmd_check(args: argparse.Namespace) -> int:
     if fatal:
         print("Frontmatter validation failed — fix before sync.")
         return EXIT_MANIFEST_FAIL
+
+    # Bridge-1: validate the SoT → topic_metadata path as well. Read-only
+    # here (dry run), so --check stays safe to run anywhere.
+    if not args.skip_metadata_index:
+        rc = index_topic_metadata(dry_run=True, db_path=args.db)
+        if rc != EXIT_OK:
+            return rc
 
     try:
         api = TutorAPI(args.api_base, args.timeout)
@@ -503,6 +598,13 @@ def cmd_sync(args: argparse.Namespace, force_rebuild: bool = False) -> int:
         if force_rebuild or changed or files != old_files:
             changed_kbs.add(name)
             print(f"  [sync] {name}: changed files: {', '.join(changed) or '(all)'}")
+
+    # 1b) Bridge-1: write the same SoT docs into the Hermes topic_metadata
+    #     index. Runs after the mirror so the DB always reflects mirrored
+    #     content; failures are folded into the final exit code below.
+    metadata_rc = EXIT_OK
+    if not args.skip_metadata_index:
+        metadata_rc = index_topic_metadata(dry_run=False, db_path=args.db)
 
     # 2) Config generation (preserve DeepTutor runtime state).
     runtime_config = read_json(KB_RUNTIME_DIR / "kb_config.json")
@@ -606,8 +708,13 @@ def cmd_sync(args: argparse.Namespace, force_rebuild: bool = False) -> int:
     print(f"KBs: {len(kbs)}, reindexed: {sorted(changed_kbs) or '(none)'}, "
           f"restarted: {config_changed or force_rebuild}, "
           f"reindex failures: {reindex_failures or '(none)'}, "
-          f"verify failures: {failures or '(none)'}")
-    return EXIT_VERIFY_FAIL if (failures or reindex_failures) else EXIT_OK
+          f"verify failures: {failures or '(none)'}, "
+          f"topic_metadata: {'FAIL' if metadata_rc else 'ok'}")
+    return (
+        EXIT_VERIFY_FAIL
+        if (failures or reindex_failures or metadata_rc)
+        else EXIT_OK
+    )
 
 
 def wait_reindex_done(api: TutorAPI, runtime_kb_dir: Path, kb_name: str,
@@ -687,6 +794,12 @@ def main(argv: list[str] | None = None) -> int:
                         help="per-request API timeout seconds")
     parser.add_argument("--wait", type=float, default=180.0,
                         help="max seconds to wait for readiness/reindex")
+    parser.add_argument("--db", default=None,
+                        help="Hermes SQLite path for the topic_metadata index "
+                             "(default: $DREAMER_DB_PATH or repo dreamer.db)")
+    parser.add_argument("--skip-metadata-index", action="store_true",
+                        help="skip the Bridge-1 topic_metadata export "
+                             "(escape hatch; default off)")
     args = parser.parse_args(argv)
 
     try:

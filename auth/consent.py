@@ -35,9 +35,10 @@ DOCS_PATH = os.environ.get(
     str(_REPO_ROOT / "config" / "consent_docs.yaml"),
 )
 LEGAL_DIR = _PKG_DIR / "legal"
+DEFAULT_AUDIT_LOG_PATH = str(_REPO_ROOT / "audit_log.jsonl")
 AUDIT_LOG_PATH = os.environ.get(
     "DREAMER_AUDIT_LOG_PATH",
-    str(_REPO_ROOT / "audit_log.jsonl"),
+    DEFAULT_AUDIT_LOG_PATH,
 )
 
 # Whitelist of doc types registered in config/consent_docs.yaml.

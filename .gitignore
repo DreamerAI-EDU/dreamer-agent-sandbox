@@ -241,3 +241,6 @@ serve_step7_8001.py
 
 # runtime audit trail (append-only, per-deployment; never commit)
 audit_log.jsonl
+
+# W3-H hygiene: throwaway probe left behind by local debugging
+temp_probe.py

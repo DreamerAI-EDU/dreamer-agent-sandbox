@@ -39,6 +39,10 @@ ERR_NOT_LINEAR = "not_linear"            # gap / two open weeks -> 409
 ERR_COURSE_COMPLETED = "course_completed"  # week 8 already done -> 409
 
 
+class _AdvanceRace(Exception):
+    """A concurrent writer moved the state machine between our read and write."""
+
+
 def _now_iso() -> str:
     return (
         datetime.datetime.now(datetime.timezone.utc)
@@ -237,6 +241,69 @@ def mount_curriculum(
     }, None
 
 
+def _resolve_active_week(
+    rows: list[sqlite3.Row],
+) -> tuple[Optional[int], Optional[str]]:
+    """Pure validator: which week is open, and is the row set linear?
+
+    Returns ``(current_week, None)`` when the state machine is healthy, or
+    ``(None, error_code)`` when it is not. Kept side-effect free so the
+    transaction below can bail out on a single ``rollback()``.
+    """
+    if not rows:
+        return None, ERR_NOT_MOUNTED
+
+    statuses = {int(row["week_no"]): str(row["status"]) for row in rows}
+    if set(statuses) != set(ALL_WEEKS):
+        return None, ERR_INCOMPLETE
+
+    open_weeks = [w for w, s in statuses.items() if s == STATUS_ACTIVE]
+    if not open_weeks:
+        return None, ERR_COURSE_COMPLETED
+    if len(open_weeks) > 1:
+        return None, ERR_NOT_LINEAR
+
+    current = open_weeks[0]
+    for w in range(1, current):
+        if statuses[w] != STATUS_COMPLETED:
+            return None, ERR_NOT_LINEAR
+    for w in range(current + 1, CURRICULUM_WEEKS + 1):
+        if statuses[w] != STATUS_LOCKED:
+            return None, ERR_NOT_LINEAR
+    return current, None
+
+
+def _apply_advance(
+    conn: sqlite3.Connection, class_id: str, *, expected_week: int, now: str
+) -> int:
+    """Close ``expected_week`` and open ``expected_week + 1`` inside the caller's
+    transaction.
+
+    Both UPDATEs carry the status we read as a WHERE guard, so a concurrent
+    advance cannot be applied twice: the loser matches 0 rows, raises
+    ``_AdvanceRace``, and the caller rolls the whole transaction back.
+    Returns the newly opened week number.
+    """
+    cur = conn.execute(
+        "UPDATE class_curriculum SET status = ? "
+        "WHERE class_id = ? AND week_no = ? AND status = ?",
+        (STATUS_COMPLETED, class_id, expected_week, STATUS_ACTIVE),
+    )
+    if cur.rowcount != 1:
+        raise _AdvanceRace(f"week {expected_week} was not active")
+
+    next_week = expected_week + 1
+    if next_week <= CURRICULUM_WEEKS:
+        cur = conn.execute(
+            "UPDATE class_curriculum SET status = ?, activated_at = ? "
+            "WHERE class_id = ? AND week_no = ? AND status = ?",
+            (STATUS_ACTIVE, now, class_id, next_week, STATUS_LOCKED),
+        )
+        if cur.rowcount != 1:
+            raise _AdvanceRace(f"week {next_week} was not locked")
+    return next_week
+
+
 def advance_week(
     class_id: str,
 ) -> tuple[Optional[dict[str, Any]], Optional[str]]:
@@ -245,50 +312,37 @@ def advance_week(
     Refuses anything that would break linear progression (ruling #2):
     an unmounted class, a gap (week N locked while a later week is open), or a
     second advance after week 8 has been completed.
+
+    The read check and the two writes run in ONE transaction (``BEGIN
+    IMMEDIATE``), and both UPDATEs are guarded by the status we just read — so
+    a concurrent advance either loses the lock or fails the rowcount guard and
+    changes nothing (hygiene: no half-applied advance).
     """
     _prepare()
     conn = auth_db.connect()
     try:
+        conn.execute("BEGIN IMMEDIATE")
         rows = conn.execute(
             "SELECT week_no, status FROM class_curriculum "
             "WHERE class_id = ? ORDER BY week_no ASC",
             (class_id,),
         ).fetchall()
-        if not rows:
-            return None, ERR_NOT_MOUNTED
 
-        statuses = {int(row["week_no"]): str(row["status"]) for row in rows}
-        if set(statuses) != set(ALL_WEEKS):
-            return None, ERR_INCOMPLETE
+        current, error = _resolve_active_week(rows)
+        if error is not None:
+            conn.rollback()
+            return None, error
 
-        open_weeks = [w for w, s in statuses.items() if s == STATUS_ACTIVE]
-        if not open_weeks:
-            return None, ERR_COURSE_COMPLETED
-        if len(open_weeks) > 1:
-            return None, ERR_NOT_LINEAR
-
-        current = open_weeks[0]
-        for w in range(1, current):
-            if statuses[w] != STATUS_COMPLETED:
-                return None, ERR_NOT_LINEAR
-        for w in range(current + 1, CURRICULUM_WEEKS + 1):
-            if statuses[w] != STATUS_LOCKED:
-                return None, ERR_NOT_LINEAR
-
-        now = _now_iso()
-        conn.execute(
-            "UPDATE class_curriculum SET status = ? "
-            "WHERE class_id = ? AND week_no = ?",
-            (STATUS_COMPLETED, class_id, current),
+        next_week = _apply_advance(
+            conn, class_id, expected_week=current, now=_now_iso()
         )
-        next_week = current + 1
-        if next_week <= CURRICULUM_WEEKS:
-            conn.execute(
-                "UPDATE class_curriculum SET status = ?, activated_at = ? "
-                "WHERE class_id = ? AND week_no = ?",
-                (STATUS_ACTIVE, now, class_id, next_week),
-            )
         conn.commit()
+    except _AdvanceRace:
+        conn.rollback()
+        return None, ERR_NOT_LINEAR
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 

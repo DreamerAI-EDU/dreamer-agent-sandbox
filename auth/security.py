@@ -205,3 +205,10 @@ class SlidingWindowLimiter:
 # 2026-09-07: per-email stricter, per-IP looser to spare shared NATs).
 forgot_email_limiter = SlidingWindowLimiter(max_calls=3, window_seconds=3600)
 forgot_ip_limiter = SlidingWindowLimiter(max_calls=30, window_seconds=3600)
+
+
+# Resend-verification endpoint (issue #59): aligned with the login-failure
+# style — in-memory, 20/hour, per-email and per-IP. Counted before the account
+# lookup so registered and unregistered emails behave identically.
+resend_email_limiter = SlidingWindowLimiter(max_calls=20, window_seconds=3600)
+resend_ip_limiter = SlidingWindowLimiter(max_calls=20, window_seconds=3600)

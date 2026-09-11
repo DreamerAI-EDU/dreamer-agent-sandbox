@@ -74,7 +74,8 @@ CREATE TABLE IF NOT EXISTS classes (
     class_type    TEXT NOT NULL DEFAULT 'monthly',
     grade_band    TEXT,
     is_one_on_one INTEGER NOT NULL DEFAULT 0,
-    created_at    TEXT NOT NULL
+    created_at    TEXT NOT NULL,
+    curriculum_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS class_students (
@@ -114,6 +115,28 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id, expires_at);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_teacher_invites_expires ON teacher_invites(expires_at);
 CREATE INDEX IF NOT EXISTS idx_consent_log_user ON consent_log(user_id, created_at DESC);
+
+-- Bridge-2: class ↔ curriculum mounting (canonical DDL lives in
+-- migrations/phase8c_class_curriculum.sql). Week 1..8 linear progression is
+-- enforced by the status machine + the partial unique index below, never by
+-- the frontend (boss ruling #2). classes.curriculum_id is declared above as
+-- the last column so migrated DBs (ALTER appends) and fresh DBs agree.
+CREATE TABLE IF NOT EXISTS class_curriculum (
+    class_id     TEXT NOT NULL REFERENCES classes(id),
+    topic_id     TEXT NOT NULL REFERENCES topic_metadata(topic_id),
+    week_no      INTEGER NOT NULL CHECK (week_no BETWEEN 1 AND 8),
+    status       TEXT NOT NULL CHECK (status IN ('locked', 'active', 'completed')),
+    activated_at TEXT,
+    created_at   TEXT NOT NULL,
+    PRIMARY KEY (class_id, topic_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_class_curriculum_week
+    ON class_curriculum(class_id, week_no);
+
+-- At most one active week per class: two open weeks must be impossible.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_class_curriculum_one_active
+    ON class_curriculum(class_id) WHERE status = 'active';
 
 -- W4 PR-D: forgot-password reset tokens — DB stores ONLY the SHA-256 hash of
 -- the raw token (three-iron-rule); plaintext appears only in the email link.
@@ -179,6 +202,32 @@ def apply_class_meta_migration() -> None:
             for row in conn.execute("PRAGMA table_info(classes)")
         }
         for col, decl in _CLASS_META_COLUMNS.items():
+            if col not in existing:
+                conn.execute(f"ALTER TABLE classes ADD COLUMN {col} {decl}")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# Bridge-2 class↔curriculum column (boss work order 2026-09-11). Additive,
+# idempotent, and — like the W3-C block above — deliberately NOT run from
+# ensure_schema (startup auto-migration is still backlog); a deploy applies it
+# via this helper. The class_curriculum table itself is carried by _DDL and is
+# therefore created by ensure_schema() on any DB, old or fresh.
+_CC_CLASS_COLUMNS = {
+    "curriculum_id": "TEXT",
+}
+
+
+def apply_class_curriculum_migration() -> None:
+    """Idempotently add classes.curriculum_id (Bridge-2). Safe to re-run."""
+    conn = connect()
+    try:
+        existing = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(classes)")
+        }
+        for col, decl in _CC_CLASS_COLUMNS.items():
             if col not in existing:
                 conn.execute(f"ALTER TABLE classes ADD COLUMN {col} {decl}")
         conn.commit()

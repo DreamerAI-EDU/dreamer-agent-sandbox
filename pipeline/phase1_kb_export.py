@@ -5,7 +5,27 @@ Exports DeepTutor knowledge base documents to Hermes-compatible format,
 extracting YAML frontmatter and populating the SQLite metadata index.
 
 Usage:
-    python phase1_kb_export.py --kb-root ./knowledge_bases --db ./metadata.db
+    python -m pipeline.phase1_kb_export --kb-root ./knowledge_bases
+    python -m pipeline.phase1_kb_export --kb-root ./knowledge_bases --db dreamer.db
+
+Bridge-1 (2026-09) changes
+-------------------------
+1. ``dreamer_phase`` is normalised to a LIST (a cross-phase doc such as wk03
+   which carries ``[Design, Deliver]`` keeps BOTH phases) and is validated
+   with a set check instead of ``phase not in {..}`` — the old code raised
+   ``TypeError: unhashable type: 'list'`` on any multi-phase document.
+2. The output schema is the canonical 12-field shape owned by
+   ``pipeline/topic_metadata_schema.py`` (same DDL the Curriculum Navigator
+   uses) — no half-aligned private copy. ``domain_agent_owner`` is gone
+   (phantom field, B21 spec §5).
+3. ``--db`` defaults to the real Hermes DB (``$DREAMER_DB_PATH`` or the
+   repo-root ``dreamer.db``), not the orphan ``./metadata.db``.
+4. ``week`` (frontmatter) is carried into the new ``week`` column and is
+   the progress unit of decision 4. A frontmatter key a document does NOT
+   declare no longer erases the DB value (see ``upsert_topic_metadata``):
+   the seeded maths / computing prerequisite chains share topic_ids with KB
+   documents (``maths-fractions-01``) and would otherwise be nulled out by
+   the first sync.
 
 Architecture:
     DeepTutor KB (Markdown + YAML frontmatter)
@@ -27,10 +47,22 @@ from pathlib import Path
 from typing import Optional
 
 
+def _load_schema_module():
+    """Import the canonical schema module (package or script context)."""
+    try:
+        from pipeline import topic_metadata_schema as mod  # type: ignore
+    except ImportError:  # executed as a bare script
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import topic_metadata_schema as mod  # type: ignore
+    return mod
+
+
+_SCHEMA = _load_schema_module()
+
 # =============================================================================
 # Dreamer 4D phase validation (teaching mainline — must be one of these four)
 # =============================================================================
-VALID_DREAMER_PHASES = {"Dream", "Discover", "Design", "Deliver"}
+VALID_DREAMER_PHASES = set(_SCHEMA.VALID_DREAMER_PHASES)
 
 # IB ATL skills (cross-reference only — internal; school alignment conversation)
 # These are NOT the pedagogical spine; dreamer_phase is.
@@ -43,7 +75,17 @@ KNOWN_IB_ATL_SKILLS = {
     "self-management-affective", "self-management-reflection",
 }
 
-VALID_MODES = {"contextual", "direct", "hybrid"}
+VALID_MODES = set(_SCHEMA.VALID_MODES)
+
+# Phantom field(s) that must never be written back (B21 spec §5).
+FORBIDDEN_FIELDS = set(_SCHEMA.FORBIDDEN_COLUMNS)
+
+# Re-exported helpers so callers (seed_kb.py) can reuse them.
+split_list_value = _SCHEMA.split_list_value
+normalize_phases = _SCHEMA.normalize_phases
+normalize_modes = _SCHEMA.normalize_modes
+resolve_db_path = _SCHEMA.resolve_db_path
+ensure_schema = _SCHEMA.ensure_schema
 
 
 # =============================================================================
@@ -139,42 +181,51 @@ def validate_frontmatter(meta: dict, filepath: str) -> list[str]:
         if field not in meta:
             warnings.append(f"[{filepath}] Missing required field: '{field}'")
 
-    # dreamer_phase validation (PRIMARY AXIS)
-    phase = meta.get("dreamer_phase", "")
-    if phase and phase not in VALID_DREAMER_PHASES:
+    # Phantom field guard (B21 spec §5)
+    phantom = sorted(set(meta) & FORBIDDEN_FIELDS)
+    if phantom:
         warnings.append(
-            f"[{filepath}] Invalid dreamer_phase '{phase}'. "
+            f"[{filepath}] Phantom field(s) {phantom} present — not part of the "
+            f"canonical schema; ignored (B21 spec §5)"
+        )
+
+    # dreamer_phase validation (PRIMARY AXIS)
+    # A document may legitimately span phases (wk03 = [Design, Deliver]):
+    # normalise to a list first, then set-check — never hash the raw value.
+    phases = split_list_value(meta.get("dreamer_phase"))
+    invalid_phases = [p for p in phases if p not in VALID_DREAMER_PHASES]
+    if invalid_phases:
+        warnings.append(
+            f"[{filepath}] Invalid dreamer_phase {invalid_phases}. "
             f"Must be one of: {', '.join(sorted(VALID_DREAMER_PHASES))}"
         )
 
     # ib_atl_skills validation (cross-reference only)
-    atl = meta.get("ib_atl_skills", [])
-    if isinstance(atl, list):
-        unknown = set(atl) - KNOWN_IB_ATL_SKILLS
-        if unknown:
-            warnings.append(
-                f"[{filepath}] Unknown ib_atl_skills: {unknown}. "
-                f"Known values: {', '.join(sorted(KNOWN_IB_ATL_SKILLS))}"
-            )
+    unknown = set(split_list_value(meta.get("ib_atl_skills"))) - KNOWN_IB_ATL_SKILLS
+    if unknown:
+        warnings.append(
+            f"[{filepath}] Unknown ib_atl_skills: {sorted(unknown)}. "
+            f"Known values: {', '.join(sorted(KNOWN_IB_ATL_SKILLS))}"
+        )
 
     # modes_allowed validation
-    modes_raw = meta.get("modes_allowed", "")
-    if modes_raw:
-        if isinstance(modes_raw, str) and modes_raw.startswith("["):
-            try:
-                modes = json.loads(modes_raw)
-            except json.JSONDecodeError:
-                modes = [m.strip() for m in modes_raw.strip("[]").split(",")]
-        elif isinstance(modes_raw, list):
-            modes = modes_raw
-        else:
-            modes = [m.strip() for m in modes_raw.split(",")]
-        invalid = set(modes) - VALID_MODES
-        if invalid:
-            warnings.append(
-                f"[{filepath}] Invalid modes: {invalid}. "
-                f"Must be subset of: {', '.join(sorted(VALID_MODES))}"
-            )
+    invalid_modes = set(normalize_modes(meta.get("modes_allowed"))) - VALID_MODES
+    if invalid_modes:
+        warnings.append(
+            f"[{filepath}] Invalid modes: {sorted(invalid_modes)}. "
+            f"Must be subset of: {', '.join(sorted(VALID_MODES))}"
+        )
+
+    # Unmapped frontmatter keys: no column consumes them → they would be
+    # dropped silently. Report (never guess): extend the canonical schema
+    # in pipeline/topic_metadata_schema.py if the key matters.
+    unmapped = _SCHEMA.unknown_frontmatter_keys(meta)
+    if unmapped:
+        warnings.append(
+            f"[{filepath}] Frontmatter key(s) {unmapped} are not consumed by "
+            f"any topic_metadata column — dropped (extend the canonical "
+            f"schema if they must be indexed)"
+        )
 
     return warnings
 
@@ -196,176 +247,317 @@ def compute_hash(content: str) -> str:
 # SQLite Index Operations
 # =============================================================================
 def init_sqlite_db(db_path: str):
-    """Initialize the SQLite metadata database with schema."""
-    conn = sqlite3.connect(db_path)
+    """Initialize the SQLite metadata database with the canonical schema.
+
+    Bridge-1: delegates to ``topic_metadata_schema.ensure_schema`` so the
+    export and the Curriculum Navigator can never drift apart again.
+    """
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path))
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
 
-    schema_path = Path(__file__).parent / "phase1_sqlite_schema.sql"
-    if schema_path.exists():
-        schema_sql = schema_path.read_text(encoding="utf-8")
-        conn.executescript(schema_sql)
-    else:
-        print(f"Warning: schema file not found at {schema_path}", file=sys.stderr)
+    ensure_schema(conn)
 
     conn.commit()
     return conn
 
 
+def _to_json_list(value) -> str:
+    """Serialise a list-valued frontmatter field to a JSON array string."""
+    return json.dumps(split_list_value(value), ensure_ascii=False)
+
+
+def _existing_row(conn: sqlite3.Connection, topic_id: str) -> dict:
+    """Return the current row for ``topic_id`` as a dict (empty if absent)."""
+    cur = conn.execute(
+        "SELECT * FROM topic_metadata WHERE topic_id = ?", (topic_id,)
+    )
+    row = cur.fetchone()
+    if row is None:
+        return {}
+    return {desc[0]: value for desc, value in zip(cur.description, row)}
+
+
 def upsert_topic_metadata(conn: sqlite3.Connection, meta: dict, body_hash: str,
-                          doc_path: str):
-    """Insert or update a topic metadata row."""
-    # Serialize list fields to JSON strings
-    def to_json(val):
-        if isinstance(val, list):
-            return json.dumps(val, ensure_ascii=False)
-        if isinstance(val, str) and val.startswith("["):
-            return val
-        return json.dumps([], ensure_ascii=False)
+                          doc_path: str) -> list:
+    """Insert or update a topic metadata row (canonical 12-field shape).
 
+    Bridge-1 preserve rule: a frontmatter key the document does NOT declare
+    never erases the value already in the DB. ``topic_metadata`` has more
+    than one writer — the temporary ``scripts/seed_topic_metadata.py``
+    sample rows carry the maths / computing prerequisite chains — and a
+    blind ``excluded.*`` overwrite dropped those edges as soon as a KB
+    document shared the topic_id (``maths-fractions-01``). Declared keys
+    always win over the stored value.
+
+    Returns the list of column names whose DB value was preserved.
+    """
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    topic_id = meta.get("topic_id", "")
 
-    conn.execute("""
-        INSERT INTO topic_metadata (
-            topic_id, subject, topic, ai_literacy_context,
-            modes_allowed, grade_level, prerequisites, linked_projects,
-            dreamer_phase, ib_atl_skills, ethical_ai_tags,
-            kb_name, document_path, document_hash, domain_agent_owner,
-            exported_at, last_modified
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(topic_id) DO UPDATE SET
-            subject = excluded.subject,
-            topic = excluded.topic,
-            ai_literacy_context = excluded.ai_literacy_context,
-            modes_allowed = excluded.modes_allowed,
-            grade_level = excluded.grade_level,
-            prerequisites = excluded.prerequisites,
-            linked_projects = excluded.linked_projects,
-            dreamer_phase = excluded.dreamer_phase,
-            ib_atl_skills = excluded.ib_atl_skills,
-            ethical_ai_tags = excluded.ethical_ai_tags,
-            kb_name = excluded.kb_name,
-            document_path = excluded.document_path,
-            document_hash = excluded.document_hash,
-            domain_agent_owner = excluded.domain_agent_owner,
-            last_modified = excluded.last_modified
-    """, (
-        meta.get("topic_id", ""),
-        meta.get("subject", ""),
-        meta.get("topic", ""),
-        meta.get("ai_literacy_context", ""),
-        to_json(meta.get("modes_allowed", [])),
-        meta.get("grade_level", ""),
-        to_json(meta.get("prerequisites", [])),
-        to_json(meta.get("linked_projects", [])),
-        meta.get("dreamer_phase", ""),
-        to_json(meta.get("ib_atl_skills", [])),
-        to_json(meta.get("ethical_ai_tags", [])),
-        meta.get("kb_name", ""),
-        doc_path,
-        body_hash,
-        meta.get("domain_agent_owner", ""),
-        now,
-        now,
-    ))
+    values = {
+        "topic_id": topic_id,
+        "subject": meta.get("subject", ""),
+        "topic": meta.get("topic", ""),
+        "ai_literacy_context": meta.get("ai_literacy_context", ""),
+        "modes_allowed": _to_json_list(meta.get("modes_allowed", [])),
+        "grade_level": meta.get("grade_level", ""),
+        "week": _SCHEMA.coerce_week(meta.get("week")),
+        "prerequisites": _to_json_list(meta.get("prerequisites", [])),
+        "linked_projects": _to_json_list(meta.get("linked_projects", [])),
+        "dreamer_phase": json.dumps(
+            normalize_phases(meta.get("dreamer_phase")), ensure_ascii=False
+        ),
+        "ib_atl_skills": _to_json_list(meta.get("ib_atl_skills", [])),
+        "ethical_ai_tags": _to_json_list(meta.get("ethical_ai_tags", [])),
+        "kb_name": meta.get("kb_name", ""),
+        "document_path": doc_path,
+        "document_hash": body_hash,
+        "exported_at": now,
+        "last_modified": now,
+    }
+
+    existing = _existing_row(conn, topic_id)
+    preserved: list = []
+    for col in _SCHEMA.PRESERVE_IF_ABSENT:
+        if _SCHEMA.is_declared(meta, col):
+            continue
+        old_value = existing.get(col)
+        if old_value in (None, "", "[]"):
+            continue
+        values[col] = old_value
+        preserved.append(col)
+
+    cols = list(values)
+    placeholders = ", ".join("?" for _ in cols)
+    updates = ", ".join(
+        f"{col} = excluded.{col}" for col in cols if col != "topic_id"
+    )
+    conn.execute(
+        f"INSERT INTO topic_metadata ({', '.join(cols)}) "
+        f"VALUES ({placeholders}) "
+        f"ON CONFLICT(topic_id) DO UPDATE SET {updates}",
+        tuple(values[col] for col in cols),
+    )
+    return preserved
 
 
 # =============================================================================
 # Main Export Pipeline
 # =============================================================================
-def export_kb(kb_root: str, db_path: str, output_dir: Optional[str] = None,
-              dry_run: bool = False):
-    """Main export pipeline: walk KB directories, parse, validate, index."""
+def export_kb(kb_root: str, db_path: Optional[str] = None,
+              output_dir: Optional[str] = None, dry_run: bool = False,
+              kb_names: Optional[list] = None, prune_stale: bool = False):
+    """Main export pipeline: walk KB directories, parse, validate, index.
 
+    Returns a report dict:
+        scanned / indexed / skipped_no_frontmatter / stored_paths
+        warnings / errors / per_kb / pruned / db_path
+
+    Raises ValueError if ``kb_root`` does not exist (the CLI maps it to exit 1).
+    """
     kb_root = Path(kb_root)
     if not kb_root.is_dir():
-        print(f"Error: KB root not found: {kb_root}", file=sys.stderr)
-        sys.exit(1)
+        raise ValueError(f"KB root not found: {kb_root}")
 
-    conn = init_sqlite_db(db_path) if not dry_run else None
+    db_path = resolve_db_path(db_path)
+    selected = set(kb_names) if kb_names else None
 
-    total = 0
-    warnings = []
-    errors = []
+    report = {
+        "scanned": 0,
+        "indexed": 0,
+        "skipped_no_frontmatter": 0,
+        "stored_paths": set(),
+        "warnings": [],
+        "errors": [],
+        "per_kb": {},
+        "preserved": [],
+        "pruned": [],
+        "db_path": str(db_path),
+    }
 
-    for md_file in sorted(kb_root.rglob("*.md")):
-        total += 1
-        rel_path = str(md_file.relative_to(kb_root))
+    conn = None if dry_run else init_sqlite_db(str(db_path))
 
-        try:
-            content = md_file.read_text(encoding="utf-8")
-        except Exception as e:
-            errors.append(f"[{rel_path}] Read error: {e}")
-            continue
+    try:
+        for md_file in sorted(kb_root.rglob("*.md")):
+            rel_path = md_file.relative_to(kb_root)
+            # document_path is stored POSIX-style: the same string must resolve
+            # on a Windows dev box and inside the Linux container.
+            doc_path = rel_path.as_posix()
+            dir_kb_name = rel_path.parts[0] if len(rel_path.parts) > 1 else ""
 
-        content = strip_aigc_watermark(content)
+            if selected is not None and dir_kb_name not in selected:
+                continue
 
-        meta = parse_frontmatter(content)
-        if not meta:
-            warnings.append(f"[{rel_path}] No YAML frontmatter found. Skipping index.")
-            continue
+            report["scanned"] += 1
 
-        # Validate
-        file_warnings = validate_frontmatter(meta, rel_path)
-        warnings.extend(file_warnings)
+            try:
+                content = md_file.read_text(encoding="utf-8")
+            except Exception as e:
+                report["errors"].append(f"[{doc_path}] Read error: {e}")
+                continue
 
-        body = extract_body(content)
-        body_hash = compute_hash(content)
+            content = strip_aigc_watermark(content)
 
-        # Optionally write to output directory
-        if output_dir:
-            out_path = Path(output_dir) / rel_path
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            out_path.write_text(body, encoding="utf-8")
+            meta = parse_frontmatter(content)
+            if not meta:
+                report["warnings"].append(
+                    f"[{doc_path}] No YAML frontmatter found. Skipping index."
+                )
+                report["skipped_no_frontmatter"] += 1
+                continue
 
-        # Index into SQLite
-        if conn and not dry_run:
-            upsert_topic_metadata(conn, meta, body_hash, rel_path)
+            report["warnings"].extend(validate_frontmatter(meta, doc_path))
 
-    # Summary
-    if conn:
-        conn.commit()
-        count = conn.execute("SELECT COUNT(*) FROM topic_metadata").fetchone()[0]
-        conn.close()
-        print(f"\nExport complete.")
-        print(f"  Documents scanned : {total}")
-        print(f"  Indexed to SQLite  : {count}")
+            body = extract_body(content)
+            body_hash = compute_hash(content)
+
+            if output_dir and not dry_run:
+                out_path = Path(output_dir) / rel_path
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                out_path.write_text(body, encoding="utf-8")
+
+            if dry_run:
+                continue
+
+            # PK must never be empty — an empty topic_id would silently merge
+            # every malformed document into one row.
+            if not meta.get("topic_id"):
+                report["errors"].append(
+                    f"[{doc_path}] Missing topic_id — NOT indexed"
+                )
+                continue
+
+            fm_kb_name = meta.get("kb_name") or ""
+            if fm_kb_name and dir_kb_name and fm_kb_name != dir_kb_name:
+                report["warnings"].append(
+                    f"[{doc_path}] kb_name '{fm_kb_name}' != directory "
+                    f"'{dir_kb_name}' — keeping frontmatter value"
+                )
+            preserved = upsert_topic_metadata(conn, meta, body_hash, doc_path)
+            if preserved:
+                report["preserved"].append(
+                    f"{meta.get('topic_id')}: kept {'/'.join(preserved)} "
+                    f"(frontmatter does not declare them)"
+                )
+
+            report["indexed"] += 1
+            report["stored_paths"].add(doc_path)
+            bucket = report["per_kb"].setdefault(
+                fm_kb_name or dir_kb_name, {"docs": 0, "phases": {}}
+            )
+            bucket["docs"] += 1
+            for phase in normalize_phases(meta.get("dreamer_phase")):
+                bucket["phases"][phase] = bucket["phases"].get(phase, 0) + 1
+
+        if conn is not None and prune_stale:
+            for topic_id, old_path in conn.execute(
+                "SELECT topic_id, document_path FROM topic_metadata"
+            ).fetchall():
+                if old_path not in report["stored_paths"]:
+                    conn.execute(
+                        "DELETE FROM topic_metadata WHERE topic_id = ?", (topic_id,)
+                    )
+                    report["pruned"].append(old_path)
+
+        if conn is not None:
+            conn.commit()
+            report["row_count"] = conn.execute(
+                "SELECT COUNT(*) FROM topic_metadata"
+            ).fetchone()[0]
+    finally:
+        if conn is not None:
+            conn.close()
+
+    return report
+
+
+def format_report(report: dict, dry_run: bool = False) -> str:
+    """Human-readable export summary (kept stable for seed_kb.py)."""
+    lines = []
+    if dry_run:
+        lines.append(f"\nDry run complete. {report['scanned']} documents scanned.")
     else:
-        print(f"\nDry run complete. {total} documents scanned.")
+        lines.append("\nExport complete.")
+        lines.append(f"  Documents scanned : {report['scanned']}")
+        lines.append(f"  Indexed to SQLite  : {report['indexed']}")
+        lines.append(f"  rows in topic_metadata : {report.get('row_count', 0)}")
+        lines.append(f"  DB : {report['db_path']}")
 
-    if warnings:
-        print(f"\n  Warnings: {len(warnings)}")
-        for w in warnings:
-            print(f"    {w}")
+    if report["per_kb"]:
+        lines.append("  Per KB:")
+        for kb, info in sorted(report["per_kb"].items()):
+            phases = ", ".join(
+                f"{p}={n}" for p, n in sorted(info["phases"].items())
+            ) or "no phase"
+            lines.append(f"    {kb}: {info['docs']} doc(s) [{phases}]")
 
-    if errors:
-        print(f"\n  Errors: {len(errors)}")
-        for e in errors:
-            print(f"    {e}")
+    if report.get("preserved"):
+        lines.append(
+            f"  DB values preserved (key absent from frontmatter): "
+            f"{len(report['preserved'])}"
+        )
+        for p in report["preserved"]:
+            lines.append(f"    - {p}")
 
-    return 0 if not errors else 1
+    if report.get("pruned"):
+        lines.append(f"  Pruned stale rows: {len(report['pruned'])}")
+        for p in report["pruned"]:
+            lines.append(f"    - {p}")
+
+    if report["warnings"]:
+        lines.append(f"\n  Warnings: {len(report['warnings'])}")
+        for w in report["warnings"]:
+            lines.append(f"    {w}")
+
+    if report["errors"]:
+        lines.append(f"\n  Errors: {len(report['errors'])}")
+        for e in report["errors"]:
+            lines.append(f"    {e}")
+
+    return "\n".join(lines)
 
 
 # =============================================================================
 # CLI
 # =============================================================================
-if __name__ == "__main__":
+def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         description="Phase 1: Export DeepTutor KBs to Hermes format + SQLite index"
     )
     parser.add_argument("--kb-root", required=True,
                         help="Root directory of DeepTutor knowledge bases")
-    parser.add_argument("--db", default="./metadata.db",
-                        help="SQLite database path (default: ./metadata.db)")
+    parser.add_argument("--db", default=None,
+                        help="SQLite database path (default: $DREAMER_DB_PATH "
+                             "or repo-root dreamer.db)")
     parser.add_argument("--output-dir", default=None,
                         help="Optional: export cleaned KBs to this directory")
+    parser.add_argument("--kb", action="append", default=None,
+                        help="Only export this KB (repeatable)")
+    parser.add_argument("--prune-stale", action="store_true",
+                        help="Delete rows whose document_path no longer exists "
+                             "in the KB root (destructive: confirm with operator)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Validate only; do not write to DB or disk")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
-    sys.exit(export_kb(
-        kb_root=args.kb_root,
-        db_path=args.db,
-        output_dir=args.output_dir,
-        dry_run=args.dry_run,
-    ))
+    try:
+        report = export_kb(
+            kb_root=args.kb_root,
+            db_path=args.db,
+            output_dir=args.output_dir,
+            dry_run=args.dry_run,
+            kb_names=args.kb,
+            prune_stale=args.prune_stale,
+        )
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    print(format_report(report, dry_run=args.dry_run))
+    return 1 if report["errors"] else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

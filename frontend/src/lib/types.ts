@@ -160,3 +160,23 @@ export interface StepUpResponse {
   ok: true;
   expires_at: string;
 }
+
+// Bridge-3a — kid "Week X / 8" badge (GET /api/student/curriculum).
+//
+// `unit_title` is the authored kid-facing string the backend resolved from
+// topic_metadata; the frontend renders it verbatim and NEVER translates a
+// topic_id itself (label_soften tradition / North Star #3).
+//
+// `state` vocabulary:
+//   'active'    → the class has one open week: show "Week {week_index} / 8"
+//   'completed' → all 8 weeks done: show "8/8 · 完成" (Bridge-2 course_completed)
+//   'none'      → no class / no mounted course / non-linear rows: HIDE the badge
+//                 (neutral, never an error — the child surface must not 500)
+export type StudentWeekState = 'active' | 'completed' | 'none';
+
+export interface StudentCurriculumResponse {
+  state: StudentWeekState;
+  week_index: number | null; // null iff state === 'none'
+  total_weeks: number;
+  unit_title: string; // backend-authored, kid-facing; '' when unknown
+}

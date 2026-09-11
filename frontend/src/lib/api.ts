@@ -26,6 +26,7 @@ import type {
   SafetyReviewResponse,
   StepUpResponse,
   StudentsResponse,
+  StudentCurriculumResponse,
   User,
 } from './types';
 import type { ParentPeriod, ParentReportEnvelope } from './parentTypes';
@@ -196,6 +197,14 @@ export const api = {
   kidPortfolio: (identifier: string) =>
     request<KidPortfolioResponse>(
       `/api/student/portfolio?student=${encodeURIComponent(identifier)}`,
+    ),
+  // Bridge-3a — kid "Week X / 8" badge (GET; same acting-parent gate as
+  // kidPortfolio). A 'none' state is a normal 200, not an error: hide the
+  // badge. Errors carry the server wording verbatim, but the chat header
+  // stays silent on them (a badge must never scare a child).
+  studentCurriculum: (identifier: string) =>
+    request<StudentCurriculumResponse>(
+      `/api/student/curriculum?student=${encodeURIComponent(identifier)}`,
     ),
   parentPortfolio: (studentId: string) =>
     request<ParentPortfolioResponse>(

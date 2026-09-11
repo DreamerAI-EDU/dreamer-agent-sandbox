@@ -54,6 +54,8 @@ from .security import (
     ip_rate_limiter,
     new_session_token,
     new_verify_token,
+    resend_email_limiter,
+    resend_ip_limiter,
     validate_password_strength,
     verify_password,
 )
@@ -480,6 +482,74 @@ async def handle_verify_email(request: web.Request) -> web.Response:
     )
 
     return web.json_response({"user": _public_user(user)})
+
+
+async def handle_resend_verification(request: web.Request) -> web.Response:
+    """POST /api/auth/resend-verification — re-send the verification email.
+
+    Issue #59: an expired / lost verification link (VERIFY_HOURS = 24h) left
+    the account with no self-service way back in. This endpoint rotates the
+    token and mails a fresh link.
+
+    Anti-enumeration: unknown emails, already-verified accounts and real
+    resends all answer 200 {"ok": true}; the no-op paths burn a dummy Argon2
+    verify so CPU timing does not reveal account state (same philosophy as
+    login / forgot-password). Rate limited per-email and per-IP (20/hour
+    each, in-memory — login-failure style), counted BEFORE the lookup so
+    registered and unregistered emails behave identically.
+
+    Rotating the token invalidates any older pending link immediately, so at
+    most one verification link is ever live. The token itself is never
+    logged (audit row carries the event only).
+    """
+    payload = await _read_json(request)
+    if payload is None:
+        # Malformed JSON body — `{}` is fine (email may come from session).
+        return web.json_response(_ERR_INVALID, status=400)
+
+    email = str(payload.get("email") or "").strip().lower()
+    if not email:
+        # No email in the body — fall back to the logged-in session's own
+        # account (the teacher console may call this while signed in).
+        session_user = _session_user(request)
+        if session_user is not None:
+            email = str(session_user["email"]).strip().lower()
+    if not email:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    ip = _client_ip(request)
+    if not resend_email_limiter.allow(email) or not resend_ip_limiter.allow(ip):
+        return web.json_response(_ERR_LOCKED, status=429)
+
+    user = db.get_user_by_email(email)
+    if user is None or bool(user["email_verified"]):
+        # Nothing to resend: unknown address, or already verified. Identical
+        # body; dummy hash keeps the timing comparable.
+        dummy_verify("resend-dummy-password-not-a-real-one")
+        return web.json_response({"ok": True})
+
+    verify_token = new_verify_token()
+    db.set_email_verify_token(
+        user["id"], verify_token, _future_iso(hours=VERIFY_HOURS)
+    )
+    consent.write_audit_log(
+        {
+            "timestamp": _now_iso(),
+            "level": "INFO",
+            "event": "verification_resent",
+            "user_id": user["id"],
+            "target_id": None,
+            "message": "verification email re-sent (token rotated)",
+        }
+    )
+
+    sent = send_verification_email(to_addr=email, token=verify_token)
+    if not sent:
+        logger.warning(
+            "verification email not re-sent for user=%s (SMTP unavailable)",
+            user["id"],
+        )
+    return web.json_response({"ok": True})
 
 
 # ---------------------------------------------------------------------------
@@ -2212,6 +2282,9 @@ def build_app() -> web.Application:
     app.router.add_post("/api/auth/logout", handle_logout)
     app.router.add_get("/api/auth/me", handle_me)
     app.router.add_post("/api/auth/verify-email", handle_verify_email)
+    app.router.add_post(
+        "/api/auth/resend-verification", handle_resend_verification
+    )
     app.router.add_post("/api/auth/forgot-password", handle_forgot_password)
     app.router.add_post("/api/auth/reset-password", handle_reset_password)
     app.router.add_get("/api/consent/docs", handle_consent_docs)

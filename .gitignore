@@ -238,3 +238,6 @@ output/
 *.db-wal
 serve_step7_8001.py
 
+
+# runtime audit trail (append-only, per-deployment; never commit)
+audit_log.jsonl

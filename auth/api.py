@@ -39,6 +39,7 @@ from aiohttp import web
 
 from . import classes as classes_mod
 from . import consent
+from . import curriculum as curriculum_mod
 from . import db
 from . import reports as reports_mod
 from . import safety as safety_mod
@@ -2056,6 +2057,151 @@ async def handle_safety_event_review(request: web.Request) -> web.Response:
 
 
 # ---------------------------------------------------------------------------
+# Bridge-2 — class ↔ curriculum mounting (catalog / mount / advance-week)
+#
+# The catalog reads topic_metadata (Bridge-1 SoT); mounting expands the 8
+# weeks server-side and advancing moves exactly one week. All three rules
+# live in auth/curriculum.py — the handlers only guard roles and map errors.
+# ---------------------------------------------------------------------------
+
+_ERR_CURRICULUM_NOT_FOUND = {"error": "課程唔存在"}
+_ERR_CURRICULUM_INCOMPLETE = {"error": "課程未齊 8 週，唔可以掛載"}
+_ERR_CURRICULUM_ALREADY_MOUNTED = {"error": "呢班已經掛載咗課程"}
+_ERR_CURRICULUM_NOT_MOUNTED = {"error": "呢班未掛載課程"}
+_ERR_CURRICULUM_NOT_LINEAR = {"error": "進度唔可以跳週"}
+_ERR_CURRICULUM_COMPLETED = {"error": "課程 8 週已完成"}
+
+_CURRICULUM_ERRORS = {
+    curriculum_mod.ERR_NOT_FOUND: (404, _ERR_CURRICULUM_NOT_FOUND),
+    curriculum_mod.ERR_INCOMPLETE: (409, _ERR_CURRICULUM_INCOMPLETE),
+    curriculum_mod.ERR_ALREADY_MOUNTED: (409, _ERR_CURRICULUM_ALREADY_MOUNTED),
+    curriculum_mod.ERR_NOT_MOUNTED: (409, _ERR_CURRICULUM_NOT_MOUNTED),
+    curriculum_mod.ERR_NOT_LINEAR: (409, _ERR_CURRICULUM_NOT_LINEAR),
+    curriculum_mod.ERR_COURSE_COMPLETED: (409, _ERR_CURRICULUM_COMPLETED),
+}
+
+
+def _curriculum_error(code: str) -> web.Response:
+    status, payload = _CURRICULUM_ERRORS.get(code, (409, _ERR_INVALID))
+    return web.json_response(payload, status=status)
+
+
+async def handle_curriculum_catalog(request: web.Request) -> web.Response:
+    """GET /api/curriculum/catalog — mountable courses, grouped by curriculum.
+
+    Teacher/admin only (parents and students must not enumerate the catalog).
+    Source is topic_metadata; only complete 1..8-week courses are listed.
+    """
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+    if user["role"] not in ("teacher", "admin"):
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    return web.json_response({"curricula": curriculum_mod.list_catalog()})
+
+
+async def handle_mount_curriculum(request: web.Request) -> web.Response:
+    """POST /api/classes/{id}/curriculum — mount a ready-made 8-week course.
+
+    Body carries exactly one value, ``curriculum_id``: the server expands the
+    eight class_curriculum rows (week 1 active, weeks 2..8 locked). There is
+    deliberately no per-topic composition — ruling #3 keeps teachers on the
+    authored courses (extra body keys are refused, not ignored).
+    """
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+    if user["role"] != "teacher":
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    class_id = request.match_info.get("id", "")
+    cls = classes_mod.get_class_by_id(class_id)
+    if cls is None or cls["teacher_id"] != user["id"]:
+        _log_security_warning(
+            "curriculum_cross_teacher",
+            user_id=user["id"],
+            target_id=class_id,
+            detail="attempted to mount a curriculum on another teacher's class",
+        )
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    payload = await _read_json(request)
+    if not payload:
+        return web.json_response(_ERR_INVALID, status=400)
+    if set(payload) - {"curriculum_id"}:
+        # ruling #3: one course per mount, no free topic picking
+        return web.json_response(_ERR_INVALID, status=400)
+
+    curriculum_id = str(payload.get("curriculum_id") or "").strip()
+    if not curriculum_id or len(curriculum_id) > 120:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    result, err = curriculum_mod.mount_curriculum(
+        class_id=class_id, curriculum_id=curriculum_id
+    )
+    if err is not None:
+        return _curriculum_error(err)
+
+    consent.write_audit_log(
+        {
+            "timestamp": _now_iso(),
+            "level": "INFO",
+            "event": "curriculum_mounted",
+            "user_id": user["id"],
+            "target_id": class_id,
+            "curriculum_id": curriculum_id,
+            "message": "curriculum mounted via /api/classes/{id}/curriculum",
+        }
+    )
+    return web.json_response(result, status=201)
+
+
+async def handle_advance_week(request: web.Request) -> web.Response:
+    """POST /api/classes/{id}/advance-week — close week N, open week N+1.
+
+    409 when there is nothing legal to do (unmounted class, a gap in the
+    week statuses, or a further advance after week 8). Every successful
+    advance leaves an audit row — the weekly step is the progress record.
+    """
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+    if user["role"] != "teacher":
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    class_id = request.match_info.get("id", "")
+    cls = classes_mod.get_class_by_id(class_id)
+    if cls is None or cls["teacher_id"] != user["id"]:
+        _log_security_warning(
+            "curriculum_cross_teacher",
+            user_id=user["id"],
+            target_id=class_id,
+            detail="attempted to advance another teacher's class week",
+        )
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    result, err = curriculum_mod.advance_week(class_id)
+    if err is not None:
+        return _curriculum_error(err)
+
+    consent.write_audit_log(
+        {
+            "timestamp": _now_iso(),
+            "level": "INFO",
+            "event": "curriculum_week_advanced",
+            "user_id": user["id"],
+            "target_id": class_id,
+            "week_no": result["completed_week"],
+            "active_week": result["active_week"],
+            "course_completed": result["course_completed"],
+            "message": "week advanced via /api/classes/{id}/advance-week",
+        }
+    )
+    return web.json_response(result)
+
+
+# ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
 
@@ -2077,6 +2223,12 @@ def build_app() -> web.Application:
     app.router.add_get("/api/classes", handle_list_classes)
     app.router.add_get("/api/classes/{id}/pending", handle_class_pending)
     app.router.add_post("/api/classes/{id}/confirm", handle_confirm_class_student)
+    # Bridge-2 — class ↔ curriculum mounting (catalog / mount / advance-week)
+    app.router.add_get("/api/curriculum/catalog", handle_curriculum_catalog)
+    app.router.add_post(
+        "/api/classes/{id}/curriculum", handle_mount_curriculum
+    )
+    app.router.add_post("/api/classes/{id}/advance-week", handle_advance_week)
     app.router.add_post("/api/students", handle_create_student)
     app.router.add_get("/api/students", handle_list_students)
     app.router.add_post("/api/students/{id}/pin-verify", handle_pin_verify)

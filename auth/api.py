@@ -335,6 +335,17 @@ async def handle_register(request: web.Request) -> web.Response:
     )
     db.mark_invite_used(invite_code, user_id)
 
+    consent.write_audit_log(
+        {
+            "timestamp": _now_iso(),
+            "level": "INFO",
+            "event": "user_registered",
+            "user_id": user_id,
+            "target_id": None,
+            "message": "teacher account created via invite",
+        }
+    )
+
     # Fire-and-forget verification email — never blocks the response.
     sent = send_verification_email(to_addr=email, token=verify_token)
     if not sent:
@@ -455,6 +466,17 @@ async def handle_verify_email(request: web.Request) -> web.Response:
     if user is None:
         # Unknown / expired / already-used token — unified wording.
         return web.json_response(_ERR_INVALID, status=400)
+
+    consent.write_audit_log(
+        {
+            "timestamp": _now_iso(),
+            "level": "INFO",
+            "event": "email_verified",
+            "user_id": user["id"],
+            "target_id": None,
+            "message": "email verification link consumed",
+        }
+    )
 
     return web.json_response({"user": _public_user(user)})
 
@@ -905,6 +927,18 @@ async def handle_create_class(request: web.Request) -> web.Response:
         is_one_on_one=is_one_on_one,
     )
     cls = classes_mod.get_class_by_id(class_id)
+
+    consent.write_audit_log(
+        {
+            "timestamp": _now_iso(),
+            "level": "INFO",
+            "event": "class_created",
+            "user_id": user["id"],
+            "target_id": class_id,
+            "message": "class created via /api/classes",
+        }
+    )
+
     return web.json_response(
         {
             "class": {
@@ -966,6 +1000,18 @@ async def handle_create_student(request: web.Request) -> web.Response:
         pin_hash=pin_hash,
     )
     student = students_mod.get_student_by_id(student_id)
+
+    consent.write_audit_log(
+        {
+            "timestamp": _now_iso(),
+            "level": "INFO",
+            "event": "student_created",
+            "user_id": user["id"],
+            "target_id": student_id,
+            "message": "student profile created via /api/students",
+        }
+    )
+
     resp = {
         "student": _public_student(student),
     }

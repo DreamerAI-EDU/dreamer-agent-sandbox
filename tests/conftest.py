@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import socket
 from collections.abc import AsyncGenerator
 from typing import Any, Callable
@@ -20,6 +21,37 @@ def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+# ── Audit-log sink isolation (hygiene: test sink) ─────
+
+@pytest.fixture(autouse=True, scope="session")
+def _isolate_audit_log_sink(tmp_path_factory: pytest.TempPathFactory):
+    """Point the repo-wide audit sink at a throwaway path for the whole run.
+
+    ``auth/consent.py`` resolves its default sink once at import time from
+    ``DREAMER_AUDIT_LOG_PATH`` (falling back to ``<repo>/audit_log.jsonl``).
+    Any test that drives an audited code path without monkeypatching the
+    constant would otherwise append to the real trail — the pollution this
+    hygiene issue exists to kill.
+
+    Per-test ``monkeypatch.setattr(consent_mod, "AUDIT_LOG_PATH", ...)`` still
+    wins while it is active and reverts back to this sink afterwards. The env
+    var is set too, so anything spawning a subprocess inherits the sink.
+    """
+    import auth.consent as consent_mod
+
+    sink = tmp_path_factory.mktemp("audit_sink") / "audit_log.jsonl"
+    previous = consent_mod.AUDIT_LOG_PATH
+    previous_env = os.environ.get("DREAMER_AUDIT_LOG_PATH")
+    consent_mod.AUDIT_LOG_PATH = str(sink)
+    os.environ["DREAMER_AUDIT_LOG_PATH"] = str(sink)
+    yield str(sink)
+    consent_mod.AUDIT_LOG_PATH = previous
+    if previous_env is None:
+        os.environ.pop("DREAMER_AUDIT_LOG_PATH", None)
+    else:
+        os.environ["DREAMER_AUDIT_LOG_PATH"] = previous_env
 
 
 # ── Mock WS handler control ───────────────────────────

@@ -486,3 +486,138 @@ def advance_week(
         "course_completed": next_week > CURRICULUM_WEEKS,
         "weeks": list_class_curriculum(class_id),
     }, None
+
+
+# ---------------------------------------------------------------------------
+# Bridge-3b — parent-facing 8-week course map (read path, writes nothing)
+# ---------------------------------------------------------------------------
+
+def _topic_titles(topic_ids: list[str]) -> dict[str, str]:
+    """Authored family-facing week titles, keyed by the bridge ``topic_id``.
+
+    Same source and same ruling as ``_kid_unit_title`` (#1): the string is
+    authored in ``topic_metadata.topic`` (fallback: the authored subject), so
+    the parent grid renders it verbatim and the internal ``topic_id`` never
+    crosses the wire. One query for the whole week set instead of eight.
+    """
+    ids = [str(t) for t in dict.fromkeys(topic_ids) if t]
+    if not ids:
+        return {}
+    placeholders = ", ".join("?" for _ in ids)
+    conn = auth_db.connect()
+    try:
+        try:
+            rows = conn.execute(
+                "SELECT topic_id, topic, subject FROM topic_metadata "
+                f"WHERE topic_id IN ({placeholders})",
+                ids,
+            ).fetchall()
+        except sqlite3.OperationalError:  # topic_metadata not built yet
+            return {}
+    finally:
+        conn.close()
+    return {
+        str(row["topic_id"]): str(row["topic"] or row["subject"] or "").strip()
+        for row in rows
+    }
+
+
+def _topic_mastery(student_id: str, topic_ids: list[str]) -> dict[str, float]:
+    """Rolling mastery per week topic, straight out of ``progress_snapshots``.
+
+    ABSENT key = the week has no data yet, and the caller reports ``null`` —
+    the map never invents a 0%. A STORED ``0.0`` is real data (attempts scored
+    zero) and stays ``0.0``. Values keep the backend's established raw 0..1
+    scale — the same "raw rolling value" contract the portfolio surface uses
+    (``reports.py``), with the ×100 left to the frontend.
+    """
+    ids = [str(t) for t in dict.fromkeys(topic_ids) if t]
+    if not ids:
+        return {}
+    placeholders = ", ".join("?" for _ in ids)
+    conn = auth_db.connect()
+    try:
+        try:
+            rows = conn.execute(
+                "SELECT topic_id, mastery_pct FROM progress_snapshots "
+                f"WHERE student_id = ? AND topic_id IN ({placeholders})",
+                [student_id, *ids],
+            ).fetchall()
+        except sqlite3.OperationalError:  # assessment DB not built yet
+            return {}
+    finally:
+        conn.close()
+    return {str(row["topic_id"]): float(row["mastery_pct"]) for row in rows}
+
+
+def _course_title(class_id: str) -> str:
+    """Authored course title for a class ("" when nothing is authored).
+
+    Comes from the mounted curriculum's own ``topic_metadata`` subject, i.e.
+    the same authored string ``get_curriculum`` calls the title — never the
+    raw ``kb_name`` internal id.
+    """
+    conn = auth_db.connect()
+    try:
+        row = conn.execute(
+            "SELECT curriculum_id FROM classes WHERE id = ?", (class_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return ""
+    curriculum = get_curriculum(str(row["curriculum_id"] or ""))
+    return str(curriculum["title"]) if curriculum is not None else ""
+
+
+def parent_curriculum_map(student_id: str) -> dict[str, Any]:
+    """The Parent Console's 8-week course map for one child (Bridge-3b).
+
+    Shape: ``{course_title, current_week, total_weeks, state, weeks[]}``, each
+    week being ``{week_no, title, status, mastery_pct}``.
+
+      * ``state="none"``       no confirmed class, no mounted course, or a
+                               non-linear row set -> neutral: ``weeks: []`` and
+                               ``current_week: null`` (never a 500).
+      * ``state="active"``     ``current_week`` = the ``week_no`` of the class's
+                               ONE active week (same resolver as the kid badge,
+                               so the two surfaces can never disagree).
+      * ``state="completed"``  all 8 weeks done: ``current_week`` = 8, week 8
+                               ``completed``.
+
+    ``title`` is authored server-side (#1), ``mastery_pct`` is the raw 0..1
+    rolling snapshot or ``null`` when that week has no data yet. The payload
+    carries no ``topic_id`` and no student id.
+    """
+    for class_id in _student_confirmed_classes(student_id):
+        weeks = list_class_curriculum(class_id)
+        if not weeks:
+            continue  # class without a mounted course -> neutral for this one
+        current_week, state = _resolve_week_state(weeks)
+        if state == STATE_NONE or current_week is None:
+            continue
+        topic_ids = [str(week["topic_id"] or "") for week in weeks]
+        titles = _topic_titles(topic_ids)
+        mastery = _topic_mastery(student_id, topic_ids)
+        return {
+            "course_title": _course_title(class_id),
+            "current_week": current_week,
+            "total_weeks": CURRICULUM_WEEKS,
+            "state": state,
+            "weeks": [
+                {
+                    "week_no": week["week_no"],
+                    "title": titles.get(str(week["topic_id"] or ""), ""),
+                    "status": week["status"],
+                    "mastery_pct": mastery.get(str(week["topic_id"] or "")),
+                }
+                for week in weeks
+            ],
+        }
+    return {
+        "course_title": "",
+        "current_week": None,
+        "total_weeks": CURRICULUM_WEEKS,
+        "state": STATE_NONE,
+        "weeks": [],
+    }

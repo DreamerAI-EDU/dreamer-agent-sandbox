@@ -621,3 +621,107 @@ def parent_curriculum_map(student_id: str) -> dict[str, Any]:
         "state": STATE_NONE,
         "weeks": [],
     }
+
+
+# ---------------------------------------------------------------------------
+# Bridge-3c — Teacher Console: the class's mounted-course read (read-only)
+# ---------------------------------------------------------------------------
+
+def _class_confirmed_students(class_id: str) -> list[str]:
+    """Student ids CONFIRMED into a class, oldest first.
+
+    Pending invites never count (same discipline as the kid/parent surfaces);
+    only accepted members feed the class-level mastery average.
+    """
+    _prepare()
+    conn = auth_db.connect()
+    try:
+        rows = conn.execute(
+            "SELECT student_id FROM class_students "
+            "WHERE class_id = ? AND status = 'confirmed' "
+            "ORDER BY created_at ASC, student_id ASC",
+            (class_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [str(row["student_id"]) for row in rows]
+
+
+def _class_week_mastery(class_id: str, topic_ids: list[str]) -> dict[str, float]:
+    """Class-average mastery per week topic, straight from ``progress_snapshots``.
+
+    Mean over the confirmed students that HAVE a snapshot for that topic. A
+    week nobody has data for keeps its key ABSENT -> the caller reports
+    ``null`` (never an invented 0%); a stored ``0.0`` is real data and is
+    averaged like any other value. Values stay on the raw 0..1 scale.
+    """
+    students = _class_confirmed_students(class_id)
+    if not students:
+        return {}
+    totals: dict[str, float] = {}
+    counts: dict[str, int] = {}
+    for student_id in students:
+        for topic_id, value in _topic_mastery(student_id, topic_ids).items():
+            totals[topic_id] = totals.get(topic_id, 0.0) + value
+            counts[topic_id] = counts.get(topic_id, 0) + 1
+    return {t: totals[t] / counts[t] for t in totals}
+
+
+def class_curriculum_state(class_id: str) -> dict[str, Any]:
+    """Teacher Console reading of ONE class's mounted 8-week course (Bridge-3c).
+
+    Differs from ``parent_curriculum_map`` on purpose: the teacher surface
+    reads the class it asked for (not "the first confirmed class of a child"),
+    so ``state="none"`` means exactly "this class has no mounted course yet"
+    and stays a neutral 200 / empty grid rather than an error. A non-linear
+    row set (gap / half-migrated) collapses to the same neutral shape instead
+    of describing a week nobody can act on.
+
+    Shape: ``{class_id, course_title, state, current_week, total_weeks,
+    mastery_scope, weeks[]}`` — each week ``{week_no, topic_id, title,
+    status, mastery_pct}``.
+
+      * ``state`` / ``current_week`` come from ``_resolve_week_state`` (the very
+        same resolver as the kid badge and the parent map, so the three
+        surfaces can never disagree about which week it is).
+      * ``title`` is authored server-side (ruling #1) — the console renders it
+        verbatim and never translates it. ``topic_id`` rides along for
+        teaching-side identification only; the UI never displays it. The
+        payload carries no student ids.
+      * ``mastery_pct`` is the class average for that week's topic
+        (``mastery_scope="class"``), or ``null`` when that week has no data
+        anywhere in the class.
+    """
+    weeks = list_class_curriculum(class_id)
+    current_week, state = None, STATE_NONE
+    if weeks:
+        current_week, state = _resolve_week_state(weeks)
+        if state == STATE_NONE or current_week is None:
+            # Non-linear / half-migrated rows: hide the grid rather than
+            # describe a state nobody can act on — same ruling as 3b's map,
+            # so console and parent map can never tell two different stories.
+            weeks = []
+            current_week = None
+
+    topic_ids = [str(week["topic_id"] or "") for week in weeks]
+    titles = _topic_titles(topic_ids)
+    mastery = _class_week_mastery(class_id, topic_ids) if weeks else {}
+
+    return {
+        "class_id": class_id,
+        "course_title": _course_title(class_id) if weeks else "",
+        "state": state,
+        "current_week": current_week,
+        "total_weeks": CURRICULUM_WEEKS,
+        "mastery_scope": "class",
+        "weeks": [
+            {
+                "week_no": week["week_no"],
+                "topic_id": week["topic_id"],
+                "title": titles.get(str(week["topic_id"] or ""), ""),
+                "status": week["status"],
+                "mastery_pct": mastery.get(str(week["topic_id"] or "")),
+            }
+            for week in weeks
+        ],
+    }

@@ -169,6 +169,32 @@ export interface Copy {
   weekMapStatusActive: string;
   weekMapStatusCompleted: string;
   weekMapLegend: string;
+  // Bridge-3c — Teacher Console: open a class / mount the 8-week course
+  newClassBtn: string;
+  newClassTitle: string;
+  classNameLabel: string;
+  classNamePlaceholder: string;
+  classTypeLabel: string;
+  classTypeMonthly: string;
+  classTypeWorkshop: string;
+  gradeBandLabel: string;
+  gradeBandNone: string;
+  createClassBtn: string;
+  createClassHint: string;
+  cancelBtn: string;
+  closeBtn: string;
+  mountTitle: string;
+  mountCourseLabel: string;
+  mountCourseEmpty: string;
+  mountBtn: string;
+  mountLaterBtn: string;
+  mountAlready: string;
+  mountDoneNote: string;
+  courseChipNone: string;
+  courseProgressWeekPrefix: string;
+  courseProgressWeekSuffix: string;
+  courseProgressCompleted: string;
+  // Bridge-3c — Teacher Console: 進度 card + 邀請 entry (掣 3 & 4)
   // errors / generic
   loading: string;
   retry: string;
@@ -320,6 +346,32 @@ export const copyEn: Copy = {
   weekMapStatusActive: 'In progress',
   weekMapStatusCompleted: 'Completed',
   weekMapLegend: 'Locked · In progress · Completed',
+  // Bridge-3c — Teacher Console: open a class / mount the 8-week course
+  newClassBtn: 'New class',
+  newClassTitle: 'New class',
+  classNameLabel: 'Class name',
+  classNamePlaceholder: 'e.g. P3 Phonics — Sat 10am',
+  classTypeLabel: 'Class type',
+  classTypeMonthly: 'Monthly',
+  classTypeWorkshop: 'Workshop',
+  gradeBandLabel: 'Grade band',
+  gradeBandNone: 'Not set',
+  createClassBtn: 'Create class',
+  createClassHint: 'Next: mount the 8-week course for this class.',
+  cancelBtn: 'Cancel',
+  closeBtn: 'Done',
+  mountTitle: 'Mount 8-week course',
+  mountCourseLabel: 'Course',
+  mountCourseEmpty: 'No ready 8-week course is available yet.',
+  mountBtn: 'Mount course',
+  mountLaterBtn: 'Not now',
+  mountAlready: 'This class already has a course.',
+  mountDoneNote: 'Week 1 is open — weeks 2–8 unlock one at a time.',
+  courseChipNone: 'No course',
+  courseProgressWeekPrefix: 'Week ',
+  courseProgressWeekSuffix: ' / 8',
+  courseProgressCompleted: 'All 8 weeks completed',
+  // Bridge-3c — Teacher Console: 進度 card + 邀請 entry (掣 3 & 4)
   loading: 'Loading…',
   retry: 'Retry',
   unexpectedError: 'Something went wrong.',
@@ -473,6 +525,32 @@ const copyHk: Copy = {
   weekMapStatusActive: '進行中',
   weekMapStatusCompleted: '已完成',
   weekMapLegend: '未開啟 · 進行中 · 已完成',
+  // Bridge-3c — 老師工作台：開班 / 掛載 8 週課程
+  newClassBtn: '開新班',
+  newClassTitle: '開新班',
+  classNameLabel: '班名',
+  classNamePlaceholder: '例：P3 拼音班 — 星期六 10am',
+  classTypeLabel: '班別類型',
+  classTypeMonthly: '月費持續班',
+  classTypeWorkshop: '工作坊',
+  gradeBandLabel: '年級組',
+  gradeBandNone: '不指定',
+  createClassBtn: '開班',
+  createClassHint: '下一步：為呢班掛上 8 週課程。',
+  cancelBtn: '取消',
+  closeBtn: '完成',
+  mountTitle: '掛載 8 週課程',
+  mountCourseLabel: '課程',
+  mountCourseEmpty: '暫時未有可以掛載嘅 8 週課程。',
+  mountBtn: '掛載課程',
+  mountLaterBtn: '遲啲先',
+  mountAlready: '呢班已經有課程。',
+  mountDoneNote: '第 1 週已開啟——第 2 至 8 週會逐週解鎖。',
+  courseChipNone: '未掛課程',
+  courseProgressWeekPrefix: '第 ',
+  courseProgressWeekSuffix: ' 週 / 共 8 週',
+  courseProgressCompleted: '8 週已完成',
+  // Bridge-3c — 老師工作台：進度卡 + 邀請入口（掣 3、4）
   loading: '載入中…',
   retry: '重試',
   unexpectedError: '發生錯誤。',
@@ -626,6 +704,32 @@ const copyCn: Copy = {
   weekMapStatusActive: '进行中',
   weekMapStatusCompleted: '已完成',
   weekMapLegend: '未开启 · 进行中 · 已完成',
+  // Bridge-3c — 老师工作台：开新班 / 挂载 8 周课程
+  newClassBtn: '新建班级',
+  newClassTitle: '新建班级',
+  classNameLabel: '班级名称',
+  classNamePlaceholder: '例：P3 拼音班 — 周六 10点',
+  classTypeLabel: '班级类型',
+  classTypeMonthly: '月费班',
+  classTypeWorkshop: '工作坊',
+  gradeBandLabel: '年级组',
+  gradeBandNone: '不设置',
+  createClassBtn: '创建班级',
+  createClassHint: '下一步：为这个班挂载 8 周课程。',
+  cancelBtn: '取消',
+  closeBtn: '完成',
+  mountTitle: '挂载 8 周课程',
+  mountCourseLabel: '课程',
+  mountCourseEmpty: '暂时没有可挂载的 8 周课程。',
+  mountBtn: '挂载课程',
+  mountLaterBtn: '以后再说',
+  mountAlready: '这个班已经有课程。',
+  mountDoneNote: '第 1 周已开启——第 2 至 8 周会逐周解锁。',
+  courseChipNone: '未挂课程',
+  courseProgressWeekPrefix: '第 ',
+  courseProgressWeekSuffix: ' 周 / 共 8 周',
+  courseProgressCompleted: '8 周已完成',
+  // Bridge-3c — 老师工作台：进度卡 + 邀请入口（按钮 3、4）
   loading: '加载中…',
   retry: '重试',
   unexpectedError: '发生错误。',

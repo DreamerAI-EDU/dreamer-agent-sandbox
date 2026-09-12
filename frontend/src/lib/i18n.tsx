@@ -158,6 +158,17 @@ export interface Copy {
   verifyDoneTitle: string;
   verifyDoneDesc: string;
   goLogin: string;
+  // Bridge-3b — Parent Console 8-week course map
+  weekMapTitle: string;
+  weekMapSubtitle: string;
+  weekMapNeutral: string;
+  weekMapCurrentWeek: string;
+  weekMapNoData: string;
+  weekMapMastery: string;
+  weekMapStatusLocked: string;
+  weekMapStatusActive: string;
+  weekMapStatusCompleted: string;
+  weekMapLegend: string;
   // errors / generic
   loading: string;
   retry: string;
@@ -298,6 +309,17 @@ export const copyEn: Copy = {
   verifyDoneTitle: 'Email verified',
   verifyDoneDesc: 'Your teacher account is ready. Sign in to open your Teacher Console.',
   goLogin: 'Sign in now',
+  weekMapTitle: '8-week course map',
+  weekMapSubtitle: 'Where your child is in the course right now.',
+  weekMapNeutral:
+    'Your child is not in a course yet — this map appears once the teacher mounts the 8-week course.',
+  weekMapCurrentWeek: 'This week',
+  weekMapNoData: 'No data yet',
+  weekMapMastery: 'Mastery',
+  weekMapStatusLocked: 'Locked',
+  weekMapStatusActive: 'In progress',
+  weekMapStatusCompleted: 'Completed',
+  weekMapLegend: 'Locked · In progress · Completed',
   loading: 'Loading…',
   retry: 'Retry',
   unexpectedError: 'Something went wrong.',
@@ -441,6 +463,16 @@ const copyHk: Copy = {
   verifyDoneTitle: '電郵已驗證',
   verifyDoneDesc: '老師帳號已就緒。登入後會嚟到老師工作台。',
   goLogin: '即刻登入',
+  weekMapTitle: '8 週課程地圖',
+  weekMapSubtitle: '小朋友而家喺課程入面嘅位置。',
+  weekMapNeutral: '小朋友暫時未入課程——老師掛上 8 週課程之後，呢幅地圖就會出現。',
+  weekMapCurrentWeek: '今週',
+  weekMapNoData: '未有數據',
+  weekMapMastery: '掌握度',
+  weekMapStatusLocked: '未開啟',
+  weekMapStatusActive: '進行中',
+  weekMapStatusCompleted: '已完成',
+  weekMapLegend: '未開啟 · 進行中 · 已完成',
   loading: '載入中…',
   retry: '重試',
   unexpectedError: '發生錯誤。',
@@ -584,6 +616,16 @@ const copyCn: Copy = {
   verifyDoneTitle: '邮箱已验证',
   verifyDoneDesc: '老师账号已就绪。登录后进入老师工作台。',
   goLogin: '立即登录',
+  weekMapTitle: '8 周课程地图',
+  weekMapSubtitle: '孩子现在在课程里的位置。',
+  weekMapNeutral: '孩子暂时还没有进入课程——老师挂上 8 周课程后，这张地图就会出现。',
+  weekMapCurrentWeek: '本周',
+  weekMapNoData: '暂无数据',
+  weekMapMastery: '掌握度',
+  weekMapStatusLocked: '未开启',
+  weekMapStatusActive: '进行中',
+  weekMapStatusCompleted: '已完成',
+  weekMapLegend: '未开启 · 进行中 · 已完成',
   loading: '加载中…',
   retry: '重试',
   unexpectedError: '发生错误。',

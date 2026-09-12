@@ -18,6 +18,7 @@ import type {
   InvitePublic,
   LoginResponse,
   MeResponse,
+  ParentCurriculumResponse,
   PinResetResponse,
   PinVerifyResponse,
   RegisterResponse,
@@ -205,6 +206,14 @@ export const api = {
   studentCurriculum: (identifier: string) =>
     request<StudentCurriculumResponse>(
       `/api/student/curriculum?student=${encodeURIComponent(identifier)}`,
+    ),
+  // Bridge-3b — parent 8-week course map (GET; parent session + own child
+  // only — the backend answers 403 for another family's child). `state:none`
+  // is a normal 200 (no class / nothing mounted): the grid renders its neutral
+  // message, not an error. Same gate vocabulary as kidPortfolio.
+  parentCurriculum: (identifier: string) =>
+    request<ParentCurriculumResponse>(
+      `/api/parent/curriculum?student_id=${encodeURIComponent(identifier)}`,
     ),
   parentPortfolio: (studentId: string) =>
     request<ParentPortfolioResponse>(

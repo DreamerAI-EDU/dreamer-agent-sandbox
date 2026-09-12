@@ -2320,6 +2320,57 @@ async def handle_student_curriculum(request: web.Request) -> web.Response:
     return web.json_response(curriculum_mod.student_week_badge(student["id"]))
 
 
+async def handle_parent_curriculum(request: web.Request) -> web.Response:
+    """GET /api/parent/curriculum?student_id=<mask|full> — 8-week course map.
+
+    Bridge-3b read surface for the Parent Console (week grid + mastery
+    drill-in). Guard model is the SAME acting-parent gate as the kid badge —
+    one child, one parent, no staff lens:
+      * parent + own child           -> 200 {course_title, current_week,
+                                        total_weeks, state, weeks[]}
+      * parent + another child       -> unified 403 (cross-family attempt,
+                                        WARNING-logged)
+      * teacher / admin session      -> unified 403
+      * anonymous                    -> 401
+      * no class / no mounted course -> 200 {"state": "none", "weeks": []}
+
+    ``student_id`` carries the Parent Console's own convention (masked or full
+    id, as /api/parent/report); ``student`` is accepted as an alias so the
+    console can reuse the kid-badge helper verbatim. Week titles are authored
+    server-side and ``mastery_pct`` is the raw 0..1 rolling snapshot, or null
+    when that week has no data yet.
+    """
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+    if user["role"] != "parent":
+        _log_security_warning(
+            "curriculum_parent_role_denied",
+            user_id=user["id"],
+            detail="non-parent session attempted the parent curriculum map",
+        )
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    identifier = (
+        request.query.get("student_id") or request.query.get("student") or ""
+    ).strip()
+    if not identifier:
+        return web.json_response(_ERR_INVALID, status=400)
+    student, ambiguous = students_mod.resolve_student_identifier(identifier, user)
+    if ambiguous:
+        return web.json_response(_ERR_INVALID, status=400)
+    if student is None or not students_mod.can_access_student(user, student):
+        _log_security_warning(
+            "curriculum_parent_cross_access",
+            user_id=user["id"],
+            target_id=identifier,
+            detail="attempted to read another family's curriculum map",
+        )
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    return web.json_response(curriculum_mod.parent_curriculum_map(student["id"]))
+
+
 # ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
@@ -2395,6 +2446,9 @@ def build_app() -> web.Application:
     app.router.add_get(
         "/api/student/curriculum", handle_student_curriculum
     )
+    # Bridge-3b — parent 8-week course map (same acting-parent gate, one child
+    # per parent; the family-facing reading of the same state machine).
+    app.router.add_get("/api/parent/curriculum", handle_parent_curriculum)
     # W3-A — real WS chat (server-side handshake gate + DeepTutor relay).
     # GET (WS upgrade); csrf_guard only protects POSTs. Import is deferred
     # to keep this module's top-level dependency graph unchanged.

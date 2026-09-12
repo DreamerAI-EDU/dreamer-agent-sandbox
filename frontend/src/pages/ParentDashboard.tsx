@@ -4,6 +4,7 @@
 // Layout of the three-layer UI tree:
 //   ParentDashboard (page)                     ← global state owner
 //   ├─ ChildSwitcher                           ← children from /api/students
+//   ├─ WeekMap                                 ← Bridge-3b (8-week course map)
 //   ├─ ViewTabs (report / portfolio)           ← W4 PR-B
 //   │    ├─ report: PeriodTabs (weekly / cycle / journey)
 //   │    │    └─ useParentReport(studentId, period)
@@ -33,6 +34,7 @@ import type { ParentPeriod } from '../lib/parentTypes';
 import { AppShell } from '../components/AppShell';
 import { ChildSwitcher } from '../components/parent/ChildSwitcher';
 import { ParentConsentPanel } from '../components/parent/ParentConsentPanel';
+import { WeekMap } from '../components/parent/WeekMap';
 import { PeriodTabs } from '../components/parent/PeriodTabs';
 import { PortfolioView } from '../components/parent/PortfolioView';
 import { WeeklyDigest } from '../components/parent/WeeklyDigest';
@@ -209,6 +211,12 @@ export function ParentDashboard() {
 
         {studentId && (
           <>
+            {/* Bridge-3b — 8-week course map. Dashboard-level (visible in both
+                views): it answers "where is my child now", which parents check
+                before either the report or the portfolio. Own fetch + own
+                neutral/error handling, so a map failure never blanks the page. */}
+            <WeekMap studentId={studentId} />
+
             <div
               className="flex w-fit gap-1 rounded-full bg-white p-1 shadow-sm ring-1 ring-black/5"
               role="tablist"

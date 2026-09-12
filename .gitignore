@@ -244,3 +244,8 @@ audit_log.jsonl
 
 # W3-H hygiene: throwaway probe left behind by local debugging
 temp_probe.py
+
+# Bridge trial workdirs: throwaway SQLite + audit sink the real-container
+# trials write into. Evidence stays local — a `git add -A` must never pick up
+# a trial DB (it holds password hashes and a full audit trail).
+.trial_*/

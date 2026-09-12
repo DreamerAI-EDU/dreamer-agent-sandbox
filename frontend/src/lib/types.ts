@@ -180,3 +180,33 @@ export interface StudentCurriculumResponse {
   total_weeks: number;
   unit_title: string; // backend-authored, kid-facing; '' when unknown
 }
+
+// Bridge-3b — parent 8-week course map (GET /api/parent/curriculum).
+//
+// One row per week of the mounted course, in week order. `title` is authored
+// server-side from topic_metadata and rendered verbatim — the parent grid
+// never translates a topic_id itself (label_soften tradition / North Star #3).
+//
+// `mastery_pct` is the raw rolling 0..1 value (MasteryBar scales it). It is
+// `null` when that week has NO data — the UI must show 未有數據/No data yet
+// and NEVER 0% (neutral, no invented progress). A stored 0.0 is real data.
+//
+// `state`: 'active' (one week open) / 'completed' (all 8 done) / 'none'
+// (no class, no mounted course, non-linear rows → show the neutral message,
+// never an error).
+export type ParentWeekStatus = 'locked' | 'active' | 'completed';
+
+export interface ParentCurriculumWeek {
+  week_no: number;
+  title: string;
+  status: ParentWeekStatus;
+  mastery_pct: number | null; // raw 0..1; null = no data for that week
+}
+
+export interface ParentCurriculumResponse {
+  course_title: string; // backend-authored; '' when unknown
+  current_week: number | null; // null iff state === 'none'
+  total_weeks: number;
+  state: StudentWeekState;
+  weeks: ParentCurriculumWeek[]; // [] iff state === 'none'
+}

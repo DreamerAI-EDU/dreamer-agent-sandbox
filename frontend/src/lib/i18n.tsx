@@ -191,10 +191,32 @@ export interface Copy {
   mountAlready: string;
   mountDoneNote: string;
   courseChipNone: string;
+  courseProgressTitle: string;
   courseProgressWeekPrefix: string;
   courseProgressWeekSuffix: string;
+  courseProgressClassMastery: string;
+  courseProgressNextWeek: string;
   courseProgressCompleted: string;
   // Bridge-3c — Teacher Console: 進度 card + 邀請 entry (掣 3 & 4)
+  courseProgressNoCourse: string;
+  courseProgressAdvanced: string;
+  courseProgressAdvancing: string;
+  inviteStudentBtn: string;
+  inviteStudentTitle: string;
+  inviteStudentHint: string;
+  inviteFirstNameLabel: string;
+  inviteFirstNamePlaceholder: string;
+  inviteLangLabel: string;
+  invitePinLabel: string;
+  invitePinPlaceholder: string;
+  invitePinInvalid: string;
+  inviteSendBtn: string;
+  inviteSentTitle: string;
+  inviteSentEmailNote: string;
+  inviteSentPinNote: string;
+  invitePendingNote: string;
+  inviteCopyPinBtn: string;
+  inviteCopied: string;
   // errors / generic
   loading: string;
   retry: string;
@@ -368,10 +390,33 @@ export const copyEn: Copy = {
   mountAlready: 'This class already has a course.',
   mountDoneNote: 'Week 1 is open — weeks 2–8 unlock one at a time.',
   courseChipNone: 'No course',
+  courseProgressTitle: 'Weekly progress',
   courseProgressWeekPrefix: 'Week ',
   courseProgressWeekSuffix: ' / 8',
+  courseProgressClassMastery: 'Class average mastery',
+  courseProgressNextWeek: 'Advance to next week',
   courseProgressCompleted: 'All 8 weeks completed',
   // Bridge-3c — Teacher Console: 進度 card + 邀請 entry (掣 3 & 4)
+  courseProgressNoCourse: 'No 8-week course is mounted for this class yet.',
+  courseProgressAdvanced: 'Week closed — the next week is now open.',
+  courseProgressAdvancing: 'Advancing…',
+  inviteStudentBtn: 'Invite parent',
+  inviteStudentTitle: 'Invite a parent',
+  inviteStudentHint:
+    'Creates the student, a pending class membership and a 72-hour invite email.',
+  inviteFirstNameLabel: "Child's first name",
+  inviteFirstNamePlaceholder: 'e.g. Eason',
+  inviteLangLabel: "Child's language",
+  invitePinLabel: 'Login PIN (optional)',
+  invitePinPlaceholder: 'Blank = auto-generate',
+  invitePinInvalid: 'PIN must be exactly 4 digits.',
+  inviteSendBtn: 'Send invite',
+  inviteSentTitle: 'Invite sent',
+  inviteSentEmailNote: 'The confirmation link has been emailed to the parent (valid 72 hours).',
+  inviteSentPinNote: "Child's login PIN — hand this to the parent:",
+  invitePendingNote: 'The student stays pending until the parent confirms.',
+  inviteCopyPinBtn: 'Copy PIN',
+  inviteCopied: 'Copied',
   loading: 'Loading…',
   retry: 'Retry',
   unexpectedError: 'Something went wrong.',
@@ -547,10 +592,32 @@ const copyHk: Copy = {
   mountAlready: '呢班已經有課程。',
   mountDoneNote: '第 1 週已開啟——第 2 至 8 週會逐週解鎖。',
   courseChipNone: '未掛課程',
+  courseProgressTitle: '每週進度',
   courseProgressWeekPrefix: '第 ',
   courseProgressWeekSuffix: ' 週 / 共 8 週',
+  courseProgressClassMastery: '全班平均掌握度',
+  courseProgressNextWeek: '推進下一週',
   courseProgressCompleted: '8 週已完成',
   // Bridge-3c — 老師工作台：進度卡 + 邀請入口（掣 3、4）
+  courseProgressNoCourse: '呢班暫時未掛 8 週課程。',
+  courseProgressAdvanced: '已完結本週——下一週已開啟。',
+  courseProgressAdvancing: '推進中…',
+  inviteStudentBtn: '邀請家長',
+  inviteStudentTitle: '邀請家長加入',
+  inviteStudentHint: '會建立學生、待確認班籍，並發出 72 小時有效嘅邀請電郵。',
+  inviteFirstNameLabel: '小朋友名字',
+  inviteFirstNamePlaceholder: '例：家豪',
+  inviteLangLabel: '小朋友語言',
+  invitePinLabel: '登入 PIN（可留空）',
+  invitePinPlaceholder: '留空＝由系統產生',
+  invitePinInvalid: 'PIN 必須係 4 位數字。',
+  inviteSendBtn: '發送邀請',
+  inviteSentTitle: '已發出邀請',
+  inviteSentEmailNote: '確認連結已電郵俾家長（72 小時內有效）。',
+  inviteSentPinNote: '小朋友登入 PIN——請轉交家長：',
+  invitePendingNote: '家長確認之前，學生會維持「待確認」狀態。',
+  inviteCopyPinBtn: '複製 PIN',
+  inviteCopied: '已複製',
   loading: '載入中…',
   retry: '重試',
   unexpectedError: '發生錯誤。',
@@ -726,10 +793,32 @@ const copyCn: Copy = {
   mountAlready: '这个班已经有课程。',
   mountDoneNote: '第 1 周已开启——第 2 至 8 周会逐周解锁。',
   courseChipNone: '未挂课程',
+  courseProgressTitle: '每周进度',
   courseProgressWeekPrefix: '第 ',
   courseProgressWeekSuffix: ' 周 / 共 8 周',
+  courseProgressClassMastery: '全班平均掌握度',
+  courseProgressNextWeek: '推进下一周',
   courseProgressCompleted: '8 周已完成',
   // Bridge-3c — 老师工作台：进度卡 + 邀请入口（按钮 3、4）
+  courseProgressNoCourse: '这个班暂时还没挂载 8 周课程。',
+  courseProgressAdvanced: '本周已结束——下一周已开启。',
+  courseProgressAdvancing: '推进中…',
+  inviteStudentBtn: '邀请家长',
+  inviteStudentTitle: '邀请家长加入',
+  inviteStudentHint: '会创建学生、待确认班籍，并发出 72 小时有效的邀请邮件。',
+  inviteFirstNameLabel: '孩子名字',
+  inviteFirstNamePlaceholder: '例：家豪',
+  inviteLangLabel: '孩子语言',
+  invitePinLabel: '登录 PIN（可留空）',
+  invitePinPlaceholder: '留空＝由系统生成',
+  invitePinInvalid: 'PIN 必须是 4 位数字。',
+  inviteSendBtn: '发送邀请',
+  inviteSentTitle: '邀请已发出',
+  inviteSentEmailNote: '确认链接已发送到家长邮箱（72 小时内有效）。',
+  inviteSentPinNote: '孩子登录 PIN——请转交家长：',
+  invitePendingNote: '家长确认之前，学生会保持“待确认”状态。',
+  inviteCopyPinBtn: '复制 PIN',
+  inviteCopied: '已复制',
   loading: '加载中…',
   retry: '重试',
   unexpectedError: '发生错误。',

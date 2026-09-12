@@ -284,3 +284,32 @@ export interface MountCurriculumResponse {
   }[];
 }
 
+/** The raw ``class_curriculum`` row — no title, no mastery (server-side only). */
+export interface ClassWeekRow {
+  topic_id: string;
+  week_no: number;
+  status: ClassWeekStatus;
+  activated_at: string | null;
+}
+
+/**
+ * POST /api/classes/{id}/advance-week -> 200 (the 「下一週」 control).
+ * `active_week` is null and `course_completed` true once week 8 closes;
+ * a 409 means there was nothing legal to do (unmounted / gap / week 8 done).
+ * The console does not read `weeks` from this response — it re-reads the
+ * canonical GET /api/classes/{id}/curriculum instead (one source of truth).
+ */
+export interface AdvanceWeekResponse {
+  class_id: string;
+  completed_week: number;
+  active_week: number | null;
+  course_completed: boolean;
+  weeks: ClassWeekRow[];
+}
+
+/** POST /api/invites -> 201 — the pre-existing invite flow, reused as-is. */
+export interface CreateInviteResponse {
+  message: string;
+  /** Present only when the server generated the PIN (none was supplied). */
+  pin?: string;
+}

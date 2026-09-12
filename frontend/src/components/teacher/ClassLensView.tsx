@@ -12,6 +12,8 @@ import { useMemo, useState } from 'react';
 import { useTeacherClassProgress } from '../../hooks/useTeacherProgress';
 import { masteryToPercent } from '../../lib/parentTypes';
 import { ClassStatsCard } from './ClassStatsCard';
+import { CourseProgressCard } from './CourseProgressCard';
+import { InviteStudentDialog } from './InviteStudentDialog';
 import { StudentRow } from './StudentRow';
 import { StudentFilterBar, DEFAULT_FILTERS, applyFilters } from './StudentFilterBar';
 import type { StudentFilters } from './StudentFilterBar';
@@ -33,6 +35,8 @@ const AGE_LABELS: Record<string, string> = {
 export function ClassLensView({ classId, onBack, onOpenStudent }: ClassLensViewProps) {
   const { loading, error, data, reload } = useTeacherClassProgress(classId);
   const [filters, setFilters] = useState<StudentFilters>(DEFAULT_FILTERS);
+  // Bridge-3c 掣 3: the invite entry lives in this view's header.
+  const [inviteOpen, setInviteOpen] = useState(false);
 
   const availableAgeBands = useMemo(() => {
     if (!data) return [];
@@ -77,6 +81,13 @@ export function ClassLensView({ classId, onBack, onOpenStudent }: ClassLensViewP
                 {copy.oneOnOneBadge}
               </span>
             )}
+            <button
+              type="button"
+              onClick={() => setInviteOpen(true)}
+              className="rounded-lg border border-black/10 bg-white px-3 py-1.5 text-sm font-medium text-black/70 transition-colors hover:bg-black/5"
+            >
+              {copy.inviteStudentBtn}
+            </button>
           </div>
         )}
       </div>
@@ -95,6 +106,11 @@ export function ClassLensView({ classId, onBack, onOpenStudent }: ClassLensViewP
           </button>
         </div>
       )}
+
+      {/* 掣 4 — Week X/8 leads the view (decision ④); the card owns its own
+          GET /api/classes/{id}/curriculum read, so a roster hiccup never
+          hides the progress state. */}
+      <CourseProgressCard classId={classId} onAdvanced={reload} />
 
       {data && (
         <>
@@ -138,6 +154,16 @@ export function ClassLensView({ classId, onBack, onOpenStudent }: ClassLensViewP
             )}
           </div>
         </>
+      )}
+
+      {inviteOpen && (
+        <InviteStudentDialog
+          classId={classId}
+          onClose={() => setInviteOpen(false)}
+          // The roster/pending counts move once the invite lands; re-read the
+          // route that owns them (same discipline as 掣 4's re-read).
+          onInvited={reload}
+        />
       )}
     </div>
   );

@@ -10,14 +10,18 @@
 // the server's `error` field is shown verbatim.
 
 import type {
+  ClassCurriculumResponse,
   ClassPendingResponse,
   ClassesResponse,
+  CreateClassResponse,
+  CurriculumCatalogResponse,
   ConsentDocsResponse,
   ConsentStatusResponse,
   InviteConfirmResponse,
   InvitePublic,
   LoginResponse,
   MeResponse,
+  MountCurriculumResponse,
   ParentCurriculumResponse,
   PinResetResponse,
   PinVerifyResponse,
@@ -214,6 +218,30 @@ export const api = {
   parentCurriculum: (identifier: string) =>
     request<ParentCurriculumResponse>(
       `/api/parent/curriculum?student_id=${encodeURIComponent(identifier)}`,
+    ),
+
+  // Bridge-3c — Teacher Console write/read surfaces (teacher/admin only;
+  // the backend answers 401 anonymous, 403 parent/student/other teacher).
+  createClass: (payload: {
+    name: string;
+    class_type: 'monthly' | 'workshop';
+    grade_band?: string | null;
+    is_one_on_one?: boolean;
+  }) => request<CreateClassResponse>('/api/classes', { body: payload }),
+  curriculumCatalog: () =>
+    request<CurriculumCatalogResponse>('/api/curriculum/catalog'),
+  // Mount expands the 8 weeks server-side (week 1 active, 2..8 locked);
+  // the body carries exactly `curriculum_id` — no free topic picking.
+  mountCurriculum: (classId: string, curriculumId: string) =>
+    request<MountCurriculumResponse>(
+      `/api/classes/${encodeURIComponent(classId)}/curriculum`,
+      { body: { curriculum_id: curriculumId } },
+    ),
+  // state:'none' is a normal 200 (no course mounted) — render the empty
+  // state, never an error banner.
+  classCurriculum: (classId: string) =>
+    request<ClassCurriculumResponse>(
+      `/api/classes/${encodeURIComponent(classId)}/curriculum`,
     ),
   parentPortfolio: (studentId: string) =>
     request<ParentPortfolioResponse>(

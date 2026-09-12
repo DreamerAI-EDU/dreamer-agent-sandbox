@@ -10,10 +10,12 @@
 // the server's `error` field is shown verbatim.
 
 import type {
+  AdvanceWeekResponse,
   ClassCurriculumResponse,
   ClassPendingResponse,
   ClassesResponse,
   CreateClassResponse,
+  CreateInviteResponse,
   CurriculumCatalogResponse,
   ConsentDocsResponse,
   ConsentStatusResponse,
@@ -243,6 +245,26 @@ export const api = {
     request<ClassCurriculumResponse>(
       `/api/classes/${encodeURIComponent(classId)}/curriculum`,
     ),
+  // 「下一週」 — the server flips active→completed and unlocks the next week
+  // in one transaction; the console only re-reads what the server now says.
+  // A 409 (unmounted / gap / after week 8) is surfaced verbatim.
+  advanceWeek: (classId: string) =>
+    request<AdvanceWeekResponse>(
+      `/api/classes/${encodeURIComponent(classId)}/advance-week`,
+      { body: {} },
+    ),
+  // 邀請 — the pre-existing teacher invite flow (student + pending membership
+  // + 72h invite + bilingual email). The console adds an entry point only;
+  // it does not reimplement the flow. An omitted `pin` lets the server
+  // generate one and return it once.
+  createInvite: (payload: {
+    class_id: string;
+    first_name: string;
+    age_band: string;
+    lang_code: string;
+    parent_email: string;
+    pin?: string;
+  }) => request<CreateInviteResponse>('/api/invites', { body: payload }),
   parentPortfolio: (studentId: string) =>
     request<ParentPortfolioResponse>(
       `/api/parent/portfolio/${encodeURIComponent(studentId)}`,

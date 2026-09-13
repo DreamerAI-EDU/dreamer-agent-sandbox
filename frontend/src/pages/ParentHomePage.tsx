@@ -82,8 +82,12 @@ export function ParentHomePage() {
       navigate(`/chat?${params.toString()}`);
     } catch (err) {
       if (err instanceof ApiError) {
-        // Server verbatim: "PIN 不正確" (401) / "等待老師確認" (403) / 429 lockout.
-        setPinError(err.message);
+        // W3-A follow-up (i18n): map the server's zh-Hant verbatim strings onto
+        // the active UI language instead of echoing them raw. 429 lockout text
+        // stays verbatim (it is already localised server-side).
+        if (err.status === 401) setPinError(copy.pinWrong);
+        else if (err.status === 403) setPinError(copy.pinAwaitingTeacher);
+        else setPinError(err.message);
       } else {
         setPinError(copy.unexpectedError);
       }

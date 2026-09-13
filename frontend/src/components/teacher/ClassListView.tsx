@@ -6,17 +6,28 @@
 // parallel /api/classes/{id}/pending; a failing pending request never
 // blocks the card.
 //
+// Bridge-3c adds the teacher console's first two controls — 開新班 and 掛載
+// 課程 — without moving any logic into the browser: the create form posts
+// {name, class_type, grade_band}, the course picker posts a bare
+// curriculum_id, and the week the card shows comes straight from
+// GET /api/classes/{id}/curriculum (state 'none' is a neutral 200, rendered
+// as "No course", never as an error).
+//
 // Teacher-facing UI is pinned to English (copyEn — the register flow and
 // console target overseas schools first; same policy as W3-C).
 
 import { useEffect, useState } from 'react';
 import { api, ApiError } from '../../lib/api';
 import { copyEn as copy } from '../../lib/i18n';
-import type { ClassSummary, PendingStudent } from '../../lib/types';
+import type { ClassCurriculumResponse, ClassSummary, PendingStudent } from '../../lib/types';
+import { OpenClassFlow } from './OpenClassFlow';
 
 interface ClassWithPending extends ClassSummary {
   pendingStudents: PendingStudent[];
   pendingLoaded: boolean;
+  /** Bridge-3c: this class's mounted course state (null until loaded). */
+  course: ClassCurriculumResponse | null;
+  courseLoaded: boolean;
 }
 
 type GroupKey = 'monthly' | 'workshop' | 'other';
@@ -57,10 +68,20 @@ function buildGroups(classes: ClassWithPending[]): ClassGroup[] {
   return groups;
 }
 
+/** The card's course chip — server state only, no client-side week maths. */
+function courseChipText(course: ClassCurriculumResponse | null): string {
+  if (!course || course.state === 'none') return copy.courseChipNone;
+  if (course.state === 'completed') return copy.courseProgressCompleted;
+  const week = course.current_week ?? 0;
+  return `${copy.courseProgressWeekPrefix}${week}${copy.courseProgressWeekSuffix}`;
+}
+
 export function ClassListView({ onOpenClass }: ClassListViewProps) {
   const [classes, setClasses] = useState<ClassWithPending[] | null>(null);
   const [loadError, setLoadError] = useState('');
   const [busy, setBusy] = useState(false);
+  // null = closed; {mountFor} = straight to the course picker for that class.
+  const [flow, setFlow] = useState<{ mountFor: { id: string; name: string } | null } | null>(null);
 
   const loadClasses = async () => {
     setBusy(true);
@@ -71,15 +92,26 @@ export function ClassListView({ onOpenClass }: ClassListViewProps) {
         ...c,
         pendingStudents: [],
         pendingLoaded: false,
+        course: null,
+        courseLoaded: false,
       }));
       await Promise.all(
         withPending.map(async (c) => {
           try {
             const p = await api.classPending(c.id);
             c.pendingStudents = p.pending;
-            c.pendingLoaded = true;
           } catch {
-            c.pendingLoaded = true; // keep card usable, pending list hidden
+            // keep card usable, pending list hidden
+          } finally {
+            c.pendingLoaded = true;
+          }
+          try {
+            c.course = await api.classCurriculum(c.id);
+          } catch {
+            // a failing read must never block the card — chip stays "No course"
+            c.course = null;
+          } finally {
+            c.courseLoaded = true;
           }
         }),
       );
@@ -100,9 +132,18 @@ export function ClassListView({ onOpenClass }: ClassListViewProps) {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">{copy.teacherConsole}</h1>
-        <p className="mt-1 text-sm text-black/50">{copy.teacherSideNote}</p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">{copy.teacherConsole}</h1>
+          <p className="mt-1 text-sm text-black/50">{copy.teacherSideNote}</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setFlow({ mountFor: null })}
+          className="rounded-lg bg-[#00023D] px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
+        >
+          {copy.newClassBtn}
+        </button>
       </div>
 
       {loadError && <p className="text-sm text-red-600">{loadError}</p>}
@@ -144,7 +185,16 @@ export function ClassListView({ onOpenClass }: ClassListViewProps) {
                     <span className="rounded-full bg-black/5 px-2 py-0.5 text-xs text-black/60">
                       {copy.pendingLabel}: {c.pending_count}
                     </span>
+                    {c.courseLoaded && (
+                      <span className="rounded-full bg-black/5 px-2 py-0.5 text-xs text-black/60">
+                        {courseChipText(c.course)}
+                      </span>
+                    )}
                   </div>
+
+                  {c.courseLoaded && c.course && c.course.state !== 'none' && (
+                    <p className="mt-2 text-xs text-black/50">{c.course.course_title}</p>
+                  )}
 
                   <div className="mt-4 border-t border-black/5 pt-3">
                     {c.pendingLoaded && c.pendingStudents.length > 0 && (
@@ -167,7 +217,16 @@ export function ClassListView({ onOpenClass }: ClassListViewProps) {
                     )}
                   </div>
 
-                  <div className="mt-4 flex justify-end">
+                  <div className="mt-4 flex justify-end gap-2">
+                    {c.courseLoaded && c.course?.state === 'none' && (
+                      <button
+                        type="button"
+                        onClick={() => setFlow({ mountFor: { id: c.id, name: c.name } })}
+                        className="rounded-lg border border-black/10 px-4 py-2 text-sm font-medium text-black/70 transition-colors hover:bg-black/5"
+                      >
+                        {copy.mountBtn}
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => onOpenClass(c.id)}
@@ -181,6 +240,18 @@ export function ClassListView({ onOpenClass }: ClassListViewProps) {
             </section>
           ))}
         </div>
+      )}
+
+      {flow && (
+        <OpenClassFlow
+          mountFor={flow.mountFor}
+          onClose={() => {
+            setFlow(null);
+            setClasses(null); // re-read on close: the server owns the new state
+          }}
+          onClassCreated={() => setClasses(null)}
+          onCourseMounted={() => setClasses(null)}
+        />
       )}
     </div>
   );

@@ -2271,6 +2271,42 @@ async def handle_advance_week(request: web.Request) -> web.Response:
     return web.json_response(result)
 
 
+async def handle_class_curriculum(request: web.Request) -> web.Response:
+    """GET /api/classes/{id}/curriculum — the class's mounted course (Bridge-3c).
+
+    Teacher console read surface for the 進度 card: which week the class is on
+    plus the eight rows with their server-owned statuses. Teacher/admin only —
+    anonymous 401, parent/student 403 (the four 3c controls share this guard);
+    a teacher reaching another teacher's class gets 403 and a WARNING audit
+    row (cross-teacher probe, same discipline as mount/advance-week).
+
+    ``state="none"`` is a NORMAL 200: the class simply has no course mounted
+    yet, so the console shows its empty state instead of an error. The eight
+    rows, the week number and the authored titles all come from
+    ``curriculum.class_curriculum_state`` — the frontend renders, it does not
+    compute. ``topic_id`` is carried for teaching-side identification; the UI
+    never displays it and never translates ``title``.
+    """
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+    if user["role"] not in ("teacher", "admin"):
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    class_id = request.match_info.get("id", "")
+    cls = classes_mod.get_class_by_id(class_id)
+    if cls is None or (user["role"] != "admin" and cls["teacher_id"] != user["id"]):
+        _log_security_warning(
+            "curriculum_cross_teacher",
+            user_id=user["id"],
+            target_id=class_id,
+            detail="attempted to read another teacher's class course state",
+        )
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    return web.json_response(curriculum_mod.class_curriculum_state(class_id))
+
+
 async def handle_student_curriculum(request: web.Request) -> web.Response:
     """GET /api/student/curriculum?student=<mask|full> — kid "Week X / 8" badge.
 
@@ -2402,6 +2438,9 @@ def build_app() -> web.Application:
         "/api/classes/{id}/curriculum", handle_mount_curriculum
     )
     app.router.add_post("/api/classes/{id}/advance-week", handle_advance_week)
+    app.router.add_get(
+        "/api/classes/{id}/curriculum", handle_class_curriculum
+    )
     app.router.add_post("/api/students", handle_create_student)
     app.router.add_get("/api/students", handle_list_students)
     app.router.add_post("/api/students/{id}/pin-verify", handle_pin_verify)

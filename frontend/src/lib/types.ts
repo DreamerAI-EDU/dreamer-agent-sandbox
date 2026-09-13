@@ -210,3 +210,77 @@ export interface ParentCurriculumResponse {
   state: StudentWeekState;
   weeks: ParentCurriculumWeek[]; // [] iff state === 'none'
 }
+
+// ---------------------------------------------------------------------------
+// Bridge-3c — Teacher Console: open a class, mount a course, read progress.
+// Mirrors auth/api.py handlers + auth/curriculum.py class_curriculum_state.
+// The console renders these values verbatim: every status flip, the 8-week
+// expansion and the linear lock all happen server-side (ruling: UI zero logic).
+// ---------------------------------------------------------------------------
+
+/** One mountable course from GET /api/curriculum/catalog (ready 1..8 only). */
+export interface CurriculumCatalogItem {
+  curriculum_id: string;
+  /** Authored course title — render verbatim, never translate. */
+  title: string;
+  week_count: number;
+  ready: boolean;
+}
+
+export interface CurriculumCatalogResponse {
+  curricula: CurriculumCatalogItem[];
+}
+
+/** POST /api/classes -> 201. The class starts with NO mounted course. */
+export interface CreateClassResponse {
+  class: {
+    id: string;
+    name: string;
+    join_code: string;
+    class_type: 'monthly' | 'workshop';
+    grade_band: string | null;
+    is_one_on_one: number;
+  };
+}
+
+export type ClassWeekStatus = 'locked' | 'active' | 'completed';
+
+/** "none" = nothing mounted yet (neutral 200, not an error). */
+export type ClassCourseState = 'none' | 'active' | 'completed';
+
+export interface ClassCurriculumRow {
+  week_no: number;
+  /** Internal teaching id — carried for identification, never rendered. */
+  topic_id: string;
+  /** Authored week title — render verbatim, never translate. */
+  title: string;
+  status: ClassWeekStatus;
+  /** Class-average mastery, raw 0..1 scale; null when that week has no data. */
+  mastery_pct: number | null;
+}
+
+/** GET /api/classes/{id}/curriculum — the 進度 card source of truth. */
+export interface ClassCurriculumResponse {
+  class_id: string;
+  course_title: string;
+  state: ClassCourseState;
+  current_week: number | null; // null iff state === 'none'
+  total_weeks: number;
+  mastery_scope: 'class';
+  weeks: ClassCurriculumRow[];
+}
+
+/** POST /api/classes/{id}/curriculum -> 201 (server expanded the 8 weeks). */
+export interface MountCurriculumResponse {
+  class_id: string;
+  curriculum_id: string;
+  title: string;
+  week_count: number;
+  weeks: {
+    topic_id: string;
+    week_no: number;
+    status: ClassWeekStatus;
+    activated_at: string | null;
+  }[];
+}
+

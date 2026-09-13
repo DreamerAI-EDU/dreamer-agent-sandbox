@@ -8,6 +8,7 @@ import { api, ApiError } from '../lib/api';
 import { useLang } from '../lib/i18n';
 import type { SafetyEvent, SafetyEventDetail, User } from '../lib/types';
 import { AppShell } from '../components/AppShell';
+import { PaymentReconciliationSection } from '../components/teacher/PaymentReconciliationSection';
 import { StepUpDialog } from '../components/StepUpDialog';
 
 export function SafetyPage() {
@@ -197,6 +198,15 @@ export function SafetyPage() {
               </li>
             ))}
           </ul>
+        )}
+
+        {/* Bridge-3e — admin payment reconciliation. It lives on the existing
+            admin page (RootGate lands an admin here), not a new console.
+            Teachers share this page but never see the section. */}
+        {user.role === 'admin' && (
+          <div className="mt-8">
+            <PaymentReconciliationSection />
+          </div>
         )}
       </div>
 

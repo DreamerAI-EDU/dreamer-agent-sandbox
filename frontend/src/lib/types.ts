@@ -238,12 +238,45 @@ export interface ParentCurriculumWeek {
   mastery_pct: number | null; // raw 0..1; null = no data for that week
 }
 
+/** A student's payment state. Machine value only — the badge text is i18n. */
+export type PaymentStatus = 'pending' | 'paid';
+
 export interface ParentCurriculumResponse {
   course_title: string; // backend-authored; '' when unknown
   current_week: number | null; // null iff state === 'none'
   total_weeks: number;
   state: StudentWeekState;
   weeks: ParentCurriculumWeek[]; // [] iff state === 'none'
+  /** Bridge-3e — payment badge; no payments row reads as 'pending'. */
+  payment_status: PaymentStatus;
+}
+
+// ---------------------------------------------------------------------------
+// Bridge-3e — payment mark-paid (admin reconciliation; boss decision ②).
+// Mirrors auth/api.py handle_admin_*: one row per student, the mark flips it
+// (never a second row), and the console only ever sees the 8-char mask.
+// ---------------------------------------------------------------------------
+
+/** One row of GET /api/admin/payments (masked id, never the full uuid). */
+export interface AdminPaymentRow {
+  student_id: string; // 8-char mask
+  first_name: string;
+  status: PaymentStatus;
+  marked_at: string | null;
+  note: string | null;
+}
+
+export interface AdminPaymentsResponse {
+  payments: AdminPaymentRow[];
+}
+
+/** POST mark-paid / mark-pending — the row as it stands after the flip. */
+export interface AdminPaymentMarkResponse {
+  student_id: string;
+  first_name: string;
+  status: PaymentStatus;
+  marked_at: string | null;
+  note: string | null;
 }
 
 // ---------------------------------------------------------------------------

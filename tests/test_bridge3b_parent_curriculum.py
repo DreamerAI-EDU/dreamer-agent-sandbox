@@ -490,6 +490,9 @@ async def test_map_neutral_when_child_has_no_class(client, teacher_invite):
         "total_weeks": 8,
         "state": "none",
         "weeks": [],
+        # Bridge-3e — the parent payload always carries the payment badge; a
+        # student with no payments row reads as pending (additive contract).
+        "payment_status": "pending",
     }
 
 

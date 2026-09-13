@@ -41,6 +41,7 @@ from . import classes as classes_mod
 from . import consent
 from . import curriculum as curriculum_mod
 from . import db
+from . import payments as payments_mod
 from . import reports as reports_mod
 from . import safety as safety_mod
 from . import student_auth as student_auth_mod
@@ -2413,7 +2414,169 @@ async def handle_parent_curriculum(request: web.Request) -> web.Response:
         )
         return web.json_response(_ERR_FORBIDDEN, status=403)
 
-    return web.json_response(curriculum_mod.parent_curriculum_map(student["id"]))
+    payload = curriculum_mod.parent_curriculum_map(student["id"])
+    # Bridge-3e — payment badge. Machine value only ('pending' | 'paid'): the
+    # three-language label is a frontend frame string (3b/3c tradition), and a
+    # student with no payments row is pending, so this read never fails.
+    payload["payment_status"] = payments_mod.get_payment_status(student["id"])
+    return web.json_response(payload)
+
+
+# ---------------------------------------------------------------------------
+# Bridge-3e — payment mark-paid (admin reconciliation; boss decision ②)
+# ---------------------------------------------------------------------------
+
+_ERR_STUDENT_NOT_FOUND = {"error": "學生唔存在"}
+_PAYMENT_NOTE_MAX = 500
+
+
+def _payments_admin_gate(
+    request: web.Request, *, warning: str, detail: str
+) -> tuple[Optional[dict[str, Any]], Optional[web.Response]]:
+    """Admin-only gate shared by the three payment endpoints.
+
+    Anonymous -> 401; every other role (parent / teacher) -> 403 with a
+    WARNING line, so the gate cannot drift between the list and the marks.
+    """
+    user = _session_user(request)
+    if user is None:
+        return None, web.json_response(_ERR_AUTH, status=401)
+    if user["role"] != "admin":
+        _log_security_warning(warning, user_id=user["id"], detail=detail)
+        return None, web.json_response(_ERR_FORBIDDEN, status=403)
+    return user, None
+
+
+async def _handle_admin_payment_mark(
+    request: web.Request, *, status: str, warning: str, detail: str
+) -> web.Response:
+    """Shared body of mark-paid / mark-pending — identical rules, one flip.
+
+    Gate order (each step has its own negative test in CI):
+      anonymous 401 -> non-admin 403 -> unknown student 404 -> bad body 400.
+    The write itself is idempotent: one row per student, UPDATE on conflict,
+    so re-marking an already-paid student is a normal 200, never a 500.
+    """
+    user, denied = _payments_admin_gate(request, warning=warning, detail=detail)
+    if denied is not None:
+        return denied
+
+    identifier = (request.match_info.get("student_id") or "").strip()
+    if not identifier:
+        return web.json_response(_ERR_INVALID, status=400)
+    # Admin's reachable set is every student, so the resolve IS the
+    # authorisation (can_access_student is parent/teacher-only). Ambiguous mask
+    # -> 400; unknown -> 404 (admin is the highest role and needs the real
+    # answer while reconciling, unlike the parent-facing surfaces).
+    student, ambiguous = students_mod.resolve_student_identifier(identifier, user)
+    if ambiguous:
+        return web.json_response(_ERR_INVALID, status=400)
+    if student is None:
+        _log_security_warning(
+            "payment_mark_unknown_student",
+            user_id=user["id"],
+            target_id=identifier,
+            detail="admin payment mark for an unknown student id",
+        )
+        return web.json_response(_ERR_STUDENT_NOT_FOUND, status=404)
+
+    payload = await _read_json(request)
+    note: Optional[str] = None
+    if payload is not None:
+        raw_note = payload.get("note")
+        if raw_note is not None:
+            if not isinstance(raw_note, str) or len(raw_note) > _PAYMENT_NOTE_MAX:
+                return web.json_response(_ERR_INVALID, status=400)
+            note = raw_note.strip() or None
+
+    row = payments_mod.set_payment_status(
+        student_id=student["id"], status=status, marked_by=user["id"], note=note
+    )
+    # Audit: actor + student pointer + timestamp, STATUS only. The operator's
+    # free-text note deliberately stays out of the trail (it could carry an
+    # amount by accident — the work order forbids amounts in the audit line).
+    consent.write_audit_log(
+        {
+            "timestamp": _now_iso(),
+            "level": "INFO",
+            "event": "payment_marked",
+            "user_id": user["id"],
+            "target_id": _mask_student_id(student["id"]),
+            "message": f"payment marked {status}",
+        }
+    )
+    return web.json_response(
+        {
+            "student_id": _mask_student_id(student["id"]),
+            "first_name": student["first_name"],
+            "status": row.get("status", status),
+            "marked_at": row.get("marked_at"),
+            "note": row.get("note"),
+        }
+    )
+
+
+async def handle_admin_mark_paid(request: web.Request) -> web.Response:
+    """POST /api/admin/payments/{student_id}/mark-paid — admin only.
+
+    Body is optional: ``{"note": "..."}``. Flips the student's single payments
+    row to ``paid`` and writes one ``payment_marked`` audit event.
+    """
+    return await _handle_admin_payment_mark(
+        request,
+        status=payments_mod.STATUS_PAID,
+        warning="payment_mark_paid_denied",
+        detail="non-admin session attempted to mark a payment paid",
+    )
+
+
+async def handle_admin_mark_pending(request: web.Request) -> web.Response:
+    """POST /api/admin/payments/{student_id}/mark-pending — admin only.
+
+    The undo path for a mis-click: same row, same rules, same audit shape.
+    """
+    return await _handle_admin_payment_mark(
+        request,
+        status=payments_mod.STATUS_PENDING,
+        warning="payment_mark_pending_denied",
+        detail="non-admin session attempted to reset a payment to pending",
+    )
+
+
+async def handle_admin_payments_list(request: web.Request) -> web.Response:
+    """GET /api/admin/payments?status=pending|paid — admin reconciliation list.
+
+    Every student appears (a never-marked student reads as ``pending``), each
+    with the masked id the console round-trips back into the mark endpoints.
+    The optional ``status`` filter must be one of the two known values —
+    anything else is a 400, never a silently-empty list.
+    """
+    user, denied = _payments_admin_gate(
+        request,
+        warning="payment_list_denied",
+        detail="non-admin session attempted to read the payment list",
+    )
+    if denied is not None:
+        return denied
+
+    status = (request.query.get("status") or "").strip()
+    if status and status not in payments_mod.VALID_STATUSES:
+        return web.json_response(_ERR_INVALID, status=400)
+    rows = payments_mod.list_payment_rows(status=status or None)
+    return web.json_response(
+        {
+            "payments": [
+                {
+                    "student_id": _mask_student_id(row["student_id"]),
+                    "first_name": row["first_name"],
+                    "status": row["status"],
+                    "marked_at": row["marked_at"],
+                    "note": row["note"],
+                }
+                for row in rows
+            ]
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2611,6 +2774,16 @@ def build_app() -> web.Application:
     # Bridge-3b — parent 8-week course map (same acting-parent gate, one child
     # per parent; the family-facing reading of the same state machine).
     app.router.add_get("/api/parent/curriculum", handle_parent_curriculum)
+
+    # Bridge-3e — payment mark-paid (admin only). Same {student_id} slot as the
+    # other student-scoped routes: full id or 8-char mask.
+    app.router.add_get("/api/admin/payments", handle_admin_payments_list)
+    app.router.add_post(
+        "/api/admin/payments/{student_id}/mark-paid", handle_admin_mark_paid
+    )
+    app.router.add_post(
+        "/api/admin/payments/{student_id}/mark-pending", handle_admin_mark_pending
+    )
     # W3-A — real WS chat (server-side handshake gate + DeepTutor relay).
     # GET (WS upgrade); csrf_guard only protects POSTs. Import is deferred
     # to keep this module's top-level dependency graph unchanged.

@@ -107,6 +107,8 @@ export interface Copy {
   selectStudent: string;
   pinTitle: string;
   pinSubtitle: string;
+  pinWrong: string;
+  pinAwaitingTeacher: string;
   pinPlaceholder: string;
   pinVerifyBtn: string;
   pinResetBtn: string;
@@ -333,6 +335,8 @@ export const copyEn: Copy = {
   selectStudent: 'Your children',
   pinTitle: 'Enter PIN',
   pinSubtitle: 'Enter the 4-digit PIN for this child.',
+  pinWrong: 'Incorrect PIN. Please try again.',
+  pinAwaitingTeacher: 'Waiting for your teacher to confirm.',
   pinPlaceholder: '4-digit PIN',
   pinVerifyBtn: 'Unlock',
   pinResetBtn: 'Forgot PIN?',
@@ -559,6 +563,8 @@ const copyHk: Copy = {
   selectStudent: '你嘅小朋友',
   pinTitle: '輸入 PIN',
   pinSubtitle: '輸入呢位小朋友嘅 4 位 PIN。',
+  pinWrong: 'PIN 唔啱，請再試。',
+  pinAwaitingTeacher: '等待老師確認。',
   pinPlaceholder: '4 位 PIN',
   pinVerifyBtn: '解鎖',
   pinResetBtn: '唔記得 PIN？',
@@ -783,6 +789,8 @@ const copyCn: Copy = {
   selectStudent: '你的孩子',
   pinTitle: '输入 PIN',
   pinSubtitle: '输入该孩子的 4 位 PIN。',
+  pinWrong: 'PIN 不正确，请重试。',
+  pinAwaitingTeacher: '等待老师确认。',
   pinPlaceholder: '4 位 PIN',
   pinVerifyBtn: '解锁',
   pinResetBtn: '忘记 PIN？',

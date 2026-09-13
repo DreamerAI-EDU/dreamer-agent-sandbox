@@ -32,6 +32,8 @@ import type {
   SafetyEventsResponse,
   SafetyReviewResponse,
   StepUpResponse,
+  StudentLoginResponse,
+  StudentMeResponse,
   StudentsResponse,
   StudentCurriculumResponse,
   User,
@@ -117,6 +119,15 @@ export const api = {
   resetPassword: (token: string, password: string) =>
     request<{ ok: true }>('/api/auth/reset-password', { body: { token, password } }),
   logout: () => request<{ ok: true }>('/api/auth/logout', { body: {} }),
+  // Bridge-3d — student self-login. The kid_session cookie is HttpOnly and
+  // same-origin like auth_session; these three calls never mix identities.
+  studentLogin: (joinCode: string, pin: string) =>
+    request<StudentLoginResponse>('/api/student/login', {
+      body: { join_code: joinCode, pin },
+    }),
+  studentMe: () => request<StudentMeResponse>('/api/student/me'),
+  studentLogout: () =>
+    request<{ ok: true }>('/api/student/logout', { body: {} }),
   register: (inviteCode: string, email: string, password: string) =>
     request<RegisterResponse>('/api/auth/register', {
       body: { invite_code: inviteCode, email, password },

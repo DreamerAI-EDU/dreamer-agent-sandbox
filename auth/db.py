@@ -149,6 +149,31 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
 );
 
 CREATE INDEX IF NOT EXISTS idx_password_reset_user ON password_reset_tokens(user_id, expires_at);
+
+-- Bridge-3d: student self-login (join code + PIN, no email). Canonical DDL
+-- lives in migrations/phase8d_student_login.sql. A kid has no users row, so
+-- student_sessions is an independent opaque-token store; student_login_locks
+-- is a separate 5-strike/10-minute scope counter that never touches the
+-- locked 10/1 pin-verify contract on students.failed_pin_count.
+CREATE TABLE IF NOT EXISTS student_sessions (
+    id         TEXT PRIMARY KEY,
+    student_id TEXT NOT NULL REFERENCES students(id),
+    expires_at TEXT NOT NULL,
+    created_ip TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_student_sessions_student
+    ON student_sessions(student_id, expires_at);
+CREATE INDEX IF NOT EXISTS idx_student_sessions_expires
+    ON student_sessions(expires_at);
+
+CREATE TABLE IF NOT EXISTS student_login_locks (
+    scope        TEXT PRIMARY KEY,
+    failed_count INTEGER NOT NULL DEFAULT 0,
+    locked_until TEXT,
+    updated_at   TEXT NOT NULL
+);
 """
 
 

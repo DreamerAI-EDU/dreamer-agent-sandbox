@@ -43,6 +43,7 @@ from . import curriculum as curriculum_mod
 from . import db
 from . import reports as reports_mod
 from . import safety as safety_mod
+from . import student_auth as student_auth_mod
 from . import students as students_mod
 from .email import send_reset_email, send_verification_email
 from .security import (
@@ -80,6 +81,11 @@ _ERR_INVALID = {"error": "請求無效"}
 _ERR_INVITE_INVALID = {"error": "連結無效或已過期"}
 _ERR_LOCKED = {"error": "嘗試次數過多，請稍後再試"}
 _ERR_FORBIDDEN = {"error": "無權操作"}
+# Bridge-3d — student self-login. One wording for every failure (unknown
+# join code / wrong PIN / malformed PIN / ambiguous): the body must never
+# tell the caller which step failed.
+_ERR_STUDENT_LOGIN = {"error": "班級代碼或 PIN 不正確"}
+_ERR_STUDENT_AUTH = {"error": "請先登入"}
 _ERR_STEP_UP = {"error": "需要重新驗證密碼"}
 _ERR_NOTHING_TO_WITHDRAW = {"error": "未有可撤回嘅同意紀錄"}
 _ERR_PRIVACY_REQUIRED = {"error": "必須同意私隱政策先可以繼續"}
@@ -151,6 +157,9 @@ async def csrf_guard(request: web.Request, handler):
             or path.startswith("/api/consent/")
             or path.startswith("/api/classes")
             or path.startswith("/api/students")
+            # Bridge-3d kid console: login / logout are SPA POSTs and must
+            # carry the custom header like every other auth POST.
+            or path.startswith("/api/student/")
             or path.startswith("/api/teacher/")
             or path == "/api/invites"
             # The parent 1-click confirm link is opened from an email, not
@@ -2408,6 +2417,112 @@ async def handle_parent_curriculum(request: web.Request) -> web.Response:
 
 
 # ---------------------------------------------------------------------------
+# Bridge-3d — student self-login (join code + PIN; no email, no users row)
+# ---------------------------------------------------------------------------
+
+def _student_session_student(request: web.Request):
+    """Resolve the kid session cookie to a students row, else None."""
+    token = request.cookies.get(student_auth_mod.STUDENT_SESSION_COOKIE)
+    if not token:
+        return None
+    return student_auth_mod.get_session_student(token)
+
+
+async def handle_student_login(request: web.Request) -> web.Response:
+    """POST /api/student/login {join_code, pin} → kid_session cookie.
+
+    Every rejection that is not a lockout returns the SAME 401 body and is
+    logged as a WARNING with the reason kept server-side, so the response
+    can never be used to probe whether a join code exists or which student
+    matched. The 5-strike / 10-minute lock is scoped to the normalised
+    join code (auth/student_auth.py).
+    """
+    payload = await _read_json(request)
+    if payload is None:
+        _log_security_warning(
+            "student_login_failed",
+            user_id="anonymous",
+            detail="student login rejected: unreadable body",
+        )
+        return web.json_response(_ERR_STUDENT_LOGIN, status=401)
+
+    code = student_auth_mod.normalise_join_code(payload.get("join_code"))
+    result = student_auth_mod.login(payload.get("join_code"), payload.get("pin"))
+
+    if not result["ok"]:
+        if result["reason"] == "locked":
+            _log_security_warning(
+                "student_login_locked",
+                user_id="anonymous",
+                target_id=code or None,
+                detail=(
+                    "student login refused: join-code scope locked "
+                    f"({student_auth_mod.STUDENT_LOGIN_MAX_FAILURES} strikes / "
+                    f"{student_auth_mod.STUDENT_LOGIN_LOCK_MINUTES} min)"
+                ),
+            )
+            return web.json_response(_ERR_LOCKED, status=429)
+        _log_security_warning(
+            "student_login_failed",
+            user_id="anonymous",
+            target_id=code or None,
+            detail=f"student login rejected: reason={result['reason']}",
+        )
+        return web.json_response(_ERR_STUDENT_LOGIN, status=401)
+
+    student = result["student"]
+    token, _expires = student_auth_mod.create_session(
+        student_id=student["id"], created_ip=_client_ip(request)
+    )
+    consent.write_audit_log(
+        {
+            "timestamp": _now_iso(),
+            "level": "INFO",
+            "event": "student_login_success",
+            "user_id": f"student:{_mask_student_id(student['id'])}",
+            "target_id": _mask_student_id(student["id"]),
+            "message": "student self-login via join code + PIN",
+        }
+    )
+
+    resp = web.json_response(
+        {"ok": True, **student_auth_mod.student_home(student["id"])}
+    )
+    resp.set_cookie(
+        student_auth_mod.STUDENT_SESSION_COOKIE,
+        token,
+        max_age=student_auth_mod.STUDENT_SESSION_DAYS * 24 * 3600,
+        httponly=True,
+        secure=True,
+        samesite="Lax",
+    )
+    return resp
+
+
+async def handle_student_logout(request: web.Request) -> web.Response:
+    """POST /api/student/logout — drop the kid session (idempotent)."""
+    token = request.cookies.get(student_auth_mod.STUDENT_SESSION_COOKIE)
+    if token:
+        student_auth_mod.delete_session(token)
+    resp = web.json_response({"ok": True})
+    resp.del_cookie(
+        student_auth_mod.STUDENT_SESSION_COOKIE,
+        httponly=True,
+        secure=True,
+        samesite="Lax",
+    )
+    return resp
+
+
+async def handle_student_me(request: web.Request) -> web.Response:
+    """GET /api/student/me — own learning space header + Week X / 8 badge."""
+    student = _student_session_student(request)
+    if student is None:
+        return web.json_response(_ERR_STUDENT_AUTH, status=401)
+    return web.json_response(student_auth_mod.student_home(student["id"]))
+
+
+# ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
 
@@ -2485,6 +2600,14 @@ def build_app() -> web.Application:
     app.router.add_get(
         "/api/student/curriculum", handle_student_curriculum
     )
+    # Bridge-3d — student self-login (join code + PIN). The kid console is a
+    # third identity with no email: /api/student/login mints a separate
+    # kid_session cookie; /me and /logout read it. GET /me and POST /login
+    # never accept an acting-parent parameter — a kid session can only ever
+    # see itself.
+    app.router.add_post("/api/student/login", handle_student_login)
+    app.router.add_post("/api/student/logout", handle_student_logout)
+    app.router.add_get("/api/student/me", handle_student_me)
     # Bridge-3b — parent 8-week course map (same acting-parent gate, one child
     # per parent; the family-facing reading of the same state machine).
     app.router.add_get("/api/parent/curriculum", handle_parent_curriculum)

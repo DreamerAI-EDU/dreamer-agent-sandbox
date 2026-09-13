@@ -128,6 +128,12 @@ export function LoginPage() {
               {copy.forgotTitle}
             </Link>
           </p>
+          {/* Bridge-3d — students sign in with a class code, not an email */}
+          <p className="mt-2 text-center text-xs">
+            <Link to="/student/login" className="text-black/50 underline-offset-2 hover:underline">
+              {copy.kidLoginEntry}
+            </Link>
+          </p>
         </div>
       </div>
     </div>

@@ -22,6 +22,41 @@ export interface LoginResponse {
   missing_consent: string[];
 }
 
+// Bridge-3d — student self-login (join code + PIN). A student is a THIRD
+// identity: no email, no users row, so it never appears in `Role` above and
+// never rides on the parent/teacher auth_session.
+export interface KidStudent {
+  id: string; // 8-char mask prefix — full ids never reach the frontend
+  first_name: string;
+  age_band: string;
+  lang_code: string;
+}
+
+export interface KidClass {
+  id: string;
+  name: string;
+}
+
+export interface KidBadge {
+  state: 'none' | 'active' | 'completed';
+  week_index: number | null;
+  total_weeks: number;
+  unit_title: string;
+}
+
+export interface StudentLoginResponse {
+  ok: true;
+  student: KidStudent;
+  class: KidClass | null;
+  badge: KidBadge;
+}
+
+export interface StudentMeResponse {
+  student: KidStudent | null;
+  class: KidClass | null;
+  badge: KidBadge;
+}
+
 // W3-C teacher console
 export interface ClassSummary {
   id: string;

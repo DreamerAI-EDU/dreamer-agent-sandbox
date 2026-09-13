@@ -26,6 +26,19 @@ export interface Copy {
   loginBtn: string;
   loginError: string;
   loginNote: string;
+  // Bridge-3d — student self-login (join code + PIN).
+  kidLoginTitle: string;
+  kidLoginSubtitle: string;
+  kidJoinCode: string;
+  kidPin: string;
+  kidLoginBtn: string;
+  kidLoginNote: string;
+  kidLoginEntry: string;
+  kidHomeTitle: string;
+  kidLogout: string;
+  kidWeek: string;
+  kidNoCourse: string;
+  kidBackToStaff: string;
   // forgot-password (W4 PR-D)
   forgotTitle: string;
   forgotSubtitle: string;
@@ -235,6 +248,18 @@ export const copyEn: Copy = {
   loginBtn: 'Sign in',
   loginError: 'Unable to sign in',
   loginNote: 'Wrong password too many times will lock the account temporarily.',
+  kidLoginTitle: 'Student sign in',
+  kidLoginSubtitle: 'Use the class code and PIN your teacher gave you.',
+  kidJoinCode: 'Class code',
+  kidPin: 'PIN',
+  kidLoginBtn: 'Enter learning space',
+  kidLoginNote: 'If it does not work, ask your teacher or parent for help.',
+  kidLoginEntry: 'Student? Sign in with your class code',
+  kidHomeTitle: 'My learning space',
+  kidLogout: 'Sign out',
+  kidWeek: 'Week',
+  kidNoCourse: 'No course yet — your teacher will start one soon.',
+  kidBackToStaff: 'Teacher / parent sign in',
   forgotTitle: 'Reset your password',
   forgotSubtitle: 'Enter your account email and we will send you a reset link.',
   forgotBtn: 'Send reset link',
@@ -438,6 +463,18 @@ const copyHk: Copy = {
   loginBtn: '登入',
   loginError: '無法登入',
   loginNote: '密碼錯太多次會暫時鎖定帳號。',
+  kidLoginTitle: '學生登入',
+  kidLoginSubtitle: '用老師俾你嘅班級代碼同 PIN 登入。',
+  kidJoinCode: '班級代碼',
+  kidPin: 'PIN',
+  kidLoginBtn: '入學習空間',
+  kidLoginNote: '登入唔到就問老師或者家長。',
+  kidLoginEntry: '學生？用班級代碼登入',
+  kidHomeTitle: '我嘅學習空間',
+  kidLogout: '登出',
+  kidWeek: '第',
+  kidNoCourse: '未有課程 — 老師開始之後就會見到。',
+  kidBackToStaff: '老師 / 家長登入',
   forgotTitle: '重設密碼',
   forgotSubtitle: '輸入帳號 email，我哋會寄重設連結俾你。',
   forgotBtn: '寄出重設連結',
@@ -639,6 +676,18 @@ const copyCn: Copy = {
   loginBtn: '登录',
   loginError: '无法登录',
   loginNote: '密码错误次数过多会暂时锁定账号。',
+  kidLoginTitle: '学生登录',
+  kidLoginSubtitle: '用老师给你的班级代码和 PIN 登录。',
+  kidJoinCode: '班级代码',
+  kidPin: 'PIN',
+  kidLoginBtn: '进入学习空间',
+  kidLoginNote: '登录不了就问老师或家长。',
+  kidLoginEntry: '学生？用班级代码登录',
+  kidHomeTitle: '我的学习空间',
+  kidLogout: '退出登录',
+  kidWeek: '第',
+  kidNoCourse: '还没有课程 — 老师开始后就会看到。',
+  kidBackToStaff: '老师 / 家长登录',
   forgotTitle: '重置密码',
   forgotSubtitle: '输入账号邮箱，我们会发送重置链接给你。',
   forgotBtn: '发送重置链接',

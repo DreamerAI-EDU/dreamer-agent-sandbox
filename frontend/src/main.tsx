@@ -16,6 +16,8 @@ import { TeacherDashboard } from './pages/TeacherDashboard'
 import { TeacherRegisterPage } from './pages/TeacherRegisterPage'
 import ChatPage from './pages/ChatPage'
 import KidPortfolioPage from './pages/KidPortfolioPage'
+import { StudentLoginPage } from './pages/StudentLoginPage'
+import { StudentHomePage } from './pages/StudentHomePage'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
@@ -34,6 +36,9 @@ createRoot(document.getElementById('root')!).render(
           <Route path="/teacher/register" element={<TeacherRegisterPage />} />
           <Route path="/chat" element={<ChatPage />} />
           <Route path="/portfolio" element={<KidPortfolioPage />} />
+          {/* Bridge-3d — student self-login (join code + PIN) */}
+          <Route path="/student/login" element={<StudentLoginPage />} />
+          <Route path="/student" element={<StudentHomePage />} />
           <Route path="*" element={<RootGate />} />
         </Routes>
       </LanguageProvider>

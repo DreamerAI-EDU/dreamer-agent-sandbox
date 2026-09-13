@@ -174,6 +174,22 @@ CREATE TABLE IF NOT EXISTS student_login_locks (
     locked_until TEXT,
     updated_at   TEXT NOT NULL
 );
+
+-- Bridge-3e: payment mark-paid (boss work order 2026-09-13, decision ②).
+-- Canonical DDL lives in migrations/phase8e_payments.sql. Additive and
+-- brand-new: carried by _DDL means ensure_schema() creates it on any DB, old
+-- or fresh — no ALTER, so the deploy window needs no extra step. One row per
+-- student (PRIMARY KEY) holding the CURRENT status; a flip is an UPDATE of
+-- that row and history lives in the append-only payment_marked audit events.
+CREATE TABLE IF NOT EXISTS payments (
+    student_id TEXT PRIMARY KEY REFERENCES students(id),
+    status     TEXT NOT NULL DEFAULT 'pending',   -- 'pending' | 'paid'
+    marked_by  TEXT,                              -- admin users.id; NULL = never marked
+    marked_at  TEXT,                              -- ISO timestamp of the last flip
+    note       TEXT                               -- optional operator note
+);
+
+CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);
 """
 
 

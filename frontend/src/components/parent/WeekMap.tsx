@@ -88,11 +88,28 @@ export function WeekMap({ studentId }: { studentId: string }) {
             {data?.course_title ? data.course_title : copy.weekMapSubtitle}
           </p>
         </div>
-        {data && data.state !== 'none' && data.current_week !== null && (
-          <span className="rounded-full border border-black/10 bg-[#f6f4ef] px-3 py-1 text-xs font-medium text-[#00023D]">
-            {copy.weekMapCurrentWeek} {data.current_week} / {data.total_weeks}
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          {/* Bridge-3e — payment badge; the machine value comes from the
+              backend, only the wording is localized here. */}
+          {data && (
+            <span
+              className={`rounded-full px-3 py-1 text-xs font-medium ring-1 ${
+                data.payment_status === 'paid'
+                  ? 'bg-emerald-50 text-emerald-700 ring-emerald-600/20'
+                  : 'bg-amber-50 text-amber-700 ring-amber-600/20'
+              }`}
+            >
+              {data.payment_status === 'paid'
+                ? copy.paymentStatusPaid
+                : copy.paymentStatusPending}
+            </span>
+          )}
+          {data && data.state !== 'none' && data.current_week !== null && (
+            <span className="rounded-full border border-black/10 bg-[#f6f4ef] px-3 py-1 text-xs font-medium text-[#00023D]">
+              {copy.weekMapCurrentWeek} {data.current_week} / {data.total_weeks}
+            </span>
+          )}
+        </div>
       </div>
 
       {loading && !data && <p className="mt-4 text-xs text-black/40">{copy.loading}</p>}

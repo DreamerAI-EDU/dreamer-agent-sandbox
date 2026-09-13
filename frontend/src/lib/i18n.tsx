@@ -182,6 +182,17 @@ export interface Copy {
   weekMapStatusActive: string;
   weekMapStatusCompleted: string;
   weekMapLegend: string;
+  // Bridge-3e — payment badge (parent console) + admin reconciliation section
+  paymentStatusPending: string;
+  paymentStatusPaid: string;
+  paymentSectionTitle: string;
+  paymentSectionSubtitle: string;
+  paymentFilterAll: string;
+  paymentMarkPaid: string;
+  paymentMarkPending: string;
+  paymentEmpty: string;
+  paymentNotePlaceholder: string;
+  paymentMarkedAt: string;
   // Bridge-3c — Teacher Console: open a class / mount the 8-week course
   newClassBtn: string;
   newClassTitle: string;
@@ -393,6 +404,17 @@ export const copyEn: Copy = {
   weekMapStatusActive: 'In progress',
   weekMapStatusCompleted: 'Completed',
   weekMapLegend: 'Locked · In progress · Completed',
+  // Bridge-3e — payment badge + admin reconciliation section
+  paymentStatusPending: 'Payment due',
+  paymentStatusPaid: 'Paid',
+  paymentSectionTitle: 'Payments',
+  paymentSectionSubtitle: 'Mark a student as paid once the transfer arrives.',
+  paymentFilterAll: 'All',
+  paymentMarkPaid: 'Mark paid',
+  paymentMarkPending: 'Mark pending',
+  paymentEmpty: 'No students yet.',
+  paymentNotePlaceholder: 'Note (optional)',
+  paymentMarkedAt: 'Marked',
   // Bridge-3c — Teacher Console: open a class / mount the 8-week course
   newClassBtn: 'New class',
   newClassTitle: 'New class',
@@ -607,6 +629,17 @@ const copyHk: Copy = {
   weekMapStatusActive: '進行中',
   weekMapStatusCompleted: '已完成',
   weekMapLegend: '未開啟 · 進行中 · 已完成',
+  // Bridge-3e — 付款狀態徽章 + 管理員對數區
+  paymentStatusPending: '待付',
+  paymentStatusPaid: '已付',
+  paymentSectionTitle: '付款對數',
+  paymentSectionSubtitle: '收到轉賬之後，喺呢度標記學生已付。',
+  paymentFilterAll: '全部',
+  paymentMarkPaid: '標記已付',
+  paymentMarkPending: '改回待付',
+  paymentEmpty: '暫時未有學生。',
+  paymentNotePlaceholder: '備註（可選）',
+  paymentMarkedAt: '標記時間',
   // Bridge-3c — 老師工作台：開班 / 掛載 8 週課程
   newClassBtn: '開新班',
   newClassTitle: '開新班',
@@ -820,6 +853,17 @@ const copyCn: Copy = {
   weekMapStatusActive: '进行中',
   weekMapStatusCompleted: '已完成',
   weekMapLegend: '未开启 · 进行中 · 已完成',
+  // Bridge-3e — 付款状态徽章 + 管理员对账区
+  paymentStatusPending: '待付',
+  paymentStatusPaid: '已付',
+  paymentSectionTitle: '付款对账',
+  paymentSectionSubtitle: '收到转账后，在这里标记学生已付。',
+  paymentFilterAll: '全部',
+  paymentMarkPaid: '标记已付',
+  paymentMarkPending: '改回待付',
+  paymentEmpty: '暂时还没有学生。',
+  paymentNotePlaceholder: '备注（可选）',
+  paymentMarkedAt: '标记时间',
   // Bridge-3c — 老师工作台：开新班 / 挂载 8 周课程
   newClassBtn: '新建班级',
   newClassTitle: '新建班级',

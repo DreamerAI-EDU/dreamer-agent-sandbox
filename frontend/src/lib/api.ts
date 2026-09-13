@@ -10,6 +10,8 @@
 // the server's `error` field is shown verbatim.
 
 import type {
+  AdminPaymentMarkResponse,
+  AdminPaymentsResponse,
   AdvanceWeekResponse,
   ClassCurriculumResponse,
   ClassPendingResponse,
@@ -25,6 +27,7 @@ import type {
   MeResponse,
   MountCurriculumResponse,
   ParentCurriculumResponse,
+  PaymentStatus,
   PinResetResponse,
   PinVerifyResponse,
   RegisterResponse,
@@ -283,5 +286,25 @@ export const api = {
   parentShareCard: (studentId: string, itemId: string) =>
     request<ShareCard>(
       `/api/parent/portfolio/${encodeURIComponent(studentId)}/share_card/${encodeURIComponent(itemId)}`,
+    ),
+
+  // Bridge-3e — payment reconciliation (admin only; the backend answers 401
+  // anonymous, 403 teacher/parent/student). The mark endpoints flip ONE
+  // student row and write the `payment_marked` audit line server-side; the
+  // console never sends a status itself — only which student, plus an
+  // optional short note. Repeat marks are idempotent (200, still one row).
+  adminPayments: (status?: PaymentStatus) =>
+    request<AdminPaymentsResponse>(
+      `/api/admin/payments${status ? `?status=${encodeURIComponent(status)}` : ''}`,
+    ),
+  adminMarkPaid: (studentId: string, note?: string) =>
+    request<AdminPaymentMarkResponse>(
+      `/api/admin/payments/${encodeURIComponent(studentId)}/mark-paid`,
+      { body: note ? { note } : {} },
+    ),
+  adminMarkPending: (studentId: string) =>
+    request<AdminPaymentMarkResponse>(
+      `/api/admin/payments/${encodeURIComponent(studentId)}/mark-pending`,
+      { body: {} },
     ),
 };

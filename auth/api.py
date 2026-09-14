@@ -1235,14 +1235,25 @@ async def handle_pin_reset(request: web.Request) -> web.Response:
         return web.json_response(_ERR_INVALID, status=400)
     pin, pin_hash = _resolve_pin(payload)
 
-    students_mod.set_pin(student_id, pin_hash)
+    # Write by the resolved full student id. {id} may be an 8-char mask
+    # prefix, and set_pin(mask, ...) matches zero rows while still returning
+    # a 200 — the PIN would silently stay unchanged.
+    updated = students_mod.set_pin(student["id"], pin_hash)
+    if updated == 0:
+        _log_security_warning(
+            "pin_reset_no_row",
+            user_id=user["id"],
+            target_id=student["id"],
+            detail="set_pin matched no student row after a successful resolve",
+        )
+        return web.json_response(_ERR_INTERNAL, status=500)
     consent.write_audit_log(
         {
             "timestamp": _now_iso(),
             "level": "INFO",
             "event": "pin_reset",
             "user_id": user["id"],
-            "student_id": student_id,
+            "student_id": student["id"],
         }
     )
     resp = {"ok": True}
@@ -2427,6 +2438,7 @@ async def handle_parent_curriculum(request: web.Request) -> web.Response:
 # ---------------------------------------------------------------------------
 
 _ERR_STUDENT_NOT_FOUND = {"error": "學生唔存在"}
+_ERR_INTERNAL = {"error": "系統錯誤"}
 _PAYMENT_NOTE_MAX = 500
 
 

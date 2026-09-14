@@ -129,11 +129,14 @@ export function LoginPage() {
             </Link>
           </p>
           {/* Bridge-3d — students sign in with a class code, not an email */}
-          <p className="mt-2 text-center text-xs">
-            <Link to="/student/login" className="text-black/50 underline-offset-2 hover:underline">
+          <div className="mt-6 border-t border-black/5 pt-5">
+            <Link
+              to="/student/login"
+              className="block w-full rounded-lg border border-black/15 bg-white py-2.5 text-center text-sm font-medium text-black transition hover:bg-black/[0.04]"
+            >
               {copy.kidLoginEntry}
             </Link>
-          </p>
+          </div>
         </div>
       </div>
     </div>

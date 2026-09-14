@@ -27,11 +27,16 @@ Gate order (spec v1.4 §1.1, same state sources as pin-verify):
 On success the request upgrades and frames relay bidirectionally to the
 DeepTutor unified endpoint (/api/v1/ws). One chat connection = one
 upstream connection; server-assigned session ids are relayed untouched.
+P2 — every turn-bearing frame (type = message / start_turn) is re-stamped
+with the persona derived from the student's DB `age_band` (the band does
+not travel in any client payload). A student without a band is relayed
+unchanged, so the engine's empty-persona behaviour stays the fallback.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from pathlib import Path
@@ -125,6 +130,84 @@ async def _pump(src, dst) -> None:
         async for msg in src:
             if msg.type == aiohttp.WSMsgType.TEXT:
                 await dst.send_str(msg.data)
+            elif msg.type == aiohttp.WSMsgType.BINARY:
+                await dst.send_bytes(msg.data)
+            elif msg.type == aiohttp.WSMsgType.ERROR:
+                logger.warning(
+                    "ws_chat relay source error: %s", src.exception()
+                )
+                break
+            else:  # CLOSE / CLOSING / CLOSED
+                break
+    except (aiohttp.ClientConnectionError, ConnectionResetError):
+        pass
+    finally:
+        await _close_quietly(dst)
+
+
+# ---------------------------------------------------------------------------
+# P2 — age-band persona injection
+# ---------------------------------------------------------------------------
+
+#: students.age_band -> DeepTutor persona slug (deeptutor/personas/<slug>/)
+_PERSONA_BY_BAND = {
+    "p1-p3": "dibi-p1-p3",
+    "p4-p6": "dibi-p4-p6",
+    "s1-s3": "dibi-s1-s3",
+}
+
+#: frames that open or carry a turn (match the unified_ws dispatch table)
+_TURN_FRAME_TYPES = ("message", "start_turn")
+
+
+def _row_get(row, key):
+    """sqlite3.Row-safe accessor (Row raises rather than returning None)."""
+    try:
+        return row[key]
+    except (IndexError, KeyError, TypeError):
+        return None
+
+
+def _persona_for_student(student) -> Optional[str]:
+    """Resolve the persona slug from the student row resolved by the gate.
+
+    age_band is read from the DB row — never from the query string or a
+    client frame — so a tampered request cannot move a student onto
+    another band's persona. Unknown / missing band -> None (no injection).
+    """
+    band = _row_get(student, "age_band")
+    if not band:
+        return None
+    return _PERSONA_BY_BAND.get(str(band).strip().lower().replace("\u2013", "-"))
+
+
+def _inject_persona(raw: str, persona: Optional[str]) -> str:
+    """Return the frame unchanged unless it is a turn frame needing persona."""
+    if not persona:
+        return raw
+    try:
+        frame = json.loads(raw)
+    except (TypeError, ValueError):
+        return raw  # not JSON — forward verbatim
+    if not isinstance(frame, dict) or frame.get("type") not in _TURN_FRAME_TYPES:
+        return raw
+    if frame.get("persona") == persona:
+        return raw
+    frame["persona"] = persona
+    return json.dumps(frame, ensure_ascii=False)
+
+
+async def _pump_client_to_upstream(src, dst, persona: Optional[str]) -> None:
+    """Client -> upstream pump with the persona re-stamped on each turn.
+
+    DeepTutor loads the persona per turn and persists it as a session
+    preference, so re-stamping is idempotent. Binary / non-JSON frames are
+    forwarded verbatim.
+    """
+    try:
+        async for msg in src:
+            if msg.type == aiohttp.WSMsgType.TEXT:
+                await dst.send_str(_inject_persona(msg.data, persona))
             elif msg.type == aiohttp.WSMsgType.BINARY:
                 await dst.send_bytes(msg.data)
             elif msg.type == aiohttp.WSMsgType.ERROR:
@@ -259,7 +342,9 @@ async def handle_ws_chat(request: web.Request) -> web.Response:
                 return ws
             try:
                 await asyncio.gather(
-                    _pump(ws, upstream),
+                    _pump_client_to_upstream(
+                        ws, upstream, _persona_for_student(student)
+                    ),
                     _pump(upstream, ws),
                 )
             finally:

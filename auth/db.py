@@ -190,6 +190,43 @@ CREATE TABLE IF NOT EXISTS payments (
 );
 
 CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);
+
+-- W3-C P3: WS chat relay audit (boss work order 2026-09-14). Canonical DDL
+-- lives in migrations/phase8f_ws_chat_relay_audit.sql. Additive and brand-new:
+-- carried by _DDL means ensure_schema() creates it on any DB, old or fresh —
+-- no ALTER, so the deploy window needs no extra step. Append-only is enforced
+-- in the DB by the two triggers below (a relay audit row is evidence, never an
+-- editable record); retention/pruning scripts must skip this table.
+CREATE TABLE IF NOT EXISTS ws_chat_relay_audit (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    occurred_at    TEXT    NOT NULL,
+    event          TEXT    NOT NULL,
+    session_id     TEXT,
+    turn_id        TEXT,
+    student_mask   TEXT,
+    attempt        INTEGER,
+    final_status   TEXT,
+    upstream_error TEXT,
+    detail         TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_ws_relay_audit_session
+    ON ws_chat_relay_audit(session_id);
+
+CREATE INDEX IF NOT EXISTS idx_ws_relay_audit_event
+    ON ws_chat_relay_audit(event);
+
+CREATE TRIGGER IF NOT EXISTS ws_chat_relay_audit_no_update
+BEFORE UPDATE ON ws_chat_relay_audit
+BEGIN
+    SELECT RAISE(ABORT, 'ws_chat_relay_audit is append-only (no UPDATE)');
+END;
+
+CREATE TRIGGER IF NOT EXISTS ws_chat_relay_audit_no_delete
+BEFORE DELETE ON ws_chat_relay_audit
+BEGIN
+    SELECT RAISE(ABORT, 'ws_chat_relay_audit is append-only (no DELETE)');
+END;
 """
 
 

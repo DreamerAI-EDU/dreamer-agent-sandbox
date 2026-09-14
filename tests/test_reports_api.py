@@ -551,10 +551,23 @@ async def test_teacher_student_progress_withdrawn_consent(world, client):
 
 
 @pytest.mark.asyncio
-async def test_teacher_and_parent_report_same_source_parity(world, client):
+async def test_teacher_and_parent_report_same_source_parity(world, client, monkeypatch):
     """Both lenses must render byte-identical canonical content for the same
     student/period, differing only in the embedded student_id (full vs mask).
+
+    The journey window end is stamped from the wall clock
+    (``agents.parent_report_agent._now_iso`` truncates to whole seconds), so the
+    two lenses are only byte-comparable when both requests observe the same
+    instant. Freeze that clock here: without it the test flakes whenever the
+    teacher call and the parent call straddle a second boundary
+    (seen on CI run 34826933544: period.to 09:16:36Z vs 09:16:37Z).
     """
+    import agents.parent_report_agent as parent_report_agent
+
+    monkeypatch.setattr(
+        parent_report_agent, "_now_iso", lambda: "2026-09-14T09:16:36Z"
+    )
+
     teacher = await client.get(
         "/api/teacher/student/" + SID_A + "/progress",
         params={"period": "journey"},

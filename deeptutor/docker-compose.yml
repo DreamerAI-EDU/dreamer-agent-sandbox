@@ -24,6 +24,11 @@ services:
       - ./kb_runtime:/app/data/knowledge_bases
       # Model catalog (OpenRouter profile, read-only)
       - ./settings:/app/data/user/settings
+      # P1: Dibi self-identity prompt overrides (read-only, P1 PR)
+      - ./prompt_overrides/en/agentic_chat.yaml:/app/deeptutor/agents/chat/prompts/en/agentic_chat.yaml:ro
+      - ./prompt_overrides/zh/agentic_chat.yaml:/app/deeptutor/agents/chat/prompts/zh/agentic_chat.yaml:ro
+      - ./prompt_overrides/en/chat_agent.yaml:/app/deeptutor/agents/chat/prompts/en/chat_agent.yaml:ro
+      - ./prompt_overrides/zh/chat_agent.yaml:/app/deeptutor/agents/chat/prompts/zh/chat_agent.yaml:ro
       # Ephemeral workspaces (per-student, auto-cleaned after 24h)
       - deeptutor_workspaces:/app/data/workspaces
       # Model weights cache

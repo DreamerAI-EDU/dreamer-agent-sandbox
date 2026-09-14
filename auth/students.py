@@ -274,17 +274,24 @@ def clear_pin_failures(student_id: str) -> None:
         conn.close()
 
 
-def set_pin(student_id: str, pin_hash: str) -> None:
+def set_pin(student_id: str, pin_hash: str) -> int:
     """Set a new PIN hash; immediately usable and unlocks the student
-    (clears pin_lock_until + failure counter)."""
+    (clears pin_lock_until + failure counter).
+
+    Returns the number of rows updated. ``student_id`` must be the full
+    resolved students.id: callers that hold an 8-char mask prefix have to
+    resolve it first, otherwise the UPDATE matches zero rows — the return
+    value makes that visible instead of a silent success.
+    """
     db.ensure_schema()
     conn = db.connect()
     try:
-        conn.execute(
+        cur = conn.execute(
             "UPDATE students SET pin_hash = ?, pin_lock_until = NULL, "
             "failed_pin_count = 0 WHERE id = ?",
             (pin_hash, student_id),
         )
         conn.commit()
+        return int(cur.rowcount or 0)
     finally:
         conn.close()

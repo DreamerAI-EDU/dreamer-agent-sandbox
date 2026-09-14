@@ -547,15 +547,36 @@ async def test_pin_verify_mask_prefix_unique_match(client, fresh_invite):
     )
     assert ok.status == 200, await ok.text()
 
-    # The same prefix also works for pin-reset.
+    # The same prefix also works for pin-reset — and the reset must actually
+    # land. Regression: set_pin() used to be called with the raw {id} path
+    # segment (the 8-char mask), so the UPDATE matched zero rows while the
+    # route still returned 200 and the PIN stayed unchanged.
+    hash_before = _student_row(student_id)[6]
+
     reset = await client.post(
         f"/api/students/{mask}/pin-reset",
         json={"pin": "2468"},
         headers={**HEADERS, "Cookie": f"auth_session={token}"},
     )
     assert reset.status == 200, await reset.text()
+
     row = _student_row(student_id)
     assert row[6].startswith("$argon2id$")
+    assert row[6] != hash_before, "pin-reset via mask prefix did not change pin_hash"
+
+    # The new PIN is live; the old one is gone.
+    new_pin = await client.post(
+        f"/api/students/{mask}/pin-verify",
+        json={"pin": "2468"},
+        headers={**HEADERS, "Cookie": f"auth_session={token}"},
+    )
+    assert new_pin.status == 200, await new_pin.text()
+    old_pin = await client.post(
+        f"/api/students/{mask}/pin-verify",
+        json={"pin": "1357"},
+        headers={**HEADERS, "Cookie": f"auth_session={token}"},
+    )
+    assert old_pin.status == 401, await old_pin.text()
 
 
 @pytest.mark.asyncio
@@ -614,3 +635,25 @@ async def test_pin_verify_mask_prefix_ambiguous_400(client, fresh_invite):
     )
     assert resp.status == 400
     assert (await resp.json())["error"] == "請求無效"
+
+
+# ---------------------------------------------------------------------------
+# 14. set_pin contract — a non-matching id reports 0 rows, never a fake success
+#     (the guard handle_pin_reset relies on; regression for the mask-prefix bug)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_set_pin_reports_rowcount_and_rejects_unknown_id(client, fresh_invite):
+    """set_pin() returns the updated row count: 0 for an unknown id, 1 for the
+    resolved full id, and the hash only changes on the matching write."""
+    _, email, pw = _create_parent_user()
+    token = await _login_parent(client, email, pw)
+    student_id = await _create_student_via_api(client, token, pin="1357")
+
+    hash_before = _student_row(student_id)[6]
+
+    assert students_mod.set_pin(str(uuid.uuid4()), students_mod.hash_pin("2468")) == 0
+    assert _student_row(student_id)[6] == hash_before
+
+    assert students_mod.set_pin(student_id, students_mod.hash_pin("9753")) == 1
+    assert _student_row(student_id)[6] != hash_before

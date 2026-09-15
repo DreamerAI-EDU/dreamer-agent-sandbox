@@ -623,6 +623,7 @@ class _ScriptedUpstream:
 
     def __init__(self) -> None:
         self.connections = 0
+        self.disconnects = 0  # sockets the relay dropped (裁決 A evidence)
         self.frames: list[dict] = []  # {"conn", "raw", "frame"} in arrival order
         self.on_message = _noop_message
 
@@ -648,6 +649,9 @@ async def p3_upstream(monkeypatch):
                 await controller.on_message(ws, conn, len(controller.frames) - 1)
         except (aiohttp.ClientConnectionError, ConnectionResetError):
             pass
+        finally:
+            # the relay hung up on us (or the test tore the fixture down)
+            controller.disconnects += 1
         return ws
 
     app = aiohttp.web.Application()
@@ -694,6 +698,17 @@ async def _assert_quiet(ws, *, timeout: float = 0.6) -> None:
     """Assert nothing arrives — i.e. no hidden retry / no stray frame."""
     with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(ws.receive(), timeout=timeout)
+
+
+async def _assert_stopped_and_quiet(ws, *, timeout: float = 1.0) -> None:
+    """After a graceful stop the relay also drops the poisoned upstream.
+
+    裁決 A: no frame may follow the localized copy, and the child's leg must end
+    — the socket closing is the structural proof that this turn's leftovers
+    (late progress / late done / a second raw 429) have nowhere left to travel.
+    """
+    msg = await asyncio.wait_for(ws.receive(), timeout=timeout)
+    assert msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED), msg
 
 
 async def _wait_for(predicate, *, timeout: float = 3.0) -> bool:
@@ -823,7 +838,10 @@ async def test_p3_midstream_429_is_not_retried_and_never_silent(
     assert busy["content"] == ws_chat_mod._GRACEFUL_BUSY_COPY["zh-hk"]
     assert "429" not in json.dumps(busy)  # raw provider text never reaches the kid
 
-    await _assert_quiet(ws)  # no hidden retry after text is on screen
+    # no hidden retry after text is on screen — and (裁決 A) the poisoned
+    # upstream is dropped, so the child's leg ends instead of waiting for it
+    await _assert_stopped_and_quiet(ws)
+    assert await _wait_for(lambda: p3_upstream.disconnects >= 1)
     await ws.close()
     assert len(p3_upstream.frames) == 1
 
@@ -869,7 +887,10 @@ async def test_p3_non_rate_limit_error_is_not_retried_and_never_silent(
     assert events[0]["error_code"] == "upstream_error"
     assert events[0]["content"] == ws_chat_mod._UPSTREAM_UNAVAILABLE_COPY
     assert "500" not in json.dumps(events)  # raw text never reaches the kid
-    await _assert_quiet(ws)  # and nothing trails the stop message
+    # and nothing trails the stop message: the relay drops the poisoned
+    # upstream and hangs up (裁決 A)
+    await _assert_stopped_and_quiet(ws)
+    assert await _wait_for(lambda: p3_upstream.disconnects >= 1)
     await ws.close()
 
     assert len(p3_upstream.frames) == 1  # never re-sent: budget untouched
@@ -887,12 +908,15 @@ async def test_p3_non_rate_limit_error_is_not_retried_and_never_silent(
 async def test_p3_failed_turn_tail_never_reaches_the_child(
     client, p3_upstream, monkeypatch
 ):
-    """Condition 1: after the graceful stop, that turn's leftovers stay hidden.
+    """Condition 1 + 裁決 A: after the graceful stop nothing of that turn lives.
 
     The upstream keeps talking for a turn that has already failed — a progress
     frame, a second raw 429, a late ``done``. None of it may reach the child:
     the raw provider text is never shown, and the closed turn is not re-opened
-    behind the message. The child's next question still works.
+    behind the message. 裁決 A makes that structural — the stop drops the
+    poisoned upstream socket, so the leftovers have nowhere left to travel and
+    the child's leg ends instead of waiting for them. The child's next question
+    opens a fresh stream, which dials a fresh upstream.
     """
     session, student_id = _confirmed_trio()
     await _agree_chat(session, student_id)
@@ -913,21 +937,23 @@ async def test_p3_failed_turn_tail_never_reaches_the_child(
                     "session_id": sid,
                 }
             )
-            # the failed turn is not done with us: its tail follows
-            await ws.send_json(
-                {"type": "progress", "content": "階段", "session_id": sid}
-            )
-            await ws.send_json(
-                {
-                    "type": "error",
-                    "error_code": "upstream_error",
-                    "content": "429 Too Many Requests",
-                    "session_id": sid,
-                }
-            )
-            await ws.send_json(
-                {"type": "done", "turn_id": "turn-tail", "session_id": sid}
-            )
+            # the failed turn is not done with us: its tail follows. 裁決 A says
+            # the relay must have dropped this socket already — so the leftovers
+            # have nowhere left to travel, and our own sends start failing.
+            for _ in range(40):
+                await asyncio.sleep(0.05)
+                try:
+                    await ws.send_json(
+                        {"type": "progress", "content": "階段", "session_id": sid}
+                    )
+                except (ConnectionResetError, aiohttp.ClientConnectionError):
+                    break
+            with pytest.raises(
+                (ConnectionResetError, aiohttp.ClientConnectionError)
+            ):
+                await ws.send_json(
+                    {"type": "done", "turn_id": "turn-tail", "session_id": sid}
+                )
             return
         await ws.send_json(
             {"type": "content", "content": "第二答", "session_id": sid}
@@ -944,18 +970,26 @@ async def test_p3_failed_turn_tail_never_reaches_the_child(
     assert [e["type"] for e in events] == ["session", "content", "error"]
     assert events[2]["content"] == ws_chat_mod._GRACEFUL_BUSY_COPY["zh-hk"]
 
-    await _assert_quiet(ws)  # the tail (second 429, late done) stays hidden
-
-    await ws.send_json(
-        {"type": "message", "capability": "chat", "message": "再問一次"}
-    )
-    again = await _collect(ws, 3)
-    assert [e["type"] for e in again] == ["session", "content", "done"]
-    assert again[1]["content"] == "第二答"
-    assert "429" not in json.dumps(events + again)
+    # 裁決 A: the stop also drops the poisoned upstream — the tail has nowhere
+    # to travel, and the child's leg ends instead of waiting for it
+    await _assert_stopped_and_quiet(ws)
+    assert await _wait_for(lambda: p3_upstream.disconnects >= 1)
     await ws.close()
 
+    # the child asks again: a fresh stream, which dials a fresh upstream socket
+    again_ws = await _open_chat(client, session, student_id)
+    await again_ws.send_json(
+        {"type": "message", "capability": "chat", "message": "再問一次"}
+    )
+    again = await _collect(again_ws, 3)
+    assert [e["type"] for e in again] == ["session", "content", "done"]
+    assert again[1]["content"] == "第二答"
+    assert "429" not in json.dumps(events + again)  # raw text never reaches the kid
+    assert "階段" not in json.dumps(events + again)  # nor the failed turn's tail
+    await again_ws.close()
+
     assert len(p3_upstream.frames) == 2  # the failed turn was never re-sent
+    assert p3_upstream.connections == 2  # the next question dialled fresh
     assert _audit(event="turn_retry") == []
     assert _audit(event="midstream_error")[0]["detail"] == (
         "content_already_streamed"
@@ -1042,6 +1076,87 @@ async def test_p3_upstream_close_before_content_reconnects_and_retries(
     retry = _audit(event="turn_retry")[0]
     assert retry["upstream_error"] == "upstream_closed"
     assert _audit(event="turn_end")[0]["final_status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_p3_graceful_stop_drops_the_poisoned_upstream(client, p3_upstream):
+    """裁決 A: a graceful stop hangs up on the poisoned upstream socket.
+
+    `_draining` alone only covers what the socket buffer has already delivered:
+    the upstream is never cancelled, so a late `done` / `content` can still
+    arrive *after* the child re-asks — and the copy we show literally tells the
+    child to ask again straight away. Dropping the socket removes that window
+    structurally, exactly like a watchdog kill, and the next question dials a
+    fresh upstream instead of inheriting the dead one.
+    """
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+
+    async def script(ws, conn, idx):
+        sid = f"unified_p3_drop_{conn}"
+        await ws.send_json({"type": "session", "session_id": sid})
+        if conn == 1:
+            # content is already on the child's screen, so this 429 cannot be
+            # retried: it must end the turn gracefully (condition 1)
+            await ws.send_json(
+                {"type": "content", "content": "你好，我", "session_id": sid}
+            )
+            await ws.send_json(
+                {
+                    "type": "error",
+                    "error_code": "upstream_error",
+                    "content": "429 Too Many Requests",
+                    "session_id": sid,
+                }
+            )
+            # the relay must have hung up already: the tail of the failed turn
+            # has nowhere to travel, and our own sends start failing
+            with pytest.raises(
+                (ConnectionResetError, aiohttp.ClientConnectionError)
+            ):
+                for _ in range(40):
+                    await asyncio.sleep(0.05)
+                    await ws.send_json(
+                        {"type": "progress", "content": "階段", "session_id": sid}
+                    )
+            return
+        await ws.send_json(
+            {"type": "content", "content": "答案二", "session_id": sid}
+        )
+        await ws.send_json(
+            {"type": "done", "turn_id": "turn-drop-2", "session_id": sid}
+        )
+
+    p3_upstream.on_message = script
+
+    ws = await _open_chat(client, session, student_id)
+    await ws.send_json({"type": "message", "capability": "chat", "message": "你好"})
+
+    events = await _collect(ws, 3)
+    assert [e["type"] for e in events] == ["session", "content", "error"]
+    assert events[2]["content"] == ws_chat_mod._GRACEFUL_BUSY_COPY["zh-hk"]
+    assert "429" not in json.dumps(events)  # raw text never reaches the kid
+
+    # 1) the upstream socket is really gone and 2) the child's leg ends with it
+    await _assert_stopped_and_quiet(ws)
+    assert await _wait_for(lambda: p3_upstream.disconnects >= 1)
+    await ws.close()
+    assert len(p3_upstream.frames) == 1  # never re-sent on the dead socket
+
+    # 3) the child asks again: a fresh stream dials a fresh upstream
+    again_ws = await _open_chat(client, session, student_id)
+    await again_ws.send_json(
+        {"type": "message", "capability": "chat", "message": "再問一次"}
+    )
+    again = await _collect(again_ws, 3)
+    assert [e["type"] for e in again] == ["session", "content", "done"]
+    assert again[1]["content"] == "答案二"
+    assert "階段" not in json.dumps(events + again)  # nor the failed turn's tail
+    await again_ws.close()
+
+    assert p3_upstream.connections == 2
+    assert _audit(event="turn_retry") == []  # the dead socket is not retried on
+    assert _audit(event="watchdog_kill") == []  # and no watchdog was involved
 
 
 @pytest.mark.asyncio

@@ -393,6 +393,10 @@ class _ChatRelay:
         self._upstream = None
         self._turn: Optional[_TurnInFlight] = None
         self._draining = False  # discarding the tail of an already-failed turn
+        # set when a *poisoned* upstream socket is dropped on purpose (review
+        # 裁決 A, graceful stop): the reader must not retry on it — there is no
+        # turn left to save and the child's next turn dials a fresh socket.
+        self._upstream_dropped = False
         self._backoff = _retry_backoff_seconds()
         self._idle_timeout = _idle_watchdog_seconds()
 
@@ -426,6 +430,9 @@ class _ChatRelay:
         if self._upstream is not None and not self._upstream.closed:
             return True
         self._upstream, _ = await self._dial()
+        if self._upstream is not None:
+            # a live socket is a clean slate again (review 裁決 A)
+            self._upstream_dropped = False
         return self._upstream is not None
 
     async def run(self) -> None:
@@ -528,6 +535,13 @@ class _ChatRelay:
         while True:
             upstream = self._upstream
             if upstream is None or upstream.closed:
+                if self._upstream_dropped:
+                    # Review 裁決 A: the poisoned socket was discarded on
+                    # purpose after a graceful stop — there is no turn left to
+                    # save and no tail worth reading. Ending the relay here
+                    # keeps this leg identical to a watchdog kill; the child's
+                    # next question opens a fresh stream (and a fresh dial).
+                    return
                 if not await self._maybe_retry(relay_audit.ERR_UPSTREAM_CLOSED):
                     return
                 continue
@@ -705,12 +719,27 @@ class _ChatRelay:
             turn.content_emitted,
             self.student_mask,
         )
+        # Review 裁決 A: hang up on the poisoned upstream *before* the graceful
+        # message. This turn's screen is closed for good and so is its pipe —
+        # `_draining` alone only covers what the socket buffer already delivered:
+        # the upstream was never cancelled, so its tail can arrive *after* the
+        # child re-asks (the copy literally tells them to ask again now) and slip
+        # into the new turn. Dropping the socket removes that window
+        # structurally, exactly like _watchdog_kill (_upstream=None +
+        # _close_quietly, next turn dials fresh). Doing it before any await also
+        # means a new turn can never land its frame on an already-doomed socket.
+        self._draining = True
+        self._upstream_dropped = True
+        upstream = self._upstream
+        self._upstream = None
+        await _close_quietly(upstream)
         await self._send_error_frame(
             code, turn.language, self._graceful_copy(code, turn.language)
         )
-        # that turn's screen is closed for good: swallow whatever trails it
-        self._draining = True
-        self._finish_turn(relay_audit.STATUS_FAILED, code)
+        # The child may have opened a new turn during the awaits above (asking
+        # again without waiting for the error frame): only close *our* turn.
+        if self._turn is turn:
+            self._finish_turn(relay_audit.STATUS_FAILED, code)
 
     async def _watchdog_kill(self) -> None:
         turn = self._turn

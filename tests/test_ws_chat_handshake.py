@@ -836,6 +836,54 @@ async def test_p3_midstream_429_is_not_retried_and_never_silent(
 
 
 @pytest.mark.asyncio
+async def test_p3_non_rate_limit_error_is_not_retried_and_never_silent(
+    client, p3_upstream, monkeypatch
+):
+    """Review Q: only `rate_limited` may spend retry budget.
+
+    A 500-style upstream error is not a rate limit, so the turn frame is never
+    re-sent and no retry delay is burned; the turn still closes with localized
+    copy instead of a dead end, and no raw provider wording reaches the child.
+    """
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+    monkeypatch.setenv(_RELAY_BACKOFF_ENV, "0.05,0.05")
+
+    async def script(ws, conn, idx):
+        await ws.send_json(
+            {
+                "type": "error",
+                "error_code": "Internal Server Error",
+                "content": "500 Internal Server Error: upstream provider died",
+                "session_id": "unified_p3_500",
+            }
+        )
+
+    p3_upstream.on_message = script
+
+    ws = await _open_chat(client, session, student_id)
+    await ws.send_json({"type": "message", "capability": "chat", "message": "你好"})
+
+    events = await _collect(ws, 1)
+    assert events[0]["type"] == "error"
+    assert events[0]["error_code"] == "upstream_error"
+    assert events[0]["content"] == ws_chat_mod._UPSTREAM_UNAVAILABLE_COPY
+    assert "500" not in json.dumps(events)  # raw text never reaches the kid
+    await _assert_quiet(ws)  # and nothing trails the stop message
+    await ws.close()
+
+    assert len(p3_upstream.frames) == 1  # never re-sent: budget untouched
+    assert _audit(event="turn_retry") == []
+    mid = _audit(event="midstream_error")[0]
+    assert mid["upstream_error"] == "upstream_error"
+    assert mid["detail"] == "non_retryable_error_frame provider=internal_server_error"
+    assert mid["attempt"] is None
+    end = _audit(event="turn_end")[0]
+    assert end["final_status"] == "failed"
+    assert end["upstream_error"] == "upstream_error"
+
+
+@pytest.mark.asyncio
 async def test_p3_failed_turn_tail_never_reaches_the_child(
     client, p3_upstream, monkeypatch
 ):
@@ -1161,6 +1209,24 @@ def test_p3_rate_limit_match_is_error_frames_only():
     assert not ws_chat_mod._is_rate_limit_frame(
         '{"type":"session","session_id":"unified_quota_1"}'
     )
+
+
+def test_p3_upstream_error_code_is_normalised_for_the_audit():
+    """A provider error code is untrusted text: only a short token is stored.
+
+    The audit table is append-only, so whatever lands in ``upstream_error``
+    stays: keep a bounded, charset-limited token (or nothing), never prose.
+    """
+    assert ws_chat_mod._error_code_of({"error_code": "Internal Server Error"}) == (
+        "internal_server_error"
+    )
+    assert ws_chat_mod._error_code_of({"code": "resource_exhausted"}) == (
+        "resource_exhausted"
+    )
+    assert ws_chat_mod._error_code_of({"error_code": "x" * 200}) == "x" * 64
+    assert ws_chat_mod._error_code_of({"content": "no code here"}) is None
+    assert ws_chat_mod._error_code_of({"error_code": "   "}) is None
+    assert ws_chat_mod._error_code_of({"error_code": 42}) is None
 
 
 def _declared_columns(schema_sql: str, table: str) -> list[str]:

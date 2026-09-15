@@ -67,6 +67,9 @@ EVENTS = (
 # --- upstream_error codes (normalized; the relay never logs raw upstream text) --
 
 ERR_RATE_LIMITED = "rate_limited"          # upstream 429 / quota exhausted
+#: a terminal upstream `error` frame that is *not* a rate limit (500 / timeout /
+#: provider fault). Never retried: retry budget is spent on rate limits only.
+ERR_UPSTREAM_ERROR = "upstream_error"
 ERR_UPSTREAM_CLOSED = "upstream_closed"    # upstream socket died mid-turn
 ERR_IDLE_TIMEOUT = "idle_timeout"          # watchdog: zero upstream frames
 ERR_CONNECT_FAILED = "connect_failed"      # relay could not dial the upstream

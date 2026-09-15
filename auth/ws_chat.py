@@ -65,6 +65,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -257,6 +258,7 @@ _UPSTREAM_UNAVAILABLE_COPY = "連線暫時不可用，請稍後再試"
 #: vocabulary honest for logs and for non-frontend clients)
 _CLIENT_ERROR_CODE = {
     relay_audit.ERR_RATE_LIMITED: "upstream_rate_limited",
+    relay_audit.ERR_UPSTREAM_ERROR: "upstream_error",
     relay_audit.ERR_UPSTREAM_CLOSED: "upstream_unavailable",
     relay_audit.ERR_IDLE_TIMEOUT: "upstream_idle_timeout",
     relay_audit.ERR_CONNECT_FAILED: "upstream_unavailable",
@@ -321,8 +323,18 @@ def _is_rate_limit_frame(raw: str) -> bool:
 
 
 def _error_code_of(frame: dict) -> Optional[str]:
+    """Upstream's own error code, normalised for an append-only record.
+
+    Whatever the provider sends is untrusted text: keep a short,
+    charset-limited token (or nothing at all), so prose or a stack trace can
+    never land in the audit table's ``upstream_error`` column.
+    """
     code = frame.get("error_code") or frame.get("code")
-    return str(code) if isinstance(code, str) and code else None
+    if not isinstance(code, str):
+        return None
+    token = re.sub(r"[^a-z0-9_.:-]+", "_", code.strip().lower())
+    token = token[:64].strip("_.:-")
+    return token or None
 
 
 class _TurnInFlight:
@@ -571,23 +583,34 @@ class _ChatRelay:
         if turn is not None:
             self._note_turn_metadata(turn, frame)
 
-        if turn is not None and _is_rate_limit_frame(raw):
-            if turn.content_emitted or turn.attempt >= len(self._backoff):
-                # Either the answer is already on screen (re-sending would
-                # duplicate text) or the budget is spent: fail gracefully.
-                await self._midstream_error(turn, relay_audit.ERR_RATE_LIMITED)
+        if turn is not None and frame.get("type") == "error":
+            # Every `error` frame of an open turn is consumed here, so the
+            # provider's raw wording never reaches the child.
+            if _is_rate_limit_frame(raw):
+                if turn.content_emitted or turn.attempt >= len(self._backoff):
+                    # Either the answer is already on screen (re-sending would
+                    # duplicate text) or the budget is spent: fail gracefully.
+                    await self._midstream_error(turn, relay_audit.ERR_RATE_LIMITED)
+                else:
+                    await self._retry_turn(turn, relay_audit.ERR_RATE_LIMITED)
             else:
-                await self._retry_turn(turn, relay_audit.ERR_RATE_LIMITED)
-            return True  # the raw 429 frame never reaches the child
+                # Review Q: only `rate_limited` may spend retry budget. Any
+                # other upstream error — 500, timeout, provider fault — is not
+                # retried; it ends the turn with localized copy, and the dead
+                # turn's tail is drained. `upstream_error` stays the normalized
+                # vocabulary; the provider's own code rides along in `detail`.
+                provider = _error_code_of(frame) or relay_audit.ERR_UPSTREAM_ERROR
+                await self._midstream_error(
+                    turn,
+                    relay_audit.ERR_UPSTREAM_ERROR,
+                    detail=f"non_retryable_error_frame provider={provider}",
+                )
+            return True  # the raw error frame never reaches the child
 
         if turn is not None and frame.get("type") in _TERMINAL_FRAME_TYPES:
-            if frame.get("type") == "done":
-                self._finish_turn(relay_audit.STATUS_COMPLETED, None)
-            else:
-                self._finish_turn(
-                    relay_audit.STATUS_FAILED,
-                    _error_code_of(frame) or "upstream_error",
-                )
+            # Only `done` can reach this point: every `error` frame was handled
+            # above (rate limits retried, everything else stopped gracefully).
+            self._finish_turn(relay_audit.STATUS_COMPLETED, None)
         return False
 
     @staticmethod
@@ -658,7 +681,9 @@ class _ChatRelay:
             return False
         return True
 
-    async def _midstream_error(self, turn: _TurnInFlight, code: str) -> None:
+    async def _midstream_error(
+        self, turn: _TurnInFlight, code: str, *, detail: Optional[str] = None
+    ) -> None:
         """Non-retry failure: never leave half an answer hanging (条件 1)."""
         relay_audit.record(
             relay_audit.EVENT_MIDSTREAM_ERROR,
@@ -667,7 +692,8 @@ class _ChatRelay:
             turn_id=turn.turn_id,
             attempt=turn.attempt or None,
             upstream_error=code,
-            detail=(
+            detail=detail
+            or (
                 "content_already_streamed"
                 if turn.content_emitted
                 else "retry_budget_exhausted"

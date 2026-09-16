@@ -39,6 +39,9 @@ export interface Copy {
   kidWeek: string;
   kidNoCourse: string;
   kidBackToStaff: string;
+  // P0 — student console chat entry
+  kidStartLesson: string;
+  kidStartLessonDesc: string;
   // forgot-password (W4 PR-D)
   forgotTitle: string;
   forgotSubtitle: string;
@@ -273,6 +276,8 @@ export const copyEn: Copy = {
   kidWeek: 'Week',
   kidNoCourse: 'No course yet — your teacher will start one soon.',
   kidBackToStaff: 'Teacher / parent sign in',
+  kidStartLesson: 'Start lesson with Dibi',
+  kidStartLessonDesc: 'Ask Dibi about anything — your lesson, your questions, your ideas.',
   forgotTitle: 'Reset your password',
   forgotSubtitle: 'Enter your account email and we will send you a reset link.',
   forgotBtn: 'Send reset link',
@@ -501,6 +506,8 @@ const copyHk: Copy = {
   kidWeek: '第',
   kidNoCourse: '未有課程 — 老師開始之後就會見到。',
   kidBackToStaff: '老師 / 家長登入',
+  kidStartLesson: '同 Dibi 傾計',
+  kidStartLessonDesc: '有咩想知、想問，都可以同 Dibi 傾。',
   forgotTitle: '重設密碼',
   forgotSubtitle: '輸入帳號 email，我哋會寄重設連結俾你。',
   forgotBtn: '寄出重設連結',
@@ -727,6 +734,8 @@ const copyCn: Copy = {
   kidWeek: '第',
   kidNoCourse: '还没有课程 — 老师开始后就会看到。',
   kidBackToStaff: '老师 / 家长登录',
+  kidStartLesson: '和 Dibi 聊天',
+  kidStartLessonDesc: '有什么想知道的、想问的，都可以和 Dibi 聊。',
   forgotTitle: '重置密码',
   forgotSubtitle: '输入账号邮箱，我们会发送重置链接给你。',
   forgotBtn: '发送重置链接',

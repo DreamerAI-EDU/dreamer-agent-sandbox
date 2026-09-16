@@ -1055,9 +1055,20 @@ class _ChatRelay:
 # ---------------------------------------------------------------------------
 
 async def handle_ws_chat(request: web.Request) -> web.Response:
-    """GET /api/ws/chat?student=<8-char-masked-prefix> — handshake, relay."""
+    """GET /api/ws/chat?student=<8-char-masked-prefix> — handshake, relay.
+
+    Two caller kinds are allowed past auth:
+      * staff / parent session (auth_session) — the unchanged parent flow;
+      * the student's own live kid_session (P0 student-console entry) —
+        may only ever open their OWN chat (mask or full id), never a
+        classmate's; consent is evaluated against the student's parent
+        (consent is a parent-signed artefact; a kid_session alone is not
+        a consent signal).
+    """
     user = api_mod._session_user(request)
-    if user is None:
+    kid = api_mod._student_session_student(request)
+
+    if user is None and kid is None:
         return _reject(
             401,
             api_mod._ERR_AUTH,
@@ -1066,50 +1077,77 @@ async def handle_ws_chat(request: web.Request) -> web.Response:
             target_id=request.query.get("student") or None,
         )
 
-    if user["role"] != "parent":
-        return _reject(
-            403,
-            api_mod._ERR_FORBIDDEN,
-            gate="role",
-            user_id=user["id"],
-            target_id=request.query.get("student") or None,
-        )
-
     student_identifier = request.query.get("student", "")
-    student, ambiguous = students_mod.resolve_student_identifier(
-        student_identifier, user
-    )
-    if ambiguous:
-        return _reject(
-            400,
-            api_mod._ERR_INVALID,
-            gate="ambiguous",
-            user_id=user["id"],
-            target_id=student_identifier or None,
+
+    if user is not None:
+        # ---- parent flow (unchanged) ----
+        if user["role"] != "parent":
+            return _reject(
+                403,
+                api_mod._ERR_FORBIDDEN,
+                gate="role",
+                user_id=user["id"],
+                target_id=student_identifier or None,
+            )
+        student, ambiguous = students_mod.resolve_student_identifier(
+            student_identifier, user
         )
-    if student is None:
-        return _reject(
-            403,
-            api_mod._ERR_FORBIDDEN,
-            gate="ownership",
-            user_id=user["id"],
-            target_id=student_identifier or None,
-        )
-    if student["parent_id"] is None or student["parent_id"] != user["id"]:
-        return _reject(
-            403,
-            api_mod._ERR_FORBIDDEN,
-            gate="ownership",
-            user_id=user["id"],
-            target_id=student["id"],
-        )
+        if ambiguous:
+            return _reject(
+                400,
+                api_mod._ERR_INVALID,
+                gate="ambiguous",
+                user_id=user["id"],
+                target_id=student_identifier or None,
+            )
+        if student is None:
+            return _reject(
+                403,
+                api_mod._ERR_FORBIDDEN,
+                gate="ownership",
+                user_id=user["id"],
+                target_id=student_identifier or None,
+            )
+        if student["parent_id"] is None or student["parent_id"] != user["id"]:
+            return _reject(
+                403,
+                api_mod._ERR_FORBIDDEN,
+                gate="ownership",
+                user_id=user["id"],
+                target_id=student["id"],
+            )
+        consent_user_id: Optional[str] = user["id"]
+    else:
+        # ---- student self-serve flow (P0 student-console entry) ----
+        student = kid
+        own_mask = student["id"][:8]
+        if student_identifier not in (own_mask, student["id"]):
+            return _reject(
+                403,
+                api_mod._ERR_FORBIDDEN,
+                gate="ownership",
+                user_id=student["id"],
+                target_id=student_identifier or None,
+            )
+        consent_user_id = student["parent_id"]
+        if consent_user_id is None:
+            # Invite-created students always carry a parent; fail closed.
+            return _reject(
+                403,
+                api_mod._ERR_FORBIDDEN,
+                gate="consent_scope",
+                user_id=student["id"],
+                target_id=student["id"],
+            )
+
+    caller_id = user["id"] if user is not None else student["id"]
 
     if not classes_mod.student_class_confirmed(student["id"]):
         return _reject(
             403,
             {"error": "等待老師確認"},
             gate="class_confirmed",
-            user_id=user["id"],
+            user_id=caller_id,
             target_id=student["id"],
         )
 
@@ -1118,23 +1156,23 @@ async def handle_ws_chat(request: web.Request) -> web.Response:
         # Default-deny: a current-version agreed row must cover the
         # student. Unsigned / withdrawn / stale version all refuse.
         if not consent_mod.student_has_current_agreement(
-            user["id"], "chat_consent", student["id"]
+            consent_user_id, "chat_consent", student["id"]
         ):
             return _reject(
                 403,
                 api_mod._ERR_FORBIDDEN,
                 gate="chat_consent_required",
-                user_id=user["id"],
+                user_id=caller_id,
                 target_id=student["id"],
             )
     elif consent_mod.student_chat_consent_withdrawn(
-        user["id"], student["id"]
+        consent_user_id, student["id"]
     ):
         return _reject(
             403,
             api_mod._ERR_FORBIDDEN,
             gate="chat_consent_withdrawn",
-            user_id=user["id"],
+            user_id=caller_id,
             target_id=student["id"],
         )
 

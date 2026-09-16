@@ -1725,3 +1725,194 @@ async def test_p4_dead_session_invalidates_map_and_audits_mask_only(
     assert ev[0]["student_mask"] == student_id[:8]
     assert ev[0]["detail"] == "reason=engine_rejected_session"
     assert student_id not in json.dumps(dict(ev[0]))
+
+
+# P0 — student self-serve flow: kid_session opens ONLY their own chat
+# ---------------------------------------------------------------------------
+
+def _new_kid_session(student_id: str, *, expires_days: int = 1) -> str:
+    """Mint a kid_session row directly (as student login would)."""
+    sid = str(uuid.uuid4())
+    conn = sqlite3.connect(_db_path())
+    try:
+        conn.execute(
+            "INSERT INTO student_sessions (id, student_id, expires_at,"
+            " created_ip, created_at) VALUES (?, ?, ?, NULL, ?)",
+            (sid, student_id, _future_iso(days=expires_days), _now_iso()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return sid
+
+
+def _confirmed_kid():
+    """Return (kid_session, student_id, parent_id) approved + signed in kid."""
+    parent_id, _, student_id = _confirmed_trio_full()
+    return _new_kid_session(student_id), student_id, parent_id
+
+
+async def _assert_kid_upgrade_ok(client, mock_upstream, kid_session, student_id):
+    """Kid handshake passes and frames relay (student self-serve path)."""
+    ws = await client.ws_connect(
+        f"/api/ws/chat?student={student_id[:8]}",
+        headers={"Cookie": f"kid_session={kid_session}"},
+    )
+    assert ws is not None
+
+    await ws.send_json(
+        {"type": "message", "capability": "chat", "message": "你好"}
+    )
+
+    events = []
+    for _ in range(5):  # 4 programmed events + auto_done
+        msg = await ws.receive()
+        assert msg.type == aiohttp.WSMsgType.TEXT, msg
+        events.append(json.loads(msg.data))
+    assert [e["type"] for e in events] == [
+        "session", "stage", "content", "result", "done",
+    ]
+    assert events[0]["session_id"] == "unified_test_001"
+
+    await ws.close()
+    assert mock_upstream.received
+    assert mock_upstream.received[0]["message"] == "你好"
+
+
+@pytest.mark.asyncio
+async def test_student_kid_session_opens_own_chat(client, mock_upstream):
+    """Kid's own live kid_session opens their own /chat (P0 entry).
+
+    PR-D default-deny mirrors the parent flow: the student needs a current
+    chat_consent agreed row (written by the parent at registration) before
+    the handshake proceeds.
+    """
+    kid_session, student_id, parent_id = _confirmed_kid()
+    consent_mod.insert_consent_row(
+        user_id=parent_id,
+        doc_type="chat_consent",
+        doc_version=CHAT_VERSION,
+        action="agreed",
+        student_id=student_id,
+    )
+    await _assert_kid_upgrade_ok(client, mock_upstream, kid_session, student_id)
+
+
+@pytest.mark.asyncio
+async def test_student_kid_session_foreign_student_rejected(client, tmp_path):
+    """Kid session can never open another student (or an unknown mask)."""
+    kid_session, _, _ = _confirmed_kid()
+    other_parent = _new_user(role="parent")
+    other_teacher = _new_user(role="teacher")
+    other_class = _new_class(other_teacher)
+    other_student = _new_student(other_parent, other_teacher)
+    _link_student_class(other_class, other_student, "confirmed")
+
+    with pytest.raises(aiohttp.WSServerHandshakeError) as ei:
+        await client.ws_connect(
+            f"/api/ws/chat?student={other_student[:8]}",
+            headers={"Cookie": f"kid_session={kid_session}"},
+        )
+    assert ei.value.status == 403
+
+    with pytest.raises(aiohttp.WSServerHandshakeError) as ei2:
+        await client.ws_connect(
+            "/api/ws/chat?student=ffffffff",
+            headers={"Cookie": f"kid_session={kid_session}"},
+        )
+    assert ei2.value.status == 403
+    assert any(
+        e["event"] == "ws_chat_rejected" for e in _audit_events(tmp_path)
+    )
+
+
+@pytest.mark.asyncio
+async def test_student_kid_session_expired_rejected(client, tmp_path):
+    """Expired kid_session -> 401 (auth gate), same as the parent flow."""
+    _, student_id, _ = _confirmed_kid()
+    expired = _new_kid_session(student_id, expires_days=-1)
+    with pytest.raises(aiohttp.WSServerHandshakeError) as ei:
+        await client.ws_connect(
+            f"/api/ws/chat?student={student_id[:8]}",
+            headers={"Cookie": f"kid_session={expired}"},
+        )
+    assert ei.value.status == 401
+    assert any(
+        e["event"] == "ws_chat_rejected" for e in _audit_events(tmp_path)
+    )
+
+
+@pytest.mark.asyncio
+async def test_student_kid_session_required_unsigned_consent_rejected(
+    client, tmp_path, monkeypatch
+):
+    """Required chat_consent unsigned -> kid flow refuses (default-deny)."""
+    kid_session, student_id, _ = _confirmed_kid()
+    _orig_get_doc = consent_mod.get_doc_config
+
+    def _flip_required(doc_type):
+        cfg = _orig_get_doc(doc_type)
+        return {**cfg, "required": True} if doc_type == "chat_consent" else cfg
+
+    monkeypatch.setattr(consent_mod, "get_doc_config", _flip_required)
+    with pytest.raises(aiohttp.WSServerHandshakeError) as ei:
+        await client.ws_connect(
+            f"/api/ws/chat?student={student_id[:8]}",
+            headers={"Cookie": f"kid_session={kid_session}"},
+        )
+    assert ei.value.status == 403
+    assert any(
+        e["event"] == "ws_chat_rejected" for e in _audit_events(tmp_path)
+    )
+
+
+@pytest.mark.asyncio
+async def test_student_kid_session_required_agreed_consent_opens(
+    client, mock_upstream, monkeypatch
+):
+    """Required chat_consent agreed by the parent -> kid flow opens."""
+    kid_session, student_id, parent_id = _confirmed_kid()
+    consent_mod.insert_consent_row(
+        user_id=parent_id,
+        doc_type="chat_consent",
+        doc_version=CHAT_VERSION,
+        action="agreed",
+        student_id=student_id,
+    )
+    _orig_get_doc = consent_mod.get_doc_config
+
+    def _flip_required(doc_type):
+        cfg = _orig_get_doc(doc_type)
+        return {**cfg, "required": True} if doc_type == "chat_consent" else cfg
+
+    monkeypatch.setattr(consent_mod, "get_doc_config", _flip_required)
+    await _assert_kid_upgrade_ok(client, mock_upstream, kid_session, student_id)
+
+
+@pytest.mark.asyncio
+async def test_student_kid_session_withdrawn_consent_rejected(client, tmp_path):
+    """Parent withdrew chat consent -> kid flow refuses too (consent gate)."""
+    kid_session, student_id, parent_id = _confirmed_kid()
+    consent_mod.insert_consent_row(
+        user_id=parent_id,
+        doc_type="chat_consent",
+        doc_version=CHAT_VERSION,
+        action="agreed",
+        student_id=student_id,
+    )
+    consent_mod.insert_consent_row(
+        user_id=parent_id,
+        doc_type="chat_consent",
+        doc_version=CHAT_VERSION,
+        action="withdrawn",
+        student_id=student_id,
+    )
+    with pytest.raises(aiohttp.WSServerHandshakeError) as ei:
+        await client.ws_connect(
+            f"/api/ws/chat?student={student_id[:8]}",
+            headers={"Cookie": f"kid_session={kid_session}"},
+        )
+    assert ei.value.status == 403
+    assert any(
+        e["event"] == "ws_chat_rejected" for e in _audit_events(tmp_path)
+    )

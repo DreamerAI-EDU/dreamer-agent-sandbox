@@ -1415,3 +1415,313 @@ def test_p3_audit_table_matches_migration_and_is_append_only(
     finally:
         target.close()
     assert len(relay_audit_mod.rows()) == 1
+
+
+# ---------------------------------------------------------------------------
+# P4 — session map schema + upsert semantics (boss conditions 1 & 4)
+# ---------------------------------------------------------------------------
+
+_P4_MIGRATION_SQL = os.path.join(
+    REPO_ROOT, "migrations", "phase8g_ws_chat_session_map.sql"
+)
+
+
+def test_p4_session_map_table_matches_migration(tmp_path, monkeypatch):
+    """Live schema (ensure_schema) must equal the phase8g migration (cond 4).
+
+    Same standard as the phase8f audit pairing test: PRAGMA column list vs
+    the canonical SQL file, plus the declared index.
+    """
+    monkeypatch.setenv("DREAMER_DB_PATH", str(tmp_path / "p4_map.db"))
+    auth_db.ensure_schema()
+
+    conn = sqlite3.connect(os.environ["DREAMER_DB_PATH"])
+    try:
+        live = [
+            r[1] for r in conn.execute("PRAGMA table_info(ws_chat_session_map)")
+        ]
+        schema_sql = open(_P4_MIGRATION_SQL, encoding="utf-8").read()
+        assert live == _declared_columns(schema_sql, "ws_chat_session_map")
+
+        indexes = {
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='index'"
+                " AND name LIKE 'idx_ws_session_map%'"
+            )
+        }
+        assert indexes == {"idx_ws_session_map_updated"}
+
+        # business table: the FK to students is declared in the migration
+        fks = conn.execute(
+            "PRAGMA foreign_key_list(ws_chat_session_map)"
+        ).fetchall()
+        assert len(fks) == 1
+        assert fks[0][2] == "students" and fks[0][3] == "student_id"
+    finally:
+        conn.close()
+
+
+def test_p4_session_map_upsert_keeps_created_and_is_atomic(tmp_path, monkeypatch):
+    """INSERT ... ON CONFLICT is a real upsert: created kept, updated bumped.
+
+    Boss condition 1 (mapping upsert visible in the PR + race guarantee):
+    the upsert is a single atomic statement — SQLite serializes writers, so
+    two tabs opening fresh sessions cannot interleave; the last write wins
+    and the earlier engine session becomes an unreferenced orphan.
+    """
+    monkeypatch.setenv("DREAMER_DB_PATH", str(tmp_path / "p4_map2.db"))
+    auth_db.ensure_schema()
+
+    conn = auth_db.connect()
+    try:
+        conn.execute(
+            "INSERT INTO students (id, first_name, age_band, lang_code, "
+            "created_at) VALUES ('stu_abcdefgh12345678', 'Dibi', 'p1-p3', "
+            "'zh-hk', ?)",
+            (_now_iso(),),
+        )
+        conn.commit()
+        now = _now_iso()
+        conn.execute(
+            "INSERT INTO ws_chat_session_map "
+            "(student_id, engine_session, created_at, updated_at) "
+            "VALUES ('stu_abcdefgh12345678', 'unified_first', ?, ?)",
+            (now, now),
+        )
+        conn.commit()
+
+        later = _now_iso()
+        conn.execute(
+            "INSERT INTO ws_chat_session_map "
+            "(student_id, engine_session, created_at, updated_at) "
+            "VALUES ('stu_abcdefgh12345678', 'unified_second', ?, ?) "
+            "ON CONFLICT(student_id) DO UPDATE SET "
+            "engine_session = excluded.engine_session, "
+            "updated_at = excluded.updated_at",
+            (later, later),
+        )
+        conn.commit()
+
+        row = conn.execute(
+            "SELECT engine_session, created_at, updated_at "
+            "FROM ws_chat_session_map WHERE student_id = ?",
+            ("stu_abcdefgh12345678",),
+        ).fetchone()
+        assert row["engine_session"] == "unified_second"
+        assert row["created_at"] == now        # first write kept
+        assert row["updated_at"] == later      # second write bumped
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# P4 — relay behaviour: blanket rewrite, busy, dead-session self-heal
+# ---------------------------------------------------------------------------
+
+
+def test_p4_busy_markers_disjoint_from_rate_limit_markers():
+    """Boss condition 3 foundation: busy never spends the 429 budget.
+
+    A future edit that lets a busy wording double as a rate-limit marker
+    would silently make second-tab refusals consume the retry budget and
+    blur the audit trail — this test pins the disjointness both set-wise
+    and substring-wise (a marker may neither equal nor contain/be contained
+    by a rate-limit marker).
+    """
+    busy = ws_chat_mod._BUSY_MARKERS
+    rate_limited = ws_chat_mod._RATE_LIMIT_MARKERS
+    assert not (set(busy) & set(rate_limited))
+    for b in busy:
+        assert not any(b in r or r in b for r in rate_limited)
+
+
+@pytest.mark.asyncio
+async def test_p4_session_frame_upserts_map_and_client_session_is_rewritten(
+    client, p3_upstream, monkeypatch
+):
+    """Boss conditions 1 + blanket rewrite: engine assigns, relay owns.
+
+    The engine's ``session`` frame upserts the map row; afterwards any client
+    frame carrying a ``session_id`` is rewritten to the mapping value — a
+    client-supplied foreign id never reaches the engine (IDOR structurally
+    closed, not validated).
+    """
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+    monkeypatch.setenv(_RELAY_BACKOFF_ENV, "0.05,0.05")
+
+    async def script(ws, conn, idx):
+        if idx == 0:
+            await ws.send_json(
+                {"type": "session", "session_id": "unified_p4_001"}
+            )
+            await ws.send_json(
+                {
+                    "type": "content",
+                    "content": "你好！",
+                    "session_id": "unified_p4_001",
+                }
+            )
+            await ws.send_json(
+                {
+                    "type": "done",
+                    "turn_id": "turn-p4-001",
+                    "session_id": "unified_p4_001",
+                }
+            )
+            return
+        await ws.send_json(
+            {
+                "type": "content",
+                "content": "又見面了",
+                "session_id": "unified_p4_001",
+            }
+        )
+        await ws.send_json(
+            {
+                "type": "done",
+                "turn_id": "turn-p4-002",
+                "session_id": "unified_p4_001",
+            }
+        )
+
+    p3_upstream.on_message = script
+
+    ws = await _open_chat(client, session, student_id)
+    # first turn: client sends no session_id; the engine's session frame
+    # upserts the map row (business table, full-id PK — red-line 8 ruling)
+    await ws.send_json({"type": "message", "capability": "chat", "message": "你好"})
+    events = await _collect(ws, 3)
+    assert [e["type"] for e in events] == ["session", "content", "done"]
+    assert events[0]["session_id"] == "unified_p4_001"
+
+    row = auth_db.connect().execute(
+        "SELECT engine_session FROM ws_chat_session_map WHERE student_id = ?",
+        (student_id,),
+    ).fetchone()
+    assert row is not None and row["engine_session"] == "unified_p4_001"
+
+    # second turn: client tries to smuggle another student's session —
+    # blanket rewrite replaces it with the relay-owned mapping value
+    await ws.send_json(
+        {
+            "type": "message",
+            "capability": "chat",
+            "message": "再見",
+            "session_id": "unified_evil",
+        }
+    )
+    await _collect(ws, 2)  # content + done
+    await ws.close()
+
+    assert len(p3_upstream.frames) == 2
+    second = json.loads(p3_upstream.frames[1]["raw"])
+    assert second["session_id"] == "unified_p4_001"
+    assert "unified_evil" not in p3_upstream.frames[1]["raw"]
+
+
+@pytest.mark.asyncio
+async def test_p4_busy_error_is_non_retryable_and_audited_separately(
+    client, p3_upstream, monkeypatch
+):
+    """Boss condition 3: busy is NOT a 429 — no retry budget spent.
+
+    A second-tab refusal ends the turn with the localized busy copy, its own
+    client code ``session_busy`` and its own audit ``upstream_error`` — the
+    audit trail keeps busy disjoint from rate_limited forever.
+    """
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+    monkeypatch.setenv(_RELAY_BACKOFF_ENV, "0.05,0.05")
+
+    async def script(ws, conn, idx):
+        await ws.send_json(
+            {
+                "type": "error",
+                "error_code": "upstream_error",
+                "content": "Session already has an active turn",
+                "session_id": "unified_p4_busy",
+            }
+        )
+
+    p3_upstream.on_message = script
+
+    ws = await _open_chat(client, session, student_id)
+    await ws.send_json({"type": "message", "capability": "chat", "message": "你好"})
+
+    events = await _collect(ws, 1)
+    busy = events[0]
+    assert busy["type"] == "error"
+    assert busy["error_code"] == "session_busy"
+    assert busy["content"] == ws_chat_mod._GRACEFUL_BUSY_COPY["zh-hk"]
+    assert "active turn" not in json.dumps(busy)  # raw provider text never leaks
+
+    await _assert_stopped_and_quiet(ws)
+    await _wait_for(lambda: p3_upstream.disconnects >= 1)
+    await ws.close()
+
+    # exactly one turn frame was sent upstream — no hidden retry
+    assert len(p3_upstream.frames) == 1
+    assert _audit(event="turn_retry") == []
+    mid = _audit(event="midstream_error")[0]
+    assert mid["upstream_error"] == "session_busy"
+    assert mid["detail"] == "session_busy_non_retryable"
+
+
+@pytest.mark.asyncio
+async def test_p4_dead_session_invalidates_map_and_audits_mask_only(
+    client, p3_upstream, monkeypatch
+):
+    """Boss condition 2: a rejected session evicts the map row + audit.
+
+    The audit event is mask-only (red-line 8) and is exactly what makes a
+    "Dibi 唔記得昨日嘅嘢" complaint diagnosable as map failure vs engine issue.
+    The next turn then opens a fresh engine session (self-healing).
+    """
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+
+    # seed a stale mapping, as a previous WS would have left behind
+    now = _now_iso()
+    conn = auth_db.connect()
+    try:
+        conn.execute(
+            "INSERT INTO ws_chat_session_map "
+            "(student_id, engine_session, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?)",
+            (student_id, "unified_p4_stale", now, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    async def script(ws, conn, idx):
+        await ws.send_json(
+            {
+                "type": "error",
+                "error_code": "invalid_request_error",
+                "content": "Session not found: unified_p4_stale",
+            }
+        )
+
+    p3_upstream.on_message = script
+
+    ws = await _open_chat(client, session, student_id)
+    await ws.send_json({"type": "message", "capability": "chat", "message": "你好"})
+    await _collect(ws, 1)
+    await ws.close()
+
+    # the stale row is gone: next turn carries no session_id and the engine
+    # opens a fresh session instead of re-hitting the same wall
+    row = auth_db.connect().execute(
+        "SELECT 1 FROM ws_chat_session_map WHERE student_id = ?",
+        (student_id,),
+    ).fetchone()
+    assert row is None
+
+    ev = _audit(event=relay_audit_mod.EVENT_SESSION_MAP_INVALIDATED)
+    assert len(ev) == 1
+    assert ev[0]["student_mask"] == student_id[:8]
+    assert ev[0]["detail"] == "reason=engine_rejected_session"
+    assert student_id not in json.dumps(dict(ev[0]))

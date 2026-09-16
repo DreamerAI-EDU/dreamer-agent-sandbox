@@ -107,3 +107,12 @@ export const RETRY_LABEL: Record<LangId, string> = {
   hk: '再試一次',
   cn: '再试一次',
 };
+
+// P4 §4.1(9) — Stop button copy for an in-flight turn. Lives with the other
+// connection UI strings so every child-facing word in this module stays the
+// single source of truth (raw server text never reaches the UI).
+export const STOP_LABEL: Record<LangId, string> = {
+  en: 'Stop',
+  hk: '停止',
+  cn: '停止',
+};

@@ -13,7 +13,7 @@ import { BAND_THEMES, MOCK_TURNS } from '../lib/mock';
 import type { ChatPayload, Lang } from '../lib/mock';
 import { createStream, isRealWsMode } from '../lib/stream';
 import type { ChatStreamStatus, KidErrorKind } from '../lib/chatErrors';
-import { ERROR_COPY, RETRY_LABEL, STATUS_COPY } from '../lib/chatErrors';
+import { ERROR_COPY, RETRY_LABEL, STATUS_COPY, STOP_LABEL } from '../lib/chatErrors';
 import { StageLoader, type ActiveStage } from '../components/StageLoader';
 import { AssistantMessage } from '../components/ChatMessage';
 import { StreamingMessage } from '../components/StreamingMessage';
@@ -247,6 +247,17 @@ export default function ChatPage() {
     if (lastQuestionRef.current) ask(lastQuestionRef.current);
   };
 
+  // P4 §4.1(9) — Stop button: end the in-flight turn on the child's terms.
+  // Closing the stream lets the server reap the turn (client_closed) and the
+  // persisted engine session stays put, so the NEXT question resumes the
+  // same session instead of opening a fresh one (§4.1(8) reuse).
+  const stop = () => {
+    cancelRef.current?.();
+    setWsStatus('idle');
+    setStages(null);
+    setProgressNote(null);
+  };
+
   // Gallery deep link keeps the chat session context (mask / name / band).
   // Only reachable in real WS mode where a PIN-unlocked student exists; the
   // mock demo has no real portfolio backend behind it.
@@ -440,6 +451,16 @@ export default function ChatPage() {
             >
               {copy.send}
             </button>
+            {activeStreaming && (
+              <button
+                type="button"
+                onClick={stop}
+                aria-label={STOP_LABEL[lang]}
+                className="shrink-0 rounded-full border border-white/25 bg-white/10 px-5 py-3 font-black text-white transition-colors hover:bg-white/20"
+              >
+                {STOP_LABEL[lang]}
+              </button>
+            )}
           </form>
           <p className="mt-2 text-center text-[11px] text-white/40">{copy.disclaimer}</p>
         </div>

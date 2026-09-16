@@ -227,6 +227,26 @@ BEFORE DELETE ON ws_chat_relay_audit
 BEGIN
     SELECT RAISE(ABORT, 'ws_chat_relay_audit is append-only (no DELETE)');
 END;
+
+-- P4: WS chat session map (boss work order 2026-09-15). Canonical DDL lives
+-- in migrations/phase8g_ws_chat_session_map.sql. Additive and brand-new:
+-- carried by _DDL means ensure_schema() creates it on any DB, old or fresh —
+-- no ALTER, so the deploy window needs no extra step. Business table (NOT
+-- append-only): row is created when the engine assigns a fresh session and
+-- replaced when a dead session is evicted (INSERT ... ON CONFLICT DO
+-- UPDATE — atomic upsert, created_at kept). Red-line 8
+-- ruling 2026-09-15: business tables keyed by student_id are precedent
+-- (payments / students); the FK keeps integrity in the DB.
+CREATE TABLE IF NOT EXISTS ws_chat_session_map (
+    student_id     TEXT PRIMARY KEY,
+    engine_session TEXT NOT NULL,            -- DeepTutor unified_xxx
+    created_at     TEXT NOT NULL,            -- ISO-8601 UTC
+    updated_at     TEXT NOT NULL,            -- last engine-session change
+    FOREIGN KEY (student_id) REFERENCES students(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ws_session_map_updated
+    ON ws_chat_session_map(updated_at);
 """
 
 

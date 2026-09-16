@@ -53,6 +53,7 @@ EVENT_MIDSTREAM_ERROR = "midstream_error"
 EVENT_WATCHDOG_KILL = "watchdog_kill"
 EVENT_TURN_END = "turn_end"
 EVENT_UPSTREAM_UNAVAILABLE = "upstream_unavailable"
+EVENT_SESSION_MAP_INVALIDATED = "session_map_invalidated"
 
 #: every event name this module may write (nothing else is allowed into the table)
 EVENTS = (
@@ -62,6 +63,7 @@ EVENTS = (
     EVENT_WATCHDOG_KILL,
     EVENT_TURN_END,
     EVENT_UPSTREAM_UNAVAILABLE,
+    EVENT_SESSION_MAP_INVALIDATED,
 )
 
 # --- upstream_error codes (normalized; the relay never logs raw upstream text) --
@@ -73,6 +75,10 @@ ERR_UPSTREAM_ERROR = "upstream_error"
 ERR_UPSTREAM_CLOSED = "upstream_closed"    # upstream socket died mid-turn
 ERR_IDLE_TIMEOUT = "idle_timeout"          # watchdog: zero upstream frames
 ERR_CONNECT_FAILED = "connect_failed"      # relay could not dial the upstream
+#: upstream refused a NEW turn because this engine session already has an
+#: active turn (same student, second tab). Distinct from rate_limited on
+#: purpose: busy never spends the retry budget and is audited separately.
+ERR_SESSION_BUSY = "session_busy"
 
 # --- final_status values --------------------------------------------------
 

@@ -62,6 +62,35 @@ function getStr(v: unknown): string {
   return typeof v === 'string' ? v : '';
 }
 
+// ---- P4 §4.1(7): engine-session persistence --------------------------------
+// One engine session per student, owned by the server-side relay map; the
+// client only needs to remember WHICH session it was routed to so a reload or
+// the next turn resumes the SAME engine session ("Dibi 記得昨日嘅嘢"). Keyed
+// by the 8-char mask — the only student identifier the client ever holds —
+// never by a full id (red-line 8).
+const SESSION_KEY_PREFIX = 'dreamer.ws_chat.session.';
+
+function sessionStorageKey(student: string): string {
+  return `${SESSION_KEY_PREFIX}${student}`;
+}
+
+function loadPersistedSession(student: string): string {
+  try {
+    return localStorage.getItem(sessionStorageKey(student)) ?? '';
+  } catch {
+    return ''; // storage disabled (private mode) — start fresh each stream
+  }
+}
+
+function savePersistedSession(student: string, sessionId: string): void {
+  if (!sessionId) return;
+  try {
+    localStorage.setItem(sessionStorageKey(student), sessionId);
+  } catch {
+    /* storage disabled — continuity degrades to per-stream, never crashes */
+  }
+}
+
 function getNum(v: unknown): number {
   return typeof v === 'number' ? v : 0;
 }
@@ -165,7 +194,9 @@ export function createWsChatStream(
   let doneSeen = false;
 
   // Turn state (one session ⇒ one connection ⇒ one turn at a time)
-  let sessionId = '';
+  // P4 §4.1(7): seed from the persisted engine session ('' = first ever
+  // turn / storage unavailable); the relay blanket-rewrites it regardless.
+  let sessionId = loadPersistedSession(student);
   let lastSeq = 0;
   const chunks: string[] = [];
   const sources: ChatSource[] = [];
@@ -243,13 +274,15 @@ export function createWsChatStream(
   const startTurn = () => {
     // Capability frame — contract keys ONLY (learning #14: an unknown config
     // key silently drops DeepTutor into stub mode). language rides as the
-    // top-level field per docs/phase2-websocket.md.
+    // top-level field per docs/phase2-websocket.md. session_id carries the
+    // persisted engine session (P4 §4.1(7)) — the relay blanket-rewrites it
+    // to its own map, so a stale/missing value can never cross students.
     sendFrame({
       type: 'message',
       capability: 'chat',
       content: input,
       language: langCode,
-      session_id: sessionId, // '' on first start; server assigns unified_xxx
+      session_id: sessionId, // persisted engine session; '' → server assigns
     });
   };
 
@@ -313,6 +346,10 @@ export function createWsChatStream(
     switch (type) {
       case 'session': {
         sessionId = getStr(ev.session_id) || getStr(pick(meta ?? {}, 'session_id'));
+        // P4 §4.1(7): persist the engine-assigned session so the next turn /
+        // a reload resumes it. Never cleared here — the server-side map owns
+        // invalidation (engine reject self-heals the relay's row).
+        savePersistedSession(student, sessionId);
         h.onProgress(0);
         h.onStatus('streaming');
         break;

@@ -57,6 +57,24 @@ localized graceful message instead of half an answer hanging on screen. The
 failed turn's remaining upstream frames (a second error, a late `done`) are
 then swallowed — they must not trail raw provider text onto that screen or
 re-open a turn that is already closed.
+
+P4 — student session continuity (boss-approved scope, 2026-09-15, spec
+handover v4.1 §4.1 relay layer). One engine session per student, owned by
+the relay:
+
+* blanket rewrite — every client frame carrying a ``session_id`` field has
+  it replaced by the relay's mapping (or removed when no mapping exists), so
+  a client can never pick another student's session (IDOR) nor forge its
+  own. Structural fix, not validation.
+* session map — ``ws_chat_session_map`` (business table, student_id PK,
+  red-line 8 ruling 2026-09-15) remembers which engine session belongs to
+  which student across WS connections, page refreshes and API restarts. The
+  engine's ``session`` frame upserts it; a dead session (engine rejects it)
+  invalidates it and the next turn opens a fresh one (self-healing).
+* busy — an upstream refusal because the session already has an active turn
+  (second tab) is non-retryable under its own code ``session_busy``, with
+  markers deliberately disjoint from the rate-limit set so the 429 budget
+  and the audit trail stay clean.
 """
 
 from __future__ import annotations
@@ -75,6 +93,7 @@ from aiohttp import web
 from . import api as api_mod
 from . import classes as classes_mod
 from . import consent as consent_mod
+from . import db
 from . import relay_audit
 from . import students as students_mod
 
@@ -241,6 +260,27 @@ _RATE_LIMIT_MARKERS = (
     "quota",
 )
 
+#: P4 — upstream wording that means "this engine session already has an
+#: active turn" (same student, second tab). Deliberately disjoint from
+#: _RATE_LIMIT_MARKERS (boss condition 3): busy never spends the retry
+#: budget and is audited under its own upstream_error code.
+_BUSY_MARKERS = (
+    "already has an active",
+    "active turn",
+    "turn in progress",
+)
+
+#: P4 — upstream wording that means the engine no longer knows the session
+#: it was routed to (expired / evicted / never existed). The mapping is
+#: stale: it is dropped and the next turn opens a fresh session instead.
+_SESSION_INVALID_MARKERS = (
+    "session not found",
+    "session_not_found",
+    "invalid session",
+    "session expired",
+    "session_expired",
+)
+
 #: localized "we are busy, please ask again" copy (review condition 1)
 _GRACEFUL_BUSY_COPY = {
     "zh-hk": "Dibi 而家有啲忙，請再問一次。",
@@ -262,6 +302,7 @@ _CLIENT_ERROR_CODE = {
     relay_audit.ERR_UPSTREAM_CLOSED: "upstream_unavailable",
     relay_audit.ERR_IDLE_TIMEOUT: "upstream_idle_timeout",
     relay_audit.ERR_CONNECT_FAILED: "upstream_unavailable",
+    relay_audit.ERR_SESSION_BUSY: "session_busy",
 }
 
 
@@ -320,6 +361,41 @@ def _looks_rate_limited(text: str) -> bool:
 def _is_rate_limit_frame(raw: str) -> bool:
     """True only for an upstream `error` frame that reads as 429 / quota."""
     return _parse_frame(raw).get("type") == "error" and _looks_rate_limited(raw)
+
+
+def _looks_busy(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(marker in lowered for marker in _BUSY_MARKERS)
+
+
+def _is_busy_frame(raw: str) -> bool:
+    """True only for an upstream `error` frame that reads as busy.
+
+    Busy = this engine session already has an active turn (second tab).
+    Never retried (disjoint from rate limits) — the child gets the same
+    "please ask again" copy and the 429 budget stays untouched.
+    """
+    return _parse_frame(raw).get("type") == "error" and _looks_busy(raw)
+
+
+def _looks_session_invalid(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(marker in lowered for marker in _SESSION_INVALID_MARKERS)
+
+
+def _frame_session_id(frame: dict) -> Optional[str]:
+    """Session id from an upstream frame: top-level or inside metadata.
+
+    DeepTutor announces a (re)assigned session with a `session` frame; the
+    id appears either on the frame or in its metadata blob depending on the
+    engine version, so both are read.
+    """
+    sid = frame.get("session_id")
+    if not isinstance(sid, str) or not sid:
+        meta = frame.get("metadata")
+        if isinstance(meta, dict):
+            sid = meta.get("session_id")
+    return sid if isinstance(sid, str) and sid else None
 
 
 def _error_code_of(frame: dict) -> Optional[str]:
@@ -382,6 +458,7 @@ class _ChatRelay:
         upstream_url: str,
         persona: Optional[str],
         student_mask: str,
+        student_id: str,
         language: Optional[str],
     ) -> None:
         self.ws = ws
@@ -389,6 +466,10 @@ class _ChatRelay:
         self.upstream_url = upstream_url
         self.persona = persona
         self.student_mask = student_mask or ""
+        # P4: full student id, server-internal only — drives the session map
+        # lookup. Never leaves the relay (red-line 8: no logs, no audit, no
+        # frames); every outward surface keeps using student_mask.
+        self.student_id = student_id
         self.language = _normalise_language(language)
         self._upstream = None
         self._turn: Optional[_TurnInFlight] = None
@@ -463,6 +544,103 @@ class _ChatRelay:
 
     # -- client -> upstream -------------------------------------------------
 
+    # -- P4 session map (ws_chat_session_map) -------------------------------
+    # One engine session per student, owned by the relay. The map is what the
+    # blanket rewrite below trusts; the client never supplies a session id.
+
+    def _load_mapping(self) -> Optional[str]:
+        """Engine session for this student (None = none yet / stale dropped)."""
+        conn = db.connect()
+        try:
+            row = conn.execute(
+                "SELECT engine_session FROM ws_chat_session_map "
+                "WHERE student_id = ?",
+                (self.student_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        return str(row["engine_session"]) if row is not None else None
+
+    def _save_mapping(self, engine_session: str) -> None:
+        """Record the engine-assigned session (atomic upsert, created kept).
+
+        SQLite serializes writers, so the rare two-tabs-open-a-fresh-session
+        race cannot interleave: the last upsert wins and the earlier engine
+        session becomes an orphan the map no longer references — harmless,
+        the next turn already routes through this row (boss condition 1).
+        """
+        now = db._now_iso()
+        conn = db.connect()
+        try:
+            conn.execute(
+                """INSERT INTO ws_chat_session_map
+                   (student_id, engine_session, created_at, updated_at)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(student_id) DO UPDATE SET
+                       engine_session = excluded.engine_session,
+                       updated_at = excluded.updated_at""",
+                (self.student_id, engine_session, now, now),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        logger.info(
+            "ws_chat session map saved mask=%s session_len=%s",
+            self.student_mask,
+            len(engine_session),
+        )
+
+    def _invalidate_mapping(self, reason: str) -> None:
+        """Drop this student's map row + audit (mask only, red-line 8).
+
+        Fires when the engine rejects a turn because the routed session no
+        longer exists. The next turn then carries no session_id and the
+        engine opens a fresh one — the self-healing path. The audit event is
+        what makes "Dibi 唔記得昨日嘅嘢" diagnosable as map failure vs engine
+        problem (boss condition 2).
+        """
+        conn = db.connect()
+        try:
+            conn.execute(
+                "DELETE FROM ws_chat_session_map WHERE student_id = ?",
+                (self.student_id,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        relay_audit.record(
+            relay_audit.EVENT_SESSION_MAP_INVALIDATED,
+            student_mask=self.student_mask,
+            detail=f"reason={reason}",
+        )
+        logger.warning(
+            "ws_chat session map invalidated mask=%s reason=%s",
+            self.student_mask,
+            reason,
+        )
+
+    def _restamp_session(self, raw: str) -> str:
+        """P4: blanket session_id rewrite — never trust the client.
+
+        Any client frame carrying a ``session_id`` field gets it replaced by
+        the relay's own mapping, or removed when no mapping exists yet so the
+        engine assigns a fresh session. Structural fix, not validation:
+        there is no "client got it right, let it through" path left for the
+        IDOR surface (new frame types included).
+        """
+        try:
+            frame = json.loads(raw)
+        except (TypeError, ValueError):
+            return raw
+        if not isinstance(frame, dict) or "session_id" not in frame:
+            return raw
+        mapped = self._load_mapping()
+        if mapped is None:
+            frame.pop("session_id", None)
+        else:
+            frame["session_id"] = mapped
+        return json.dumps(frame, ensure_ascii=False)
+
     async def _client_loop(self) -> None:
         try:
             async for msg in self.ws:
@@ -489,6 +667,9 @@ class _ChatRelay:
             await _close_quietly(upstream)
 
     async def _on_client_frame(self, raw: str) -> None:
+        # P4: every client frame is session-restamped before anything else —
+        # turn frames and subscribe/cancel alike, blanket by field.
+        raw = self._restamp_session(raw)
         injected = _inject_persona(raw, self.persona)
         if _parse_frame(injected).get("type") in _TURN_FRAME_TYPES:
             await self._start_turn(injected)
@@ -594,6 +775,15 @@ class _ChatRelay:
         if self._draining:
             return True
 
+        # P4: the engine announced a (possibly fresh) session for this
+        # student — remember it so later connections / tabs / refreshes route
+        # to the same conversation. The frame is still forwarded to the child
+        # (the frontend needs the id too).
+        if frame.get("type") == "session":
+            sid = _frame_session_id(frame)
+            if sid:
+                self._save_mapping(sid)
+
         if turn is not None:
             self._note_turn_metadata(turn, frame)
 
@@ -607,12 +797,27 @@ class _ChatRelay:
                     await self._midstream_error(turn, relay_audit.ERR_RATE_LIMITED)
                 else:
                     await self._retry_turn(turn, relay_audit.ERR_RATE_LIMITED)
+            elif _is_busy_frame(raw):
+                # P4: engine refused because this session already has an active
+                # turn (second tab). Deliberately non-retryable: spending the
+                # retry budget here would leak the 429 budget, and the audit
+                # row keeps busy apart from rate_limited (boss condition 3).
+                await self._midstream_error(
+                    turn,
+                    relay_audit.ERR_SESSION_BUSY,
+                    detail="session_busy_non_retryable",
+                )
             else:
                 # Review Q: only `rate_limited` may spend retry budget. Any
                 # other upstream error — 500, timeout, provider fault — is not
                 # retried; it ends the turn with localized copy, and the dead
                 # turn's tail is drained. `upstream_error` stays the normalized
                 # vocabulary; the provider's own code rides along in `detail`.
+                if _looks_session_invalid(raw):
+                    # P4 self-heal: the routed session is dead — drop the map
+                    # row so the next turn opens a fresh engine session
+                    # instead of hitting the same wall (boss condition 2).
+                    self._invalidate_mapping("engine_rejected_session")
                 provider = _error_code_of(frame) or relay_audit.ERR_UPSTREAM_ERROR
                 await self._midstream_error(
                     turn,
@@ -795,7 +1000,7 @@ class _ChatRelay:
 
     @staticmethod
     def _graceful_copy(code: str, language: str) -> str:
-        if code == relay_audit.ERR_RATE_LIMITED:
+        if code in (relay_audit.ERR_RATE_LIMITED, relay_audit.ERR_SESSION_BUSY):
             lang = _normalise_language(language)
             return _GRACEFUL_BUSY_COPY.get(lang) or _GRACEFUL_BUSY_COPY[_DEFAULT_LANGUAGE]
         return _UPSTREAM_UNAVAILABLE_COPY
@@ -947,6 +1152,9 @@ async def handle_ws_chat(request: web.Request) -> web.Response:
                 # the query already carries the 8-char masked prefix only —
                 # full student ids never leave the server, audit rows included
                 student_mask=request.query.get("student", ""),
+                # server-internal full id: drives the session map only and
+                # never appears on any outward surface (red-line 8)
+                student_id=student["id"],
                 language=_row_get(student, "lang_code"),
             )
             await relay.run()

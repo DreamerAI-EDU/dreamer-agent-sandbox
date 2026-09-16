@@ -114,6 +114,29 @@ export function StudentHomePage() {
             )}
           </div>
 
+          {student && (
+            <button
+              type="button"
+              onClick={() =>
+                navigate(
+                  `/chat?student=${encodeURIComponent(
+                    student.id.slice(0, 8)
+                  )}&name=${encodeURIComponent(
+                    student.first_name
+                  )}&band=${encodeURIComponent(student.age_band)}&from=student`
+                )
+              }
+              className="mt-4 w-full rounded-xl bg-black px-4 py-4 text-left text-white shadow-sm hover:bg-black/85"
+            >
+              <p className="text-lg font-semibold tracking-tight">
+                {copy.kidStartLesson}
+              </p>
+              <p className="mt-1 text-sm text-white/70">
+                {copy.kidStartLessonDesc}
+              </p>
+            </button>
+          )}
+
           <button
             type="button"
             onClick={signOut}

@@ -54,6 +54,7 @@ EVENT_WATCHDOG_KILL = "watchdog_kill"
 EVENT_TURN_END = "turn_end"
 EVENT_UPSTREAM_UNAVAILABLE = "upstream_unavailable"
 EVENT_SESSION_MAP_INVALIDATED = "session_map_invalidated"
+EVENT_GREETING_SHORT_CIRCUIT = "greeting_short_circuit"
 
 #: every event name this module may write (nothing else is allowed into the table)
 EVENTS = (
@@ -64,6 +65,7 @@ EVENTS = (
     EVENT_TURN_END,
     EVENT_UPSTREAM_UNAVAILABLE,
     EVENT_SESSION_MAP_INVALIDATED,
+    EVENT_GREETING_SHORT_CIRCUIT,
 )
 
 # --- upstream_error codes (normalized; the relay never logs raw upstream text) --

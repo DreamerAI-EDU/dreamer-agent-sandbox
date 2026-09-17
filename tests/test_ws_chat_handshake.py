@@ -2044,3 +2044,318 @@ async def test_pr_a_greeting_short_circuit_audited(client, mock_upstream, tmp_pa
     )
     assert rows
     assert rows[0]["student_mask"] == student_id[:8]
+
+
+# ---------------------------------------------------------------------------
+# PR-C — heartbeat, immediate-receipt ack, dedup, delivery audit
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pr_c_ping_gets_pong_without_turn_or_audit(
+    client, mock_upstream
+):
+    """PR-C item 1: an app-level ping is answered locally — no engine dial,
+    no turn, no audit pollution (heartbeat stays invisible to monitoring)."""
+    kid_session, student_id = _confirmed_kid_lang("zh-hk")
+    rows_before = len(_audit())
+    ws = await _open_kid_chat(client, kid_session, student_id)
+
+    await ws.send_json({"type": "ping"})
+
+    events = await _collect(ws, 1)
+    assert events[0] == {"type": "pong"}
+
+    await _assert_quiet(ws)
+    await ws.close()
+    assert mock_upstream.received == []
+    assert len(_audit()) == rows_before
+
+
+@pytest.mark.asyncio
+async def test_pr_c_turn_frame_gets_immediate_ack_before_engine(
+    client, mock_upstream
+):
+    """PR-C item 4: the relay acks a turn frame the instant it arrives, so a
+    slow engine can never trip the client's 10s resend — the ack is the very
+    first frame the child sees."""
+    kid_session, student_id = _confirmed_kid_lang("zh-hk")
+    ws = await _open_kid_chat(client, kid_session, student_id)
+
+    mid = "prc-ack-0001"
+    await ws.send_json(
+        {
+            "type": "message",
+            "capability": "chat",
+            "message": "我想學數學",
+            "message_id": mid,
+        }
+    )
+
+    events = await _collect(ws, 6)
+    assert events[0] == {
+        "type": "ack",
+        "message_id": mid,
+        "status": "received",
+    }
+    assert [e["type"] for e in events[1:]] == [
+        "session", "stage", "content", "result", "done",
+    ]
+
+    await ws.close()
+    assert mock_upstream.received
+    assert mock_upstream.received[0]["message_id"] == mid
+
+
+@pytest.mark.asyncio
+async def test_pr_c_duplicate_message_id_dup_acks_and_never_reopens(
+    client, mock_upstream
+):
+    """PR-C item 4/5: a re-sent message_id is answered dup-ack + completed and
+    is never forwarded upstream again — one turn, one engine dial."""
+    kid_session, student_id = _confirmed_kid_lang("zh-hk")
+    mid = "prc-dup-0002"
+
+    ws1 = await _open_kid_chat(client, kid_session, student_id)
+    await ws1.send_json(
+        {
+            "type": "message",
+            "capability": "chat",
+            "message": "我想學數學",
+            "message_id": mid,
+        }
+    )
+    events = await _collect(ws1, 6)  # ack + session/stage/content/result/done
+    assert events[0]["status"] == "received"
+    assert events[-1]["type"] == "done"
+    await ws1.close()
+    assert len(mock_upstream.received) == 1
+
+    # same message_id on a brand-new socket → dup-ack + completed, no replay
+    ws2 = await _open_kid_chat(client, kid_session, student_id)
+    await ws2.send_json(
+        {
+            "type": "message",
+            "capability": "chat",
+            "message": "我想學數學",
+            "message_id": mid,
+        }
+    )
+    events2 = await _collect(ws2, 1)
+    assert events2[0] == {
+        "type": "ack",
+        "message_id": mid,
+        "status": "dup",
+        "turn_state": "completed",
+    }
+    await _assert_quiet(ws2)
+    await ws2.close()
+    assert len(mock_upstream.received) == 1
+    assert len(_audit(event="turn_start")) == 1
+
+
+@pytest.mark.asyncio
+async def test_pr_c_dup_while_in_progress_reports_in_progress(
+    client, p3_upstream
+):
+    """PR-C item 4: while the first copy of a message_id is still running the
+    relay answers dup-ack + in_progress and never starts a second turn."""
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+    mid = "prc-dup-0003"
+    turn_open = asyncio.Event()
+    release = asyncio.Event()
+
+    async def script(ws, conn, idx):
+        if idx == 0:
+            turn_open.set()
+            # hold the turn open until the test has sent the duplicate
+            await release.wait()
+            await ws.send_json(
+                {"type": "session", "session_id": "prc_slow_001"}
+            )
+            await ws.send_json(
+                {"type": "content", "content": "慢慢答", "session_id": "prc_slow_001"}
+            )
+            await ws.send_json(
+                {"type": "done", "turn_id": "turn-prc-0003", "session_id": "prc_slow_001"}
+            )
+
+    p3_upstream.on_message = script
+
+    ws = await _open_chat(client, session, student_id)
+    await ws.send_json(
+        {
+            "type": "message",
+            "capability": "chat",
+            "message": "我想學數學",
+            "message_id": mid,
+        }
+    )
+    # the first frame's received-ack arrives before the engine even dials
+    ack1 = await _collect(ws, 1)
+    assert ack1[0]["status"] == "received"
+    await asyncio.wait_for(turn_open.wait(), timeout=3.0)
+
+    await ws.send_json(
+        {
+            "type": "message",
+            "capability": "chat",
+            "message": "我想學數學",
+            "message_id": mid,
+        }
+    )
+    dup = await _collect(ws, 1)
+    assert dup[0] == {
+        "type": "ack",
+        "message_id": mid,
+        "status": "dup",
+        "turn_state": "in_progress",
+    }
+
+    release.set()
+    rest = await _collect(ws, 3)  # session/content/done exactly once
+    assert [e["type"] for e in rest] == ["session", "content", "done"]
+    await ws.close()
+
+    assert len(p3_upstream.frames) == 1  # never forwarded twice
+    assert len(_audit(event="turn_start")) == 1
+
+
+@pytest.mark.asyncio
+async def test_pr_c_delivery_fail_is_audited():
+    """PR-C item 5: a frame that could not reach the child is an audit row,
+    not a warning-only log line (the turn40 gap)."""
+    class _DeadLeg:
+        def __init__(self) -> None:
+            self.fails = 0
+
+        async def send_str(self, data: str) -> None:
+            self.fails += 1
+            raise ConnectionResetError("leg gone")
+
+    dead = _DeadLeg()
+    relay = ws_chat_mod._ChatRelay(
+        ws=dead,
+        session="sess",
+        upstream_url="ws://unused/",
+        persona=None,
+        student_mask="abcd1234",
+        student_id="full-student-id",
+        language="zh-hk",
+    )
+    relay._turn = ws_chat_mod._TurnInFlight(
+        raw_frame='{"type":"message"}',
+        language="zh-hk",
+        student_mask="abcd1234",
+    )
+    relay._turn.session_id = "upstream-sess-001"
+    relay._turn.turn_id = "turn-prc-fail"
+
+    await relay._forward('{"type":"content","content":"x"}')
+
+    assert dead.fails == 1
+    rows = _audit(event="delivery_fail")
+    assert rows
+    assert rows[0]["student_mask"] == "abcd1234"
+    assert rows[0]["session_id"] == "upstream-sess-001"
+    assert rows[0]["turn_id"] == "turn-prc-fail"
+
+
+@pytest.mark.asyncio
+async def test_pr_c_delivery_success_has_turn_end_audit(
+    client, mock_upstream
+):
+    """PR-C item 5: a cleanly delivered turn keeps its success evidence — a
+    completed turn_end row and no delivery_fail rows."""
+    kid_session, student_id = _confirmed_kid_lang("zh-hk")
+    ws = await _open_kid_chat(client, kid_session, student_id)
+
+    await ws.send_json(
+        {"type": "message", "capability": "chat", "message": "我想學數學"}
+    )
+    events = await _collect(ws, 5)
+    assert events[-1]["type"] == "done"
+    await ws.close()
+
+    end = _audit(event="turn_end")
+    assert end
+    assert end[-1]["final_status"] == "completed"
+    assert _audit(event="delivery_fail") == []
+
+
+@pytest.mark.asyncio
+async def test_pr_c_subscribe_completed_replay_reaches_child(
+    client, p3_upstream
+):
+    """PR-C item 6 resume path: subscribe_session on a completed turn is
+    replayed from relay memory (content + done) — the F5-mid-turn contract,
+    without re-dialing the engine."""
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+
+    # 引擎正常完成一個 turn：session + content + done
+    async def script(ws, conn, idx):
+        await ws.send_json(
+            {"type": "session", "session_id": "engine-sess-001"}
+        )
+        await ws.send_json(
+            {"type": "content", "content": "之前嘅答案尾", "session_id": "engine-sess-001"}
+        )
+        await ws.send_json(
+            {"type": "done", "turn_id": "turn-replay-001", "session_id": "engine-sess-001"}
+        )
+
+    p3_upstream.on_message = script
+
+    ws = await _open_chat(client, session, student_id)
+    await ws.send_json(
+        {"type": "message", "capability": "chat", "message": "我想學數學", "message_id": "prc-replay-0001"}
+    )
+
+    # ack + session + content + done = 4 幀
+    events = await _collect(ws, 4)
+    assert events[0]["type"] == "ack"
+    assert [e["type"] for e in events[1:]] == ["session", "content", "done"]
+
+    # 之後嘅 subscribe_session 由 relay 本地 replay，唔 forward 引擎
+    await ws.send_json(
+        {"type": "subscribe_session", "session_id": "engine-sess-001"}
+    )
+    replay = await _collect(ws, 2)
+    assert [e["type"] for e in replay] == ["content", "done"]
+    assert replay[0]["content"] == "之前嘅答案尾"
+
+    await ws.close()
+    # 引擎只收過 message 幀——subscribe 唔 forward
+    assert len(p3_upstream.frames) == 1
+    assert p3_upstream.frames[0]["frame"]["type"] == "message"
+    # subscribe 唔開新 turn：只有 message 嗰個 turn_start
+    starts = _audit(event="turn_start")
+    assert len(starts) == 1
+
+
+@pytest.mark.asyncio
+async def test_pr_c_subscribe_session_closed_surfaces_error(
+    client, p3_upstream
+):
+    """PR-C item 6 resume path: subscribe_session with no relay-held tail is
+    answered session-closed locally — no engine dial, no turn-lost scare."""
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+
+    # 唔設 script：subscribe 唔應該 dial 引擎
+    ws = await _open_chat(client, session, student_id)
+    await ws.send_json(
+        {"type": "subscribe_session", "session_id": "ghost-sess-999"}
+    )
+
+    events = await _collect(ws, 1)
+    assert events[0]["type"] == "error"
+    assert events[0]["error_code"] == "session_closed"
+
+    await ws.close()
+    # 引擎完全冇收到 subscribe 幀
+    assert p3_upstream.frames == []
+    # a subscribe never opens a turn
+    assert _audit(event="turn_start") == []

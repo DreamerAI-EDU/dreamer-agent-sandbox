@@ -345,6 +345,55 @@ def _normalise_language(language: Optional[str]) -> str:
     return _DEFAULT_LANGUAGE
 
 
+# ---------------------------------------------------------------------------
+# PR-A — pure-greeting short circuit (relay layer)
+# ---------------------------------------------------------------------------
+#: full-match anchored: ONLY a bare greeting is short-circuited. Anything
+#: longer ("hi, what is 2+2?") still reaches the engine — the regex never
+#: matches mid-sentence. Kid-friendly tone, per normalised locale.
+_GREETING_RE = {
+    "en": re.compile(
+        r"^(?:hi|hello|hey|hi there|hello there|good (?:morning|afternoon|evening))"
+        r"[!.]?$",
+        re.IGNORECASE,
+    ),
+    "zh-hk": re.compile(
+        r"^(?:你好|您好|哈囉|嗨|早晨|喂|hello|hi|hey)[!.]?$",
+        re.IGNORECASE,
+    ),
+    "zh-cn": re.compile(
+        r"^(?:你好|您好|嗨|哈喽|hello|hi|hey)[!.]?$",
+        re.IGNORECASE,
+    ),
+}
+
+_GREETING_REPLIES = {
+    "en": "Hi there! I'm your AI learning buddy. What shall we explore today?",
+    "zh-hk": "哈囉！我係你嘅 AI 學習夥伴，今日想學啲咩呀？",
+    "zh-cn": "你好！我是你的 AI 学习伙伴，今天想学点什么呢？",
+}
+
+
+def _frame_text(frame: dict) -> str:
+    """Extract the user's chat text from a client turn frame."""
+    for key in ("content", "message"):
+        value = frame.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _greeting_reply(text: str, language: str) -> Optional[str]:
+    """Local kid-friendly reply when *text* is a bare greeting, else None."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    pattern = _GREETING_RE.get(_normalise_language(language))
+    if pattern is None or not pattern.fullmatch(text):
+        return None
+    return _GREETING_REPLIES.get(_normalise_language(language))
+
+
 def _parse_frame(raw) -> dict:
     try:
         frame = json.loads(raw)
@@ -670,6 +719,27 @@ class _ChatRelay:
         # P4: every client frame is session-restamped before anything else —
         # turn frames and subscribe/cancel alike, blanket by field.
         raw = self._restamp_session(raw)
+        # PR-A: a bare greeting is answered locally — no engine dial, no
+        # turn opened, no session row written (zero pollution). The reply
+        # mirrors the engine's content+done shape so the frontend renders
+        # it exactly like a real answer.
+        frame = _parse_frame(raw)
+        if frame.get("type") in _TURN_FRAME_TYPES:
+            reply = _greeting_reply(_frame_text(frame), self.language)
+            if reply is not None:
+                await self._forward(
+                    json.dumps(
+                        {"type": "content", "content": reply},
+                        ensure_ascii=False,
+                    )
+                )
+                await self._forward(json.dumps({"type": "done"}))
+                relay_audit.record(
+                    relay_audit.EVENT_GREETING_SHORT_CIRCUIT,
+                    student_mask=self.student_mask,
+                    detail=f"lang={self.language}",
+                )
+                return
         injected = _inject_persona(raw, self.persona)
         if _parse_frame(injected).get("type") in _TURN_FRAME_TYPES:
             await self._start_turn(injected)

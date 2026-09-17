@@ -38,6 +38,7 @@ os.environ.setdefault("PYTHONPATH", REPO_ROOT)
 from auth import classes as classes_mod  # noqa: E402
 from auth import consent as consent_mod  # noqa: E402
 from auth import db as auth_db  # noqa: E402
+from auth import relay_audit as relay_audit_mod  # noqa: E402
 from auth import security as auth_security  # noqa: E402
 from auth import students as students_mod  # noqa: E402
 from auth import ws_chat as ws_chat_mod  # noqa: E402
@@ -454,7 +455,7 @@ async def _assert_upgrade_ok(client, mock_upstream, session, student_id):
     assert ws is not None
 
     await ws.send_json(
-        {"type": "message", "capability": "chat", "message": "你好"}
+        {"type": "message", "capability": "chat", "message": "我想學數學"}
     )
 
     events = []
@@ -469,7 +470,7 @@ async def _assert_upgrade_ok(client, mock_upstream, session, student_id):
 
     await ws.close()
     assert mock_upstream.received
-    assert mock_upstream.received[0]["message"] == "你好"
+    assert mock_upstream.received[0]["message"] == "我想學數學"
 
 
 @pytest.mark.asyncio
@@ -769,7 +770,7 @@ async def test_p3_pre_content_429_is_retried_and_invisible(
     p3_upstream.on_message = script
 
     ws = await _open_chat(client, session, student_id)
-    await ws.send_json({"type": "message", "capability": "chat", "message": "你好"})
+    await ws.send_json({"type": "message", "capability": "chat", "message": "我想學數學"})
 
     events = await _collect(ws, 3)
     assert [e["type"] for e in events] == ["session", "content", "done"]
@@ -828,7 +829,7 @@ async def test_p3_midstream_429_is_not_retried_and_never_silent(
     p3_upstream.on_message = script
 
     ws = await _open_chat(client, session, student_id)
-    await ws.send_json({"type": "message", "capability": "chat", "message": "你好"})
+    await ws.send_json({"type": "message", "capability": "chat", "message": "我想學數學"})
 
     events = await _collect(ws, 3)
     assert [e["type"] for e in events] == ["session", "content", "error"]
@@ -880,7 +881,7 @@ async def test_p3_non_rate_limit_error_is_not_retried_and_never_silent(
     p3_upstream.on_message = script
 
     ws = await _open_chat(client, session, student_id)
-    await ws.send_json({"type": "message", "capability": "chat", "message": "你好"})
+    await ws.send_json({"type": "message", "capability": "chat", "message": "我想學數學"})
 
     events = await _collect(ws, 1)
     assert events[0]["type"] == "error"
@@ -965,7 +966,7 @@ async def test_p3_failed_turn_tail_never_reaches_the_child(
     p3_upstream.on_message = script
 
     ws = await _open_chat(client, session, student_id)
-    await ws.send_json({"type": "message", "capability": "chat", "message": "你好"})
+    await ws.send_json({"type": "message", "capability": "chat", "message": "我想學數學"})
     events = await _collect(ws, 3)
     assert [e["type"] for e in events] == ["session", "content", "error"]
     assert events[2]["content"] == ws_chat_mod._GRACEFUL_BUSY_COPY["zh-hk"]
@@ -1022,7 +1023,7 @@ async def test_p3_exhausted_retry_budget_falls_back_to_graceful_message(
     p3_upstream.on_message = script
 
     ws = await _open_chat(client, session, student_id)
-    await ws.send_json({"type": "message", "capability": "chat", "message": "你好"})
+    await ws.send_json({"type": "message", "capability": "chat", "message": "我想學數學"})
 
     events = await _collect(ws, 1)
     assert events[0]["type"] == "error"
@@ -1065,7 +1066,7 @@ async def test_p3_upstream_close_before_content_reconnects_and_retries(
     p3_upstream.on_message = script
 
     ws = await _open_chat(client, session, student_id)
-    await ws.send_json({"type": "message", "capability": "chat", "message": "你好"})
+    await ws.send_json({"type": "message", "capability": "chat", "message": "我想學數學"})
 
     events = await _collect(ws, 2)
     assert [e["type"] for e in events] == ["content", "done"]
@@ -1130,7 +1131,7 @@ async def test_p3_graceful_stop_drops_the_poisoned_upstream(client, p3_upstream)
     p3_upstream.on_message = script
 
     ws = await _open_chat(client, session, student_id)
-    await ws.send_json({"type": "message", "capability": "chat", "message": "你好"})
+    await ws.send_json({"type": "message", "capability": "chat", "message": "我想學數學"})
 
     events = await _collect(ws, 3)
     assert [e["type"] for e in events] == ["session", "content", "error"]
@@ -1179,7 +1180,7 @@ async def test_p3_watchdog_kills_a_silent_turn(
     p3_upstream.on_message = script
 
     ws = await _open_chat(client, session, student_id)
-    await ws.send_json({"type": "message", "capability": "chat", "message": "你好"})
+    await ws.send_json({"type": "message", "capability": "chat", "message": "我想學數學"})
 
     events = await _collect(ws, 2)
     assert [e["type"] for e in events] == ["session", "error"]
@@ -1233,7 +1234,7 @@ async def test_p3_watchdog_is_idle_based_not_absolute(
     p3_upstream.on_message = script
 
     ws = await _open_chat(client, session, student_id)
-    await ws.send_json({"type": "message", "capability": "chat", "message": "你好"})
+    await ws.send_json({"type": "message", "capability": "chat", "message": "我想學數學"})
 
     events = await _collect(ws, 9, timeout=8.0)
     assert [e["type"] for e in events] == [
@@ -1267,7 +1268,7 @@ async def test_p3_client_disconnect_reaps_the_open_turn(
     p3_upstream.on_message = script
 
     ws = await _open_chat(client, session, student_id)
-    await ws.send_json({"type": "message", "capability": "chat", "message": "你好"})
+    await ws.send_json({"type": "message", "capability": "chat", "message": "我想學數學"})
     await _collect(ws, 1)
     await ws.close()
 
@@ -1591,7 +1592,7 @@ async def test_p4_session_frame_upserts_map_and_client_session_is_rewritten(
     ws = await _open_chat(client, session, student_id)
     # first turn: client sends no session_id; the engine's session frame
     # upserts the map row (business table, full-id PK — red-line 8 ruling)
-    await ws.send_json({"type": "message", "capability": "chat", "message": "你好"})
+    await ws.send_json({"type": "message", "capability": "chat", "message": "我想學數學"})
     events = await _collect(ws, 3)
     assert [e["type"] for e in events] == ["session", "content", "done"]
     assert events[0]["session_id"] == "unified_p4_001"
@@ -1648,7 +1649,7 @@ async def test_p4_busy_error_is_non_retryable_and_audited_separately(
     p3_upstream.on_message = script
 
     ws = await _open_chat(client, session, student_id)
-    await ws.send_json({"type": "message", "capability": "chat", "message": "你好"})
+    await ws.send_json({"type": "message", "capability": "chat", "message": "我想學數學"})
 
     events = await _collect(ws, 1)
     busy = events[0]
@@ -1708,7 +1709,7 @@ async def test_p4_dead_session_invalidates_map_and_audits_mask_only(
     p3_upstream.on_message = script
 
     ws = await _open_chat(client, session, student_id)
-    await ws.send_json({"type": "message", "capability": "chat", "message": "你好"})
+    await ws.send_json({"type": "message", "capability": "chat", "message": "我想學數學"})
     await _collect(ws, 1)
     await ws.close()
 
@@ -1761,7 +1762,7 @@ async def _assert_kid_upgrade_ok(client, mock_upstream, kid_session, student_id)
     assert ws is not None
 
     await ws.send_json(
-        {"type": "message", "capability": "chat", "message": "你好"}
+        {"type": "message", "capability": "chat", "message": "我想學數學"}
     )
 
     events = []
@@ -1776,7 +1777,7 @@ async def _assert_kid_upgrade_ok(client, mock_upstream, kid_session, student_id)
 
     await ws.close()
     assert mock_upstream.received
-    assert mock_upstream.received[0]["message"] == "你好"
+    assert mock_upstream.received[0]["message"] == "我想學數學"
 
 
 @pytest.mark.asyncio
@@ -1916,3 +1917,130 @@ async def test_student_kid_session_withdrawn_consent_rejected(client, tmp_path):
     assert any(
         e["event"] == "ws_chat_rejected" for e in _audit_events(tmp_path)
     )
+
+
+# ---------------------------------------------------------------------------
+# PR-A — pure-greeting short circuit (relay layer)
+# ---------------------------------------------------------------------------
+
+async def _open_kid_chat(client, kid_session, student_id):
+    """Open a kid self-serve /chat socket (handshake already consented)."""
+    return await client.ws_connect(
+        f"/api/ws/chat?student={student_id[:8]}",
+        headers={"Cookie": f"kid_session={kid_session}"},
+    )
+
+
+def _confirmed_kid_lang(lang_code: str):
+    """Like _confirmed_kid but with an explicit student lang_code."""
+    parent_id = _new_user(role="parent")
+    teacher_id = _new_user(role="teacher")
+    class_id = _new_class(teacher_id)
+    student_id = students_mod.create_student(
+        first_name="小明",
+        age_band="P1-P3",
+        lang_code=lang_code,
+        pin_hash=students_mod.hash_pin("1357"),
+        parent_id=parent_id,
+        teacher_id=teacher_id,
+    )
+    _link_student_class(class_id, student_id, "confirmed")
+    consent_mod.insert_consent_row(
+        user_id=parent_id,
+        doc_type="chat_consent",
+        doc_version=CHAT_VERSION,
+        action="agreed",
+        student_id=student_id,
+    )
+    return _new_kid_session(student_id), student_id
+
+
+@pytest.mark.asyncio
+async def test_pr_a_pure_greeting_zh_hk_short_circuits(client, mock_upstream):
+    """A bare zh-hk greeting never dials the engine (PR-A)."""
+    kid_session, student_id = _confirmed_kid_lang("zh-hk")
+    ws = await _open_kid_chat(client, kid_session, student_id)
+
+    await ws.send_json(
+        {"type": "message", "capability": "chat", "message": "你好"}
+    )
+
+    events = []
+    for _ in range(2):
+        msg = await ws.receive()
+        assert msg.type == aiohttp.WSMsgType.TEXT, msg
+        events.append(json.loads(msg.data))
+    assert [e["type"] for e in events] == ["content", "done"]
+    assert "哈囉" in events[0]["content"]
+
+    await ws.close()
+    # zero pollution: nothing was forwarded upstream, no turn/session state
+    assert mock_upstream.received == []
+
+
+@pytest.mark.asyncio
+async def test_pr_a_pure_greeting_en_short_circuits(client, mock_upstream):
+    """An English greeting gets the English kid-friendly reply (PR-A locale)."""
+    kid_session, student_id = _confirmed_kid_lang("en")
+    ws = await _open_kid_chat(client, kid_session, student_id)
+
+    await ws.send_json(
+        {"type": "message", "capability": "chat", "message": "Hi!"}
+    )
+
+    events = []
+    for _ in range(2):
+        msg = await ws.receive()
+        assert msg.type == aiohttp.WSMsgType.TEXT, msg
+        events.append(json.loads(msg.data))
+    assert [e["type"] for e in events] == ["content", "done"]
+    assert "Hi there" in events[0]["content"]
+
+    await ws.close()
+    assert mock_upstream.received == []
+
+
+@pytest.mark.asyncio
+async def test_pr_a_non_greeting_still_relays(client, mock_upstream):
+    """Anything beyond a bare greeting still reaches the engine (PR-A)."""
+    kid_session, student_id = _confirmed_kid_lang("zh-hk")
+    ws = await _open_kid_chat(client, kid_session, student_id)
+
+    await ws.send_json(
+        {"type": "message", "capability": "chat", "message": "你好，我想學數學"}
+    )
+
+    events = []
+    for _ in range(5):  # 4 programmed events + auto_done
+        msg = await ws.receive()
+        assert msg.type == aiohttp.WSMsgType.TEXT, msg
+        events.append(json.loads(msg.data))
+    assert [e["type"] for e in events] == [
+        "session", "stage", "content", "result", "done",
+    ]
+
+    await ws.close()
+    assert mock_upstream.received
+    assert mock_upstream.received[0]["message"] == "你好，我想學數學"
+
+
+@pytest.mark.asyncio
+async def test_pr_a_greeting_short_circuit_audited(client, mock_upstream, tmp_path):
+    """PR-A short circuit is visible in the relay audit log."""
+    kid_session, student_id = _confirmed_kid_lang("zh-cn")
+    ws = await _open_kid_chat(client, kid_session, student_id)
+
+    await ws.send_json(
+        {"type": "message", "capability": "chat", "message": "嗨"}
+    )
+
+    for _ in range(2):
+        msg = await ws.receive()
+        assert msg.type == aiohttp.WSMsgType.TEXT, msg
+
+    await ws.close()
+    rows = relay_audit_mod.rows(
+        event=relay_audit_mod.EVENT_GREETING_SHORT_CIRCUIT
+    )
+    assert rows
+    assert rows[0]["student_mask"] == student_id[:8]

@@ -19,6 +19,8 @@ import { AssistantMessage } from '../components/ChatMessage';
 import { StreamingMessage } from '../components/StreamingMessage';
 import { Dibi } from '../components/Dibi';
 import { Starfield } from '../components/Starfield';
+import { WelcomeBubble } from '../components/WelcomeBubble';
+import { useLang } from '../lib/i18n';
 import { ApiError, api } from '../lib/api';
 import type { StudentCurriculumResponse } from '../lib/types';
 import logoWhite from '../assets/dreamer-logo-white.png';
@@ -56,6 +58,13 @@ const COPY = {
     gallery: 'My Gallery',
     hi: (n: string) => `Hi, ${n}!`,
     noProfile: 'Choose a child and enter the PIN to start chatting.',
+    // PR-B — first-visit welcome bubble. Personalised only when BOTH the
+    // student first name and a live week_index exist; every other path
+    // (no name / empty / failed curriculum) collapses to the plain line and
+    // never renders a mask or error surface.
+    welcomePersonal: (n: string, w: number, p: number) =>
+      `Hi ${n}! You're on Week ${w} — ${p}% of your course done. Ask me anything about today's lesson!`,
+    welcomeFallback: "Welcome! Ask me anything — I'm here to help you learn.",
   },
   hk: {
     tagline: '問咩都得，用你嘅方法學。',
@@ -67,6 +76,10 @@ const COPY = {
     gallery: '我嘅作品展',
     hi: (n: string) => `${n}，你好呀！`,
     noProfile: '揀小朋友並輸入 PIN 先可以開始對話。',
+    // PR-B — first-visit welcome bubble (zh-hk 用粵語，跟 PR-0 lang mapping)。
+    welcomePersonal: (n: string, w: number, p: number) =>
+      `${n}，你好呀！你而家喺第 ${w} 週，課程完成咗 ${p}%。今日有咩想問 Dibi？`,
+    welcomeFallback: '歡迎你！有咩想知、想問，都可以同 Dibi 傾。',
   },
   cn: {
     tagline: '问什么都可以，用你的方式学。',
@@ -78,6 +91,10 @@ const COPY = {
     gallery: '我的作品展',
     hi: (n: string) => `${n}，你好！`,
     noProfile: '选择孩子并输入 PIN 才能开始对话。',
+    // PR-B — first-visit welcome bubble.
+    welcomePersonal: (n: string, w: number, p: number) =>
+      `${n}，你好！你现在在第 ${w} 周，课程已完成 ${p}%。今天有什么想问 Dibi 吗？`,
+    welcomeFallback: '欢迎你！有什么想知道的、想问的，都可以和 Dibi 聊。',
   },
 };
 
@@ -123,7 +140,11 @@ export default function ChatPage() {
   const bandIdx = Math.max(0, BAND_THEMES.findIndex((b) => b.band === band));
   const profile: Profile = { name: rawName, bandIdx, student: realWs ? rawStudent : undefined };
 
-  const [lang, setLang] = useState<Lang>('en');
+  // PR-0 i18n: the student's saved lang_code drives the page language — the
+  // console (StudentHomePage) maps zh-hk/zh-cn/en into the global provider,
+  // so the bubble inherits that same mapping instead of defaulting to EN.
+  const { lang: uiLang } = useLang();
+  const [lang, setLang] = useState<Lang>(uiLang === 'hk' ? 'hk' : uiLang === 'cn' ? 'cn' : 'en');
   const [turns, setTurns] = useState<Turn[]>([]);
   const [stages, setStages] = useState<ActiveStage[] | null>(null);
   const [progressNote, setProgressNote] = useState<string | null>(null);
@@ -133,6 +154,7 @@ export default function ChatPage() {
   const [curriculum, setCurriculum] = useState<{ for: string; data: StudentCurriculumResponse } | null>(
     null,
   );
+  const [welcomeText, setWelcomeText] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<(() => void) | null>(null);
   const lastQuestionRef = useRef('');
@@ -200,6 +222,61 @@ export default function ChatPage() {
       window.removeEventListener('focus', onFocus);
     };
   }, [profile.student]);
+
+  // PR-B — first-visit welcome bubble above the input on the empty chat
+  // state. Trigger is ChatPage mount + empty turns + per-mask flag unset —
+  // zero WS coupling (no handshake dependency) and never on top of a chat
+  // history. Data comes from the authenticated /api/student/me body, NOT the
+  // URL: first_name + week_index arrive over the wire (no PII in query
+  // strings / access logs) and client-supplied URL params are ignored
+  // (red line 7). Personalised ONLY when BOTH first_name and a live
+  // week_index exist (pct = round(week/8*100), fixed definition); any
+  // failure (no name / 200 empty / 500 / 403 / timeout) collapses to the
+  // plain welcome line, which never renders a mask. The flag is marked the
+  // moment the bubble is about to render, not on close.
+  useEffect(() => {
+    const mask = profile.student;
+    if (!realWs || !mask) return;
+    if (turns.length > 0) return;
+    const KEY = `welcome_shown_v1_${mask}`;
+    try {
+      if (window.localStorage.getItem(KEY)) return;
+    } catch {
+      // storage unavailable — still show the bubble for this mount
+    }
+    let alive = true;
+    api.studentMe().then(
+      (resp) => {
+        if (!alive) return;
+        const name = resp.student?.first_name?.trim() ?? '';
+        const w = resp.badge?.week_index ?? null;
+        const total = resp.badge?.total_weeks ?? 0;
+        if (name && w !== null && total > 0) {
+          setWelcomeText(copy.welcomePersonal(name, w, Math.round((w / 8) * 100)));
+        } else {
+          setWelcomeText(copy.welcomeFallback);
+        }
+      },
+      () => {
+        if (alive) setWelcomeText(copy.welcomeFallback);
+      },
+    );
+    return () => {
+      alive = false;
+    };
+  }, [profile.student, turns.length, copy]);
+
+  // Mark the per-mask flag the moment the bubble renders.
+  useEffect(() => {
+    if (welcomeText === null) return;
+    const mask = profile.student;
+    if (!realWs || !mask) return;
+    try {
+      window.localStorage.setItem(`welcome_shown_v1_${mask}`, '1');
+    } catch {
+      // ignore persistence failures
+    }
+  }, [welcomeText, profile.student]);
 
   const ask = (text?: string) => {
     const userText = (text ?? input).trim();
@@ -384,6 +461,15 @@ export default function ChatPage() {
                 </>
               ) : (
                 <p className="mt-5 text-lg font-semibold text-white/70">{copy.noProfile}</p>
+              )}
+
+              {/* PR-B — first-visit welcome bubble. Sits below the tagline on
+                  the empty chat state (real-WS students only); the text is
+                  already localised and masked-safe by the effect above. The
+                  turns guard covers the race where the student starts
+                  chatting before the fetch resolves. */}
+              {turns.length === 0 && welcomeText && (
+                <WelcomeBubble text={welcomeText} accent={theme.accent} />
               )}
             </div>
           )}

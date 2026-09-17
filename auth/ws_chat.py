@@ -84,6 +84,7 @@ import json
 import logging
 import os
 import re
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -100,6 +101,21 @@ from . import students as students_mod
 logger = logging.getLogger("dreamer.auth.ws_chat")
 
 _UPSTREAM_CONNECT_TIMEOUT = 30.0  # seconds for the upstream WS connect
+
+# PR-C item 4/5 — client message_id dedup. Process-lifetime memory only: a
+# relay restart clears it, which is a known limitation (boss-approved PR
+# description note 3). Entries are opportunistic-TTL-pruned when the map
+# grows; the turn_state answer is "in_progress" until the turn finishes.
+_DEDUP_TTL_SECONDS = 600.0
+_DEDUP_RECENT: dict[str, dict] = {}
+
+# PR-C item 6 — relay-side replay of a completed turn, keyed by engine
+# session id. Lives in process memory exactly like the dedup map: a relay
+# restart loses it (known limitation, recorded in the PR description) and the
+# next subscribe_session then degrades to session-closed, which the frontend
+# treats as "clear the in-flight marker, no scary error".
+_COMPLETED_TURN_TAIL: dict[str, tuple[float, list[str]]] = {}
+_COMPLETED_TURN_TAIL_MAX = 256
 
 
 def _read_upstream_config() -> dict:
@@ -478,6 +494,8 @@ class _TurnInFlight:
         "content_emitted",
         "session_id",
         "turn_id",
+        "message_id",
+        "content_frames",
     )
 
     def __init__(self, raw_frame: str, language: str, student_mask: str) -> None:
@@ -488,6 +506,13 @@ class _TurnInFlight:
         self.content_emitted = False  # any visible frame forwarded?
         self.session_id: Optional[str] = None
         self.turn_id: Optional[str] = None
+        # PR-C item 4/5: client-supplied id (if any) — used to flip the
+        # dedup entry to inactive when this turn finishes.
+        self.message_id: Optional[str] = None
+        # PR-C item 6: raw content frames already delivered to the child this
+        # turn — kept so a later subscribe_session can replay the completed
+        # turn without dialing the engine again.
+        self.content_frames: list[str] = []
 
 
 class _ChatRelay:
@@ -719,14 +744,67 @@ class _ChatRelay:
         # P4: every client frame is session-restamped before anything else —
         # turn frames and subscribe/cancel alike, blanket by field.
         raw = self._restamp_session(raw)
+        frame = _parse_frame(raw)
+        ftype = frame.get("type")
+
+        # PR-C item 1 — app-level heartbeat: a ping is answered locally and
+        # never leaves the relay (no turn, no engine dial, no audit row).
+        if ftype == "ping":
+            await self.ws.send_json({"type": "pong"})
+            return
+
+        # PR-C item 6 — subscribe_session is answered by the relay itself,
+        # never forwarded to the engine: a completed turn whose content this
+        # relay process already delivered is replayed from memory (content +
+        # done); a session the relay has no memory of (fresh, or lost in a
+        # restart — the known in-memory limitation) is answered session-closed
+        # so the child clears its in-flight flag without a scary error.
+        if ftype == "subscribe_session":
+            await self._handle_subscribe_session(frame)
+            return
+
+        # PR-C item 4/5 — immediate-receipt ack + dedup. Any turn frame
+        # carrying a client message_id is acked BEFORE any engine work so a
+        # slow engine can never trip the client's 10s resend timer (ack means
+        # "relay received it", not "engine answered"). A duplicate message_id
+        # is answered with dup-ack + the current turn state and is never
+        # re-opened nor re-forwarded.
+        mid = frame.get("message_id")
+        if ftype in _TURN_FRAME_TYPES and isinstance(mid, str) and mid:
+            self._prune_dedup()
+            entry = _DEDUP_RECENT.get(mid)
+            if entry is not None:
+                state = "in_progress" if entry["active"] else "completed"
+                await self.ws.send_json(
+                    {
+                        "type": "ack",
+                        "message_id": mid,
+                        "status": "dup",
+                        "turn_state": state,
+                    }
+                )
+                logger.info(
+                    "ws_chat dedup hit message_id=%s state=%s mask=%s",
+                    mid,
+                    state,
+                    self.student_mask,
+                )
+                return
+            await self.ws.send_json(
+                {"type": "ack", "message_id": mid, "status": "received"}
+            )
+
         # PR-A: a bare greeting is answered locally — no engine dial, no
         # turn opened, no session row written (zero pollution). The reply
         # mirrors the engine's content+done shape so the frontend renders
         # it exactly like a real answer.
-        frame = _parse_frame(raw)
-        if frame.get("type") in _TURN_FRAME_TYPES:
+        if ftype in _TURN_FRAME_TYPES:
             reply = _greeting_reply(_frame_text(frame), self.language)
             if reply is not None:
+                if isinstance(mid, str) and mid:
+                    # a greeting completes instantly: remember it as inactive
+                    # so a resent message_id never replies duplicate content
+                    _DEDUP_RECENT[mid] = {"active": False, "ts": time.monotonic()}
                 await self._forward(
                     json.dumps(
                         {"type": "content", "content": reply},
@@ -745,6 +823,54 @@ class _ChatRelay:
             await self._start_turn(injected)
         if not await self._send_upstream(injected):
             logger.warning("ws_chat relay could not forward a client frame")
+
+    @staticmethod
+    def _prune_dedup() -> None:
+        """Opportunistic TTL cleanup for the process-lifetime dedup map."""
+        if len(_DEDUP_RECENT) < 256:
+            return
+        now = time.monotonic()
+        stale = [
+            key
+            for key, value in _DEDUP_RECENT.items()
+            if now - value["ts"] > _DEDUP_TTL_SECONDS
+        ]
+        for key in stale:
+            _DEDUP_RECENT.pop(key, None)
+
+    @staticmethod
+    def _prune_completed_tail() -> None:
+        """Opportunistic TTL cleanup for the process-lifetime replay cache."""
+        if len(_COMPLETED_TURN_TAIL) < _COMPLETED_TURN_TAIL_MAX:
+            return
+        now = time.monotonic()
+        stale = [
+            key
+            for key, (ts, _frames) in _COMPLETED_TURN_TAIL.items()
+            if now - ts > _DEDUP_TTL_SECONDS
+        ]
+        for key in stale:
+            _COMPLETED_TURN_TAIL.pop(key, None)
+
+    async def _handle_subscribe_session(self, frame: dict) -> None:
+        """PR-C item 6 — replay a completed turn from relay memory, or answer
+        session-closed. Never forwards to the engine (engine image untouched)."""
+        sid = frame.get("session_id")
+        if isinstance(sid, str) and sid:
+            entry = _COMPLETED_TURN_TAIL.get(sid)
+            if entry is not None:
+                _ts, frames = entry
+                for raw in frames:
+                    await self._forward(raw)
+                await self._forward(json.dumps({"type": "done"}))
+                return
+        await self.ws.send_json(
+            {
+                "type": "error",
+                "error_code": "session_closed",
+                "content": "session is no longer active",
+            }
+        )
 
     async def _start_turn(self, raw: str) -> None:
         if self._turn is not None:
@@ -765,6 +891,12 @@ class _ChatRelay:
             student_mask=self.student_mask,
             detail=f"frame_type={frame_type}",
         )
+        # PR-C item 4/5: remember this message_id as an active turn so a
+        # duplicate re-send gets dup-ack + in_progress and never re-opens.
+        mid = _parse_frame(raw).get("message_id")
+        if isinstance(mid, str) and mid:
+            turn.message_id = mid
+            _DEDUP_RECENT[mid] = {"active": True, "ts": time.monotonic()}
 
     async def _send_upstream(self, payload, *, binary: bool = False) -> bool:
         if not await self._ensure_upstream():
@@ -815,6 +947,7 @@ class _ChatRelay:
             if msg.type == aiohttp.WSMsgType.TEXT:
                 if await self._on_upstream_text(msg.data):
                     continue
+                self._remember_content(msg.data)
                 await self._forward(msg.data)
             elif msg.type == aiohttp.WSMsgType.BINARY:
                 await self._forward(msg.data, binary=True)
@@ -902,6 +1035,20 @@ class _ChatRelay:
             self._finish_turn(relay_audit.STATUS_COMPLETED, None)
         return False
 
+    def _remember_content(self, raw: str) -> None:
+        """PR-C item 6 — keep the raw content frames of the current turn so a
+        later subscribe_session can replay a completed answer without the
+        engine. Bounded to the same constant as the tail cache."""
+        turn = self._turn
+        if turn is None:
+            return
+        frame = _parse_frame(raw)
+        if frame.get("type") != "content":
+            return
+        if len(turn.content_frames) >= _COMPLETED_TURN_TAIL_MAX:
+            return
+        turn.content_frames.append(raw)
+
     @staticmethod
     def _note_turn_metadata(turn: _TurnInFlight, frame: dict) -> None:
         session_id = frame.get("session_id")
@@ -927,6 +1074,17 @@ class _ChatRelay:
             RuntimeError,
         ) as exc:
             logger.warning("ws_chat client forward failed: %s", exc)
+            # PR-C item 5: a frame the child never received is evidence —
+            # previously warning-only, now an audit row so delivery gaps are
+            # reconstructable (turn40 audit gap fix).
+            turn = self._turn
+            relay_audit.record(
+                relay_audit.EVENT_DELIVERY_FAIL,
+                student_mask=self.student_mask,
+                session_id=turn.session_id if turn else None,
+                turn_id=turn.turn_id if turn else None,
+                detail="client_forward_failed",
+            )
             upstream = self._upstream
             self._upstream = None
             await _close_quietly(upstream)
@@ -1095,6 +1253,22 @@ class _ChatRelay:
             upstream_error=upstream_error,
             detail=detail,
         )
+        # PR-C item 4/5: this message_id's turn is no longer in flight — a
+        # later duplicate is answered dup-ack + completed.
+        if turn.message_id:
+            entry = _DEDUP_RECENT.get(turn.message_id)
+            if entry is not None:
+                entry["active"] = False
+        # PR-C item 6: a completed turn with relay-side content becomes the
+        # replay source for a later subscribe_session. In-process memory only
+        # — a restart loses it (known limitation, PR description).
+        if status == relay_audit.STATUS_COMPLETED:
+            if turn.session_id and turn.content_frames:
+                _COMPLETED_TURN_TAIL[turn.session_id] = (
+                    time.monotonic(),
+                    list(turn.content_frames),
+                )
+                _ChatRelay._prune_completed_tail()
         self._turn = None
 
     async def _reap_turn(

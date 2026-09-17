@@ -48,6 +48,15 @@ const WS_PATH = '/api/ws/chat';
 const MAX_RETRIES = 5; // 1s → 2s → 4s → 8s → 16s (+ jitter)
 const RESUME_SILENCE_MS = 8000; // reconnect got no replay events → turn lost
 const JITTER_MS = 300;
+// PR-C item 1 — app-level heartbeat: client pings every 30s, relay answers
+// locally (keeps intermediate proxies from idling the socket out).
+const PING_INTERVAL_MS = 30000;
+// PR-C item 4 — immediate-receipt ack: the relay acks a turn frame as soon as
+// it arrives. If no ack within 10s the client re-sends the SAME message_id
+// (max 2 resends, then network fail). The ack means "relay got it", never
+// "engine answered".
+const ACK_TIMEOUT_MS = 10000;
+const ACK_MAX_RESENDS = 2;
 
 export interface WsStreamContext {
   student?: string; // 8-char mask prefix, from ?student= (full ids never enter state)
@@ -88,6 +97,41 @@ function savePersistedSession(student: string, sessionId: string): void {
     localStorage.setItem(sessionStorageKey(student), sessionId);
   } catch {
     /* storage disabled — continuity degrades to per-stream, never crashes */
+  }
+}
+
+// ---- PR-C item 2 — in-flight turn marker (sessionStorage, per tab) -------
+// sessionStorage is the precise model for "同 tab F5 要 resume、新 tab 唔帶舊
+// turn": it survives a reload in the SAME tab but is never copied to a new
+// tab, so a fresh tab starts a new turn while a F5 mid-turn resumes the old
+// one. Set when a turn frame goes out, cleared on done / fail / quiet finish.
+const INFLIGHT_KEY_PREFIX = 'dreamer.ws_chat.inflight.';
+
+function inflightKey(student: string): string {
+  return `${INFLIGHT_KEY_PREFIX}${student}`;
+}
+
+function loadInflight(student: string): boolean {
+  try {
+    return window.sessionStorage.getItem(inflightKey(student)) === '1';
+  } catch {
+    return false; // storage disabled — fall back to startTurn each time
+  }
+}
+
+function setInflight(student: string): void {
+  try {
+    window.sessionStorage.setItem(inflightKey(student), '1');
+  } catch {
+    /* storage disabled — degrade to per-stream, never crashes */
+  }
+}
+
+function clearInflight(student: string): void {
+  try {
+    window.sessionStorage.removeItem(inflightKey(student));
+  } catch {
+    /* storage disabled */
   }
 }
 
@@ -205,12 +249,25 @@ export function createWsChatStream(
   // Reconnect resume markers
   let resumeHangTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  // PR-C item 3 — send queue: frames sent while the socket is not OPEN are
+  // queued and flushed on open (fixes the silent drop on send-before-reconnect).
+  const queue: string[] = [];
+  // PR-C item 4 — ack-wait state for the current turn frame
+  let resendTimer: ReturnType<typeof setTimeout> | null = null;
+  let pendingAckMid = '';
+  let resendCount = 0;
+  // PR-C item 1 — heartbeat timer
+  let pingTimer: ReturnType<typeof setInterval> | null = null;
 
   const clearTimers = () => {
     if (reconnectTimer) clearTimeout(reconnectTimer);
     if (resumeHangTimer) clearTimeout(resumeHangTimer);
+    if (resendTimer) clearTimeout(resendTimer);
+    if (pingTimer) clearInterval(pingTimer);
     reconnectTimer = null;
     resumeHangTimer = null;
+    resendTimer = null;
+    pingTimer = null;
   };
 
   const fail = (kind: KidErrorKind) => {
@@ -219,6 +276,7 @@ export function createWsChatStream(
     // retries; the user retries manually which opens a fresh stream.
     closedByUser = true;
     clearTimers();
+    clearInflight(student);
     h.onStatus('failed');
     h.onError(kind);
     safeClose();
@@ -238,6 +296,7 @@ export function createWsChatStream(
     if (c.cancelled) return;
     closedByUser = true;
     clearTimers();
+    clearInflight(student);
     h.onStatus('idle');
     safeClose();
   };
@@ -263,12 +322,51 @@ export function createWsChatStream(
     resumeHangTimer = null;
   };
 
-  const sendFrame = (payload: Record<string, unknown>) => {
-    if (ws?.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(payload));
-    } else {
-      console.warn('[chat-ws] send attempted while socket not open', payload.type);
+  // PR-C item 4 — per-turn client id. crypto.randomUUID when available
+  // (secure context), deterministic-ish fallback otherwise.
+  const newMessageId = (): string => {
+    try {
+      if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        return crypto.randomUUID();
+      }
+    } catch {
+      /* fall through */
     }
+    return `m-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+  };
+
+  const sendFrame = (payload: Record<string, unknown>): boolean => {
+    const text = JSON.stringify(payload);
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(text);
+      return true;
+    }
+    // PR-C item 3 — never drop: park the frame and flush on open.
+    queue.push(text);
+    return false;
+  };
+
+  const flushQueue = (): boolean => {
+    if (ws?.readyState !== WebSocket.OPEN) return false;
+    let flushed = false;
+    while (queue.length > 0) {
+      const text = queue.shift();
+      if (text !== undefined) {
+        ws.send(text);
+        flushed = true;
+      }
+    }
+    return flushed;
+  };
+
+  // PR-C item 1 — app-level heartbeat while the socket is live.
+  const startPing = () => {
+    if (pingTimer) clearInterval(pingTimer);
+    pingTimer = setInterval(() => {
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'ping' }));
+      }
+    }, PING_INTERVAL_MS);
   };
 
   const startTurn = () => {
@@ -277,13 +375,40 @@ export function createWsChatStream(
     // top-level field per docs/phase2-websocket.md. session_id carries the
     // persisted engine session (P4 §4.1(7)) — the relay blanket-rewrites it
     // to its own map, so a stale/missing value can never cross students.
-    sendFrame({
+    const messageId = newMessageId();
+    setInflight(student);
+    pendingAckMid = messageId;
+    resendCount = 0;
+    const frame = {
       type: 'message',
       capability: 'chat',
       content: input,
       language: langCode,
       session_id: sessionId, // persisted engine session; '' → server assigns
-    });
+      message_id: messageId, // PR-C item 4 — relay acks this immediately
+    };
+    sendFrame(frame);
+    armResend(frame);
+  };
+
+  const armResend = (frame: Record<string, unknown>) => {
+    if (resendTimer) clearTimeout(resendTimer);
+    resendTimer = setTimeout(() => {
+      if (c.cancelled) return;
+      if (pendingAckMid !== frame.message_id) return; // ack already arrived
+      if (resendCount >= ACK_MAX_RESENDS) {
+        console.error('[chat-ws] no ack after resends — network fail');
+        clearInflight(student);
+        fail('network');
+        return;
+      }
+      resendCount += 1;
+      console.warn(
+        `[chat-ws] resend message ${String(frame.message_id)} (${resendCount}/${ACK_MAX_RESENDS})`,
+      );
+      sendFrame(frame); // same message_id — relay dedups if the first one landed
+      armResend(frame);
+    }, ACK_TIMEOUT_MS);
   };
 
   const resumeTurn = () => {
@@ -394,6 +519,9 @@ export function createWsChatStream(
       case 'done': {
         doneSeen = true;
         clearResumeHangWatch();
+        // PR-C item 2 — the turn is over: clear the in-flight marker so the
+        // next send (even after a F5) starts a fresh turn instead of resuming.
+        clearInflight(student);
         if (!resultSeen) {
           // Result was never emitted (rare) — build the contract payload from
           // what content events delivered; empty → kid-safe turn-lost.
@@ -406,11 +534,44 @@ export function createWsChatStream(
         safeClose();
         break;
       }
+      case 'ack': {
+        // PR-C item 4 — immediate-receipt receipt. Clears the 10s resend
+        // watch; a dup-ack means the relay already owns this message_id and
+        // reports the current turn state instead of re-opening it.
+        const mid = getStr(ev.message_id);
+        const status = getStr(ev.status);
+        if (mid && resendTimer && pendingAckMid === mid) {
+          clearTimeout(resendTimer);
+          resendTimer = null;
+          pendingAckMid = '';
+        }
+        if (status === 'dup') {
+          const turnState = getStr(ev.turn_state);
+          console.warn('[chat-ws] dup-ack', mid, turnState);
+          if (turnState === 'completed' && !resultSeen) {
+            // The relay finished this turn already but nothing reached us —
+            // degrade exactly like a resume that replays nothing.
+            fail('turn-lost');
+          }
+        }
+        break;
+      }
+      case 'pong': {
+        // PR-C item 1 — heartbeat echo, nothing to render.
+        break;
+      }
       case 'error': {
         const code = getStr(ev.error_code);
         const msg = getStr(ev.content) || getStr(pick(meta ?? {}, 'error'));
         console.error('[chat-ws] server error frame', code, msg);
         clearResumeHangWatch();
+        // PR-C item 6 — session_closed means the relay has no replay for this
+        // session (completed-but-lost or never existed): clear the in-flight
+        // flag quietly; a scary error must not surface for a resume path.
+        if (code === 'session_closed') {
+          finishQuietly();
+          break;
+        }
         fail(code === 'upstream_unavailable' || code === '' ? 'upstream' : 'upstream');
         break;
       }
@@ -437,8 +598,15 @@ export function createWsChatStream(
 
     ws.onopen = () => {
       if (c.cancelled) return;
-      if (!sessionId) startTurn();
-      else resumeTurn();
+      startPing();
+      // PR-C item 3 — queued frames go out first (a turn frame already sent
+      // means "start that turn", never double-start).
+      if (flushQueue()) return;
+      // PR-C item 2 — in-flight marker decides resume vs start: a turn is
+      // still running in THIS tab → resume its tail; otherwise start fresh
+      // even if a persisted session id exists (the A-scenario bug).
+      if (loadInflight(student)) resumeTurn();
+      else startTurn();
     };
 
     ws.onmessage = (msg) => {
@@ -525,6 +693,7 @@ export function createWsChatStream(
     closedByUser = true;
     clearAll(c);
     clearTimers();
+    clearInflight(student);
     safeClose();
     ws = null;
   };

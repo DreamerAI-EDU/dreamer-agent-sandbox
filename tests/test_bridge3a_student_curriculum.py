@@ -34,6 +34,7 @@ os.environ.setdefault("PYTHONPATH", REPO_ROOT)
 from auth import consent as consent_mod  # noqa: E402
 from auth import db as auth_db  # noqa: E402
 from auth import security as auth_security  # noqa: E402
+from auth import students as students_mod  # noqa: E402
 from auth.api import build_app  # noqa: E402
 from pipeline import topic_metadata_schema  # noqa: E402
 
@@ -69,8 +70,19 @@ def _conn() -> sqlite3.Connection:
     return conn
 
 
+def _kid_session_cookie(resp) -> str:
+    for sc in resp.headers.getall("Set-Cookie", []):
+        if sc.startswith("kid_session="):
+            return sc.split(";", 1)[0].split("=", 1)[1]
+    raise AssertionError("no kid_session cookie")
+
+
 def _auth(token) -> dict[str, str]:
     return {**HEADERS, "Cookie": f"auth_session={token}"}
+
+
+def _kid_auth(token) -> dict[str, str]:
+    return {**HEADERS, "Cookie": f"kid_session={token}"}
 
 
 def _audit_events(tmp_path) -> list[dict]:
@@ -251,6 +263,39 @@ async def _mounted_child_class(client, teacher_token, *, parent_email):
         client, parent_email, class_id=class_id
     )
     return class_id, token, student_id
+
+
+async def _loginable_child(client, teacher_token, *, parent_email, class_id,
+                           pin="1234"):
+    """A confirmed child with a REAL pin_hash — can mint a kid_session."""
+    _, _, student_id = await _parent_child(
+        client, parent_email, class_id=class_id
+    )
+    students_mod.set_pin(student_id, students_mod.hash_pin(pin))
+    return student_id
+
+
+async def _login_kid(client, class_join_code, pin="1234"):
+    resp = await client.post(
+        "/api/student/login",
+        json={"join_code": class_join_code, "pin": pin},
+        headers=HEADERS,
+    )
+    assert resp.status == 200, await resp.text()
+    return _kid_session_cookie(resp)
+
+
+def _class_join_code(client, class_id) -> str:
+    """Read the class join_code straight from the DB (helper, not an API)."""
+    conn = _conn()
+    try:
+        row = conn.execute(
+            "SELECT join_code FROM classes WHERE id = ?", (class_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None and row["join_code"]
+    return row["join_code"]
 
 
 # ---------------------------------------------------------------------------
@@ -551,3 +596,99 @@ async def test_badge_picks_the_class_with_a_mounted_course(client, teacher_invit
     assert body["state"] == "active"
     assert body["week_index"] == 1
     assert body["unit_title"] == "Week 1 kid-facing unit"
+
+
+# ---------------------------------------------------------------------------
+# P0 — student self-serve branch (kid_session, student-console entry)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_badge_student_session_reads_own_badge(client, teacher_invite):
+    """A live kid_session may read its OWN badge (mask or full id) — 200."""
+    teacher = await _setup_teacher(client)
+    _seed_curriculum()
+    class_id = (await _create_class(client, teacher))["id"]
+    await _mount(client, teacher, class_id)
+    student_id = await _loginable_child(
+        client, teacher, parent_email="parent-a@test.local", class_id=class_id
+    )
+    kid_token = await _login_kid(client, _class_join_code(client, class_id))
+
+    for identifier in (student_id[:8], student_id):
+        resp = await client.get(
+            f"{UNIT_URL}?student={identifier}", headers=_kid_auth(kid_token)
+        )
+        assert resp.status == 200, await resp.text()
+        body = await resp.json()
+        assert body["state"] == "active"
+        assert body["week_index"] == 1
+        assert body["unit_title"] == "Week 1 kid-facing unit"
+        # red line: the payload never leaks the full student id
+        assert student_id not in await resp.text()
+
+
+@pytest.mark.asyncio
+async def test_badge_student_session_cross_classmate_is_403(
+    client, teacher_invite, tmp_path
+):
+    """A kid_session may only read its own badge — a classmate's is 403."""
+    teacher = await _setup_teacher(client)
+    _seed_curriculum()
+    class_id = (await _create_class(client, teacher))["id"]
+    await _mount(client, teacher, class_id)
+    student_a = await _loginable_child(
+        client, teacher, parent_email="parent-a@test.local", class_id=class_id,
+        pin="1234",
+    )
+    student_b = await _loginable_child(
+        client, teacher, parent_email="parent-b@test.local", class_id=class_id,
+        pin="5678",
+    )
+    kid_token = await _login_kid(client, _class_join_code(client, class_id))
+
+    # classmate's mask and full id are both refused, with the same body
+    mask_resp = await client.get(
+        f"{UNIT_URL}?student={student_b[:8]}", headers=_kid_auth(kid_token)
+    )
+    full_resp = await client.get(
+        f"{UNIT_URL}?student={student_b}", headers=_kid_auth(kid_token)
+    )
+    assert mask_resp.status == 403
+    assert full_resp.status == 403
+    assert await mask_resp.json() == await full_resp.json()
+
+    # own badge still works — the denial is ownership-scoped
+    assert (
+        await client.get(
+            f"{UNIT_URL}?student={student_a[:8]}", headers=_kid_auth(kid_token)
+        )
+    ).status == 200
+
+    events = [e["event"] for e in _audit_events(tmp_path)]
+    assert events.count("curriculum_student_cross_access") == 2
+
+
+@pytest.mark.asyncio
+async def test_badge_student_session_requires_student_param(client, teacher_invite):
+    """Same 400 as the parent flow: a kid_session without ?student= is bad."""
+    teacher = await _setup_teacher(client)
+    _seed_curriculum()
+    class_id = (await _create_class(client, teacher))["id"]
+    await _mount(client, teacher, class_id)
+    await _loginable_child(
+        client, teacher, parent_email="parent-a@test.local", class_id=class_id
+    )
+    kid_token = await _login_kid(client, _class_join_code(client, class_id))
+
+    resp = await client.get(UNIT_URL, headers=_kid_auth(kid_token))
+    assert resp.status == 400
+
+
+@pytest.mark.asyncio
+async def test_badge_student_session_anonymous_still_401(client):
+    """No kid_session, no auth_session → the unified 401 stays."""
+    resp = await client.get(
+        f"{UNIT_URL}?student={uuid.uuid4().hex[:8]}", headers=HEADERS
+    )
+    assert resp.status == 401

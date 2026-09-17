@@ -2331,15 +2331,16 @@ async def handle_class_curriculum(request: web.Request) -> web.Response:
 async def handle_student_curriculum(request: web.Request) -> web.Response:
     """GET /api/student/curriculum?student=<mask|full> — kid "Week X / 8" badge.
 
-    Bridge-3a read surface. Same acting-parent model as the kid portfolio
-    (``handle_student_portfolio``): the platform has no separate student login,
-    children are PIN-unlocked rows reached through the parent's session.
-      * parent + own child       -> 200 {state, week_index, total_weeks,
-                                    unit_title}
-      * parent + another child   -> unified 403 (cross-class read attempt,
-                                    WARNING-logged)
-      * teacher / admin session  -> unified 403 (the kid badge is not a staff
-                                    lens)
+    Bridge-3a read surface. Two caller kinds are allowed past auth:
+      * parent session (auth_session) — the unchanged acting-parent flow:
+        parent + own child -> 200 {state, week_index, total_weeks,
+        unit_title}; parent + another child -> unified 403; teacher/admin
+        session -> unified 403 (the kid badge is not a staff lens);
+      * the student's own live kid_session (P0 student-console entry) —
+        may only ever read their OWN badge (mask or full id), never a
+        classmate's. The payload is the same shared badge the parent and
+        ``/api/student/me`` read, so parent and child are never told two
+        different weeks.
       * anonymous                -> 401
       * no class / no mounted course -> 200 {"state": "none", ...}; the child
                                     surface never 500s on a neutral state.
@@ -2349,30 +2350,51 @@ async def handle_student_curriculum(request: web.Request) -> web.Response:
     the wire (ruling #1).
     """
     user = _session_user(request)
-    if user is None:
+    kid = _student_session_student(request)
+
+    if user is None and kid is None:
         return web.json_response(_ERR_AUTH, status=401)
-    if user["role"] != "parent":
-        _log_security_warning(
-            "curriculum_student_role_denied",
-            user_id=user["id"],
-            detail="non-parent session attempted the kid curriculum surface",
-        )
-        return web.json_response(_ERR_FORBIDDEN, status=403)
 
     identifier = (request.query.get("student") or "").strip()
     if not identifier:
         return web.json_response(_ERR_INVALID, status=400)
-    student, ambiguous = students_mod.resolve_student_identifier(identifier, user)
-    if ambiguous:
-        return web.json_response(_ERR_INVALID, status=400)
-    if student is None or not students_mod.can_access_student(user, student):
-        _log_security_warning(
-            "curriculum_student_cross_access",
-            user_id=user["id"],
-            target_id=identifier,
-            detail="attempted to read another child's curriculum week badge",
+
+    if user is not None:
+        # ---- parent flow (unchanged) ----
+        if user["role"] != "parent":
+            _log_security_warning(
+                "curriculum_student_role_denied",
+                user_id=user["id"],
+                detail="non-parent session attempted the kid curriculum surface",
+            )
+            return web.json_response(_ERR_FORBIDDEN, status=403)
+        student, ambiguous = students_mod.resolve_student_identifier(
+            identifier, user
         )
-        return web.json_response(_ERR_FORBIDDEN, status=403)
+        if ambiguous:
+            return web.json_response(_ERR_INVALID, status=400)
+        if student is None or not students_mod.can_access_student(user, student):
+            _log_security_warning(
+                "curriculum_student_cross_access",
+                user_id=user["id"],
+                target_id=identifier,
+                detail="attempted to read another child's curriculum week badge",
+            )
+            return web.json_response(_ERR_FORBIDDEN, status=403)
+    else:
+        # ---- student self-serve flow (P0 student-console entry) ----
+        # A kid_session may only ever read its OWN badge — mask or full id,
+        # never a classmate's (same ownership shape as the WS chat gate).
+        student = kid
+        own_mask = student["id"][:8]
+        if identifier not in (own_mask, student["id"]):
+            _log_security_warning(
+                "curriculum_student_cross_access",
+                user_id=student["id"],
+                target_id=identifier,
+                detail="student attempted to read another child's curriculum badge",
+            )
+            return web.json_response(_ERR_FORBIDDEN, status=403)
 
     return web.json_response(curriculum_mod.student_week_badge(student["id"]))
 

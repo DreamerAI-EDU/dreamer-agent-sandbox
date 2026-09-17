@@ -17,7 +17,7 @@ import { useLang } from '../lib/i18n';
 import type { StudentMeResponse } from '../lib/types';
 
 export function StudentHomePage() {
-  const { copy } = useLang();
+  const { copy, setLang } = useLang();
   const navigate = useNavigate();
   const [home, setHome] = useState<StudentMeResponse | null>(null);
   const [error, setError] = useState('');
@@ -28,7 +28,14 @@ export function StudentHomePage() {
     api
       .studentMe()
       .then((data) => {
-        if (alive) setHome(data);
+        if (!alive) return;
+        setHome(data);
+        // PR-0 i18n fix: the student's saved lang_code drives the UI language
+        // (zh-hk accounts no longer see the English console by default).
+        const lc = data.student?.lang_code;
+        if (lc === 'zh-hk') setLang('hk');
+        else if (lc === 'zh-cn') setLang('cn');
+        else if (lc === 'en') setLang('en');
       })
       .catch((err) => {
         if (!alive) return;

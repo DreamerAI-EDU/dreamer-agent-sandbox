@@ -36,6 +36,9 @@ interface RawFrame {
   turn_id?: unknown;
   error_code?: unknown;
   metadata?: Record<string, unknown>;
+  message_id?: unknown;   // PR-C item 4 — ack 收據含 message_id（TS2339 fix-forward）
+  status?: unknown;       // PR-C item 4 — ack 含 status（'dup' 等）
+  turn_state?: unknown;   // PR-C item 4 — dup-ack 含 turn_state（'completed' 判 turn-lost）
 }
 
 interface ChatSource {

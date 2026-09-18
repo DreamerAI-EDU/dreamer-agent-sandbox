@@ -23,6 +23,8 @@ export type StreamHandlers = {
 
 export interface StreamContext {
   student?: string; // 8-char mask prefix passed to the WS handshake
+  /** mount-resume: mark this stream as a fresh page-load resume attempt (F5 reload), not a same-instance reconnect */
+  resumeFromMount?: boolean;
 }
 
 export type PlayStream = (

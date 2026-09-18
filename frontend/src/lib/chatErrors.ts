@@ -8,7 +8,8 @@ export type KidErrorKind =
   | 'permission' // WS handshake rejected: ownership / not confirmed (403 class)
   | 'network' // transport-level failure (cannot reach server)
   | 'upstream' // server relay / DeepTutor turn rejected with an error frame
-  | 'turn-lost'; // reconnect succeeded but the server no longer replays the turn
+  | 'turn-lost' // reconnect succeeded but the server no longer replays the turn
+  | 'resume-lost'; // mount-resume: subscribe_session answered session_closed (turn reaped / not replayable)
 
 export type ChatStreamStatus =
   | 'idle' // no connection in flight (before ask / after terminal done)
@@ -98,6 +99,18 @@ export const ERROR_COPY: Record<KidErrorKind, KidErrorCopy> = {
       en: 'Tap Ask again — Dibi will start fresh.',
       hk: '再撳「問 Dibi」，佢會重新答你。',
       cn: '再点「问 Dibi」，它会重新回答你。',
+    },
+  },
+  'resume-lost': {
+    title: {
+      en: 'You were in the middle of a question — the answer is no longer here.',
+      hk: '你頭先問緊嘅問題，個答案已經搵唔返。',
+      cn: '你刚才问的问题，答案已经找不回来了。',
+    },
+    hint: {
+      en: 'Ask again and Dibi will give you a fresh answer.',
+      hk: '再問多次，Dibi 會重新答你。',
+      cn: '再问一次，Dibi 会重新回答你。',
     },
   },
 };

@@ -63,6 +63,8 @@ const ACK_MAX_RESENDS = 2;
 
 export interface WsStreamContext {
   student?: string; // 8-char mask prefix, from ?student= (full ids never enter state)
+  /** mount-resume: true when this stream is a fresh page-load resume attempt (F5 reload), not a same-instance reconnect */
+  resumeFromMount?: boolean;
 }
 
 function delayMs(attempt: number): number {
@@ -120,6 +122,13 @@ function loadInflight(student: string): boolean {
   } catch {
     return false; // storage disabled — fall back to startTurn each time
   }
+}
+
+/** Public read-only view of the in-flight marker — used by ChatPage's
+ *  mount-resume effect (F5 reload mid-turn) to decide whether to open a
+ *  silent resume stream. Never mutated here. */
+export function hasInflightTurn(student: string): boolean {
+  return loadInflight(student);
 }
 
 function setInflight(student: string): void {
@@ -569,10 +578,17 @@ export function createWsChatStream(
         console.error('[chat-ws] server error frame', code, msg);
         clearResumeHangWatch();
         // PR-C item 6 — session_closed means the relay has no replay for this
-        // session (completed-but-lost or never existed): clear the in-flight
-        // flag quietly; a scary error must not surface for a resume path.
+        // session (completed-but-lost or never existed). Mount-resume split:
+        // a fresh page-load that finds no replayable turn must NOT vanish
+        // quietly — the kid just came back mid-question, so surface the
+        // gentle resume-lost banner. Same-instance reconnect keeps the old
+        // quiet finish (nobody navigated away mid-answer).
         if (code === 'session_closed') {
-          finishQuietly();
+          if (ctx.resumeFromMount) {
+            fail('resume-lost');
+          } else {
+            finishQuietly();
+          }
           break;
         }
         fail(code === 'upstream_unavailable' || code === '' ? 'upstream' : 'upstream');

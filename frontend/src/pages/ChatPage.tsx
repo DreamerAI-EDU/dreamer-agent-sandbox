@@ -12,6 +12,7 @@ import { Link, useSearchParams } from 'react-router';
 import { BAND_THEMES, MOCK_TURNS } from '../lib/mock';
 import type { ChatPayload, Lang } from '../lib/mock';
 import { createStream, isRealWsMode } from '../lib/stream';
+import { hasInflightTurn } from '../lib/chatWs';
 import type { ChatStreamStatus, KidErrorKind } from '../lib/chatErrors';
 import { ERROR_COPY, RETRY_LABEL, STATUS_COPY, STOP_LABEL } from '../lib/chatErrors';
 import { StageLoader, type ActiveStage } from '../components/StageLoader';
@@ -96,6 +97,16 @@ const COPY = {
       `${n}，你好！你现在在第 ${w} 周，课程已完成 ${p}%。今天有什么想问 Dibi 吗？`,
     welcomeFallback: '欢迎你！有什么想知道的、想问的，都可以和 Dibi 聊。',
   },
+};
+
+// Mount-resume placeholder — rendered as the userText of the turn bubble
+// created when a fresh page-load found a still-running turn. The WS then
+// either replays the tail (resume) or collapses to the gentle resume-lost
+// banner (session_closed) — the kid never sees an empty bubble.
+const RESUME_PLACEHOLDER: Record<Lang, string> = {
+  en: 'You were in the middle of a question — Dibi is catching up…',
+  hk: '你頭先問緊問題——Dibi 正在追返個答案…',
+  cn: '你刚才问了个问题——Dibi 正在追回答案…',
 };
 
 // Bridge-3a — "Week X / 8" badge chrome (chat top bar). Only this frame is
@@ -277,6 +288,69 @@ export default function ChatPage() {
       // ignore persistence failures
     }
   }, [welcomeText, profile.student]);
+
+  // Mount-resume (PR-C item 2 gap fix): a fresh page-load that finds a turn
+  // still in flight (sessionStorage marker left by the pre-reload page) opens
+  // a silent WS stream with an EMPTY question — the relay replays the tail,
+  // or answers session_closed which this stream reports as the gentle
+  // resume-lost banner (resumeFromMount), NOT the quiet finish reserved for
+  // same-instance reconnects. Never fires when turns already exist (the user
+  // is mid-session this mount) or when the marker is absent.
+  useEffect(() => {
+    const mask = profile.student;
+    if (!realWs || !mask) return;
+    if (!hasInflightTurn(mask)) return;
+    if (turns.length > 0) return;
+    cancelRef.current?.();
+    setWsStatus('connecting');
+    cancelRef.current = stream(
+      '',
+      theme.band,
+      lang,
+      {
+        onStages: setStages,
+        onProgress: () => {},
+        onProgressNote: (note) => setProgressNote(note),
+        onContent: (chunk) => {
+          setTurns((t) => {
+            if (t.length === 0) {
+              const id = ++idRef.current;
+              return [{ id, userText: RESUME_PLACEHOLDER[lang], streamContent: chunk }];
+            }
+            const last = t[t.length - 1];
+            return t.map((x) =>
+              x.id === last.id ? { ...x, streamContent: (x.streamContent ?? '') + chunk } : x,
+            );
+          });
+        },
+        onResult: (payload) => {
+          setTurns((t) => {
+            if (t.length === 0) {
+              const id = ++idRef.current;
+              return [{ id, userText: RESUME_PLACEHOLDER[lang], payload }];
+            }
+            const last = t[t.length - 1];
+            return t.map((x) => (x.id === last.id ? { ...x, payload, streamContent: undefined } : x));
+          });
+          setStages(null);
+          setProgressNote(null);
+        },
+        onStatus: (status) => {
+          setWsStatus(status);
+          if (status === 'idle') {
+            setStages(null);
+            setProgressNote(null);
+          }
+        },
+        onError: (kind) => {
+          setKidError(kind);
+          setWsStatus('failed');
+        },
+      },
+      { student: mask, resumeFromMount: true },
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile.student]);
 
   const ask = (text?: string) => {
     const userText = (text ?? input).trim();

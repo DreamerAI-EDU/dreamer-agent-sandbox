@@ -248,6 +248,11 @@ export function createWsChatStream(
   let handshakeEvaluated = false; // only run the 401/403 diagnostic once
   let resultSeen = false;
   let doneSeen = false;
+  // 窗 5 retry 觀察用（log only，零行為改動）：done-seen 同 frame count 係
+  // 判讀 ③（client↔relay 交付斷點）嘅兩個關鍵信號。
+  let frameCount = 0;
+  let lastFrameType = '';
+  let currentTurnId = '';
 
   // Turn state (one session ⇒ one connection ⇒ one turn at a time)
   // P4 §4.1(7): seed from the persisted engine session ('' = first ever
@@ -271,6 +276,13 @@ export function createWsChatStream(
   // PR-C item 1 — heartbeat timer
   let pingTimer: ReturnType<typeof setInterval> | null = null;
 
+  // 觀察 log — DevTools filter: [chat-ws][observe]
+  const logObservation = (phase: string) => {
+    console.info(
+      `[chat-ws][observe] ${phase} done-seen=${doneSeen} frames=${frameCount} result-seen=${resultSeen} last-frame=${lastFrameType || '-'} last-seq=${lastSeq} attempt=${attempt} session=${sessionId.slice(0, 8) || '-'} turn=${currentTurnId || '-'}`,
+    );
+  };
+
   const clearTimers = () => {
     if (reconnectTimer) clearTimeout(reconnectTimer);
     if (resumeHangTimer) clearTimeout(resumeHangTimer);
@@ -284,6 +296,7 @@ export function createWsChatStream(
 
   const fail = (kind: KidErrorKind) => {
     if (c.cancelled) return;
+    logObservation(`fail:${kind}`);
     // Turn is over from the client's perspective — no further automatic
     // retries; the user retries manually which opens a fresh stream.
     closedByUser = true;
@@ -306,6 +319,7 @@ export function createWsChatStream(
     // Result already delivered to the UI — a missing done/terminal frame is
     // harmless; close without surfacing an error.
     if (c.cancelled) return;
+    logObservation('quiet-finish');
     closedByUser = true;
     clearTimers();
     clearInflight(student);
@@ -388,6 +402,7 @@ export function createWsChatStream(
     // persisted engine session (P4 §4.1(7)) — the relay blanket-rewrites it
     // to its own map, so a stale/missing value can never cross students.
     const messageId = newMessageId();
+    logObservation('turn-start');
     setInflight(student);
     pendingAckMid = messageId;
     resendCount = 0;
@@ -425,6 +440,7 @@ export function createWsChatStream(
 
   const resumeTurn = () => {
     // Reconnect: ask the server to replay the tail of the still-running turn.
+    logObservation('resume');
     sendFrame({
       type: 'subscribe_session',
       session_id: sessionId,
@@ -460,6 +476,7 @@ export function createWsChatStream(
   const emitResult = () => {
     if (resultSeen) return;
     resultSeen = true;
+    logObservation('result');
     const payload = buildPayload();
     if (!payload.content) {
       console.warn('[chat-ws] result with empty content — turn-lost path');
@@ -470,12 +487,17 @@ export function createWsChatStream(
   };
 
   const handleFrame = (raw: unknown) => {
+    frameCount += 1;
     if (!raw || typeof raw !== 'object') {
+      lastFrameType = '<non-object>';
       console.warn('[chat-ws] non-object frame dropped');
       return;
     }
     const ev = raw as RawFrame;
     const type = getStr(ev.type);
+    lastFrameType = type || '<untyped>';
+    const tid = getStr(ev.turn_id);
+    if (tid) currentTurnId = tid;
     const seq = getNum(ev.seq);
     if (seq > lastSeq) lastSeq = seq;
     const meta = ev.metadata && typeof ev.metadata === 'object' ? ev.metadata : undefined;
@@ -530,6 +552,7 @@ export function createWsChatStream(
       }
       case 'done': {
         doneSeen = true;
+        logObservation('done');
         clearResumeHangWatch();
         // PR-C item 2 — the turn is over: clear the in-flight marker so the
         // next send (even after a F5) starts a fresh turn instead of resuming.
@@ -648,6 +671,7 @@ export function createWsChatStream(
     ws.onclose = () => {
       if (c.cancelled || closedByUser) return;
       if (doneSeen) return; // terminal frame already handled
+      logObservation('closed-without-done');
       clearResumeHangWatch();
       h.onStatus('disconnected');
 

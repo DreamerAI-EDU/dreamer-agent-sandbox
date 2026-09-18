@@ -258,6 +258,16 @@ _VISIBLE_FRAME_TYPES = ("content", "progress")
 #: absolute turn deadline.
 _IDLE_WATCHDOG_SECONDS = 90.0
 
+#: 案 1 — idle upstream socket recycle. A turn that just finished leaves the
+#: relay<->engine socket parked; the engine evicts idle sessions and anything
+#: in between may drop a quiet socket without either end noticing, so the next
+#: turn could land on a half-dead pipe. Recycling it *between* turns means
+#: every turn starts from a socket this relay dialled moments ago.
+#: Pure hygiene: no audit row, no frame to the child, never while a turn is
+#: open (design §3.3). The cost is one re-dial for the first question after an
+#: idle gap (design §3.5).
+_IDLE_RECYCLE_SECONDS = 30.0
+
 #: retry delays, one entry per attempt; length == retry budget (pre-content only)
 _RETRY_BACKOFF_SECONDS = (1.5, 4.0)
 
@@ -338,6 +348,17 @@ def _idle_watchdog_seconds() -> float:
     return _env_positive_float(
         "WS_CHAT_IDLE_WATCHDOG_SECONDS", _IDLE_WATCHDOG_SECONDS
     )
+
+
+def _idle_recycle_seconds() -> float:
+    """案 1 knob; <= 0 disables recycling entirely."""
+    raw = os.environ.get("WS_CHAT_IDLE_RECYCLE_SECONDS")
+    if raw is None or raw == "":
+        return _IDLE_RECYCLE_SECONDS
+    try:
+        return float(raw)
+    except ValueError:
+        return _IDLE_RECYCLE_SECONDS
 
 
 def _retry_backoff_seconds() -> tuple:
@@ -554,6 +575,14 @@ class _ChatRelay:
         self._upstream_dropped = False
         self._backoff = _retry_backoff_seconds()
         self._idle_timeout = _idle_watchdog_seconds()
+        # 案 1 — idle upstream socket recycle (design v1.1). `_recycle_timer` is
+        # the armed task, `_recycled_socket` marks the socket *this relay* closed
+        # on purpose (so the reader can tell hygiene from a real fault), and
+        # `_upstream_ready` parks that reader until the next dial.
+        self._recycle_after = _idle_recycle_seconds()
+        self._recycle_timer: Optional[asyncio.Task] = None
+        self._recycled_socket = None
+        self._upstream_ready = asyncio.Event()
 
     # -- connection --------------------------------------------------------
 
@@ -588,6 +617,10 @@ class _ChatRelay:
         if self._upstream is not None:
             # a live socket is a clean slate again (review 裁決 A)
             self._upstream_dropped = False
+            # 案 1: wake a reader that is parked waiting for exactly this — a
+            # fresh socket to read from. Assigned and signalled in the same
+            # synchronous step, so `_wait_for_upstream` can never miss it.
+            self._upstream_ready.set()
         return self._upstream is not None
 
     async def run(self) -> None:
@@ -736,11 +769,19 @@ class _ChatRelay:
             # The child is gone: nothing can be shown any more, so an open turn
             # is reaped and the upstream socket is released.
             await self._reap_turn("client_closed")
+            # 案 1: no timer may fire against a relay whose child has left.
+            self._cancel_recycle()
             upstream = self._upstream
             self._upstream = None
             await _close_quietly(upstream)
 
     async def _on_client_frame(self, raw: str) -> None:
+        # 案 1, race layer 1 (design §3.4): cancel the idle-recycle timer
+        # synchronously, before *any* await in this frame's handling. Cancelling
+        # later would leave a window where the frame is in flight, the coroutine
+        # yields, and the timer fires first — closing the very socket the new
+        # turn is about to use.
+        self._cancel_recycle()
         # P4: every client frame is session-restamped before anything else —
         # turn frames and subscribe/cancel alike, blanket by field.
         raw = self._restamp_session(raw)
@@ -885,6 +926,11 @@ class _ChatRelay:
             student_mask=self.student_mask,
         )
         self._turn = turn
+        # 案 1: a turn is open again — the recycle clock must not be running.
+        # (The entry-point cancel covers the normal path; this one covers the
+        # `superseded_by_new_turn` path, where `_finish_turn` armed a timer for
+        # the *previous* turn microseconds before this one opened.)
+        self._cancel_recycle()
         frame_type = _parse_frame(raw).get("type")
         relay_audit.record(
             relay_audit.EVENT_TURN_START,
@@ -925,6 +971,12 @@ class _ChatRelay:
                     # keeps this leg identical to a watchdog kill; the child's
                     # next question opens a fresh stream (and a fresh dial).
                     return
+                if self._recycled_socket is not None:
+                    # 案 1: our own idle recycle is still settling — park for
+                    # the next dial rather than tear the relay down.
+                    self._recycled_socket = None
+                    await self._wait_for_upstream()
+                    continue
                 if not await self._maybe_retry(relay_audit.ERR_UPSTREAM_CLOSED):
                     return
                 continue
@@ -939,8 +991,7 @@ class _ChatRelay:
                 return
             except (aiohttp.ClientConnectionError, ConnectionResetError) as exc:
                 logger.warning("ws_chat upstream receive failed: %s", exc)
-                self._upstream = None
-                if not await self._maybe_retry(relay_audit.ERR_UPSTREAM_CLOSED):
+                if not await self._socket_lost(upstream):
                     return
                 continue
 
@@ -955,13 +1006,11 @@ class _ChatRelay:
                 logger.warning(
                     "ws_chat upstream error: %s", upstream.exception()
                 )
-                self._upstream = None
-                if not await self._maybe_retry(relay_audit.ERR_UPSTREAM_CLOSED):
+                if not await self._socket_lost(upstream):
                     return
                 continue
             else:  # CLOSE / CLOSING / CLOSED
-                self._upstream = None
-                if not await self._maybe_retry(relay_audit.ERR_UPSTREAM_CLOSED):
+                if not await self._socket_lost(upstream):
                     return
                 continue
 
@@ -1270,6 +1319,8 @@ class _ChatRelay:
                 )
                 _ChatRelay._prune_completed_tail()
         self._turn = None
+        # 案 1: the socket is idle between turns now — start the recycle clock.
+        self._arm_recycle()
 
     async def _reap_turn(
         self, reason: str, upstream_error: Optional[str] = None
@@ -1292,6 +1343,88 @@ class _ChatRelay:
             relay_audit.STATUS_ABORTED, upstream_error, detail=reason
         )
         return True
+
+    # -- 案 1: idle upstream socket recycle ---------------------------------
+    # Design: `案1_socket_idle_recycle_設計稿_v1.md` (v1.1, boss-signed).
+    # Between turns the relay<->engine socket just sits there; the engine
+    # evicts idle sessions and a quiet socket can go half-dead without either
+    # end noticing. Recycling it means every turn starts from a socket this
+    # relay dialled moments ago. Hard rules: only between turns, never an
+    # audit row, never a frame to the child, never a session-map touch.
+
+    def _cancel_recycle(self) -> None:
+        """Disarm the recycle timer. Idempotent, safe to call anywhere."""
+        timer = self._recycle_timer
+        if timer is not None:
+            timer.cancel()
+            self._recycle_timer = None
+
+    def _arm_recycle(self) -> None:
+        """Start the recycle clock. Only ever armed with no turn open."""
+        self._cancel_recycle()
+        if self._turn is not None or self._recycle_after <= 0:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:  # pragma: no cover - no loop, no timer
+            return
+        self._recycle_timer = loop.create_task(self._idle_recycle())
+
+    async def _idle_recycle(self) -> None:
+        """Close the idle upstream socket. Silent by contract (design §3.3)."""
+        try:
+            await asyncio.sleep(self._recycle_after)
+        except asyncio.CancelledError:
+            return
+        # Disarm first: from here on this task is committed, so a frame
+        # arriving mid-close must not try to cancel it.
+        self._recycle_timer = None
+        # Race layer 2 (design §3.4): the entry-point cancel covers the normal
+        # path; this identity check covers the window where a frame arrived
+        # while this coroutine was already past its last cancellation point.
+        if self._turn is not None or self._draining:
+            return
+        upstream = self._upstream
+        if upstream is None or upstream.closed:
+            return
+        # Mark the socket as "recycled, not dead" *before* releasing it, so the
+        # reader can tell our own hygiene from a real upstream fault. The next
+        # turn dials fresh through `_ensure_upstream`; the session id still
+        # comes from the P4 map, so continuity is untouched (design §3.2).
+        self._recycled_socket = upstream
+        self._upstream = None
+        await _close_quietly(upstream)
+
+    async def _socket_lost(self, upstream) -> bool:
+        """Settle one dead socket. True = the reader loop should keep going.
+
+        Identity-safe by design: a socket whose death is noticed *after* a
+        fresh dial replaced it must never clear ``self._upstream`` — that
+        would orphan the new socket's frames (案 1 recycle race).
+
+        A socket this relay recycled on purpose between turns is not a fault:
+        no retry (there is nothing to save), no audit (zero pollution), no
+        teardown (a hygiene action must never hang up on the child). The
+        reader parks until the next turn dials a fresh socket.
+        """
+        if self._upstream is upstream:
+            self._upstream = None
+        if upstream is not None and upstream is self._recycled_socket:
+            self._recycled_socket = None
+            await self._wait_for_upstream()
+            return True
+        return await self._maybe_retry(relay_audit.ERR_UPSTREAM_CLOSED)
+
+    async def _wait_for_upstream(self) -> None:
+        """Park until a live socket exists (案 1). Cancelled at teardown."""
+        while self._upstream is None or self._upstream.closed:
+            self._upstream_ready.clear()
+            # Re-check after clear(): `_ensure_upstream` assigns the socket and
+            # sets the event in one synchronous step, so either we see the
+            # socket here or the wait below is already signalled.
+            if self._upstream is not None and not self._upstream.closed:
+                break
+            await self._upstream_ready.wait()
 
 
 # ---------------------------------------------------------------------------

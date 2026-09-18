@@ -1419,6 +1419,148 @@ def test_p3_audit_table_matches_migration_and_is_append_only(
 
 
 # ---------------------------------------------------------------------------
+# 案 1 — idle upstream socket recycle (design v1.1, boss-signed)
+# ---------------------------------------------------------------------------
+#
+# Between turns the relay<->engine socket is parked. 案 1 closes it after a
+# quiet window so every turn starts from a socket the relay dialled moments
+# ago. The contract is deliberately narrow — only between turns, never an
+# audit row, never a frame to the child, never a session-map touch — and T1-T3
+# below pin exactly that, plus the race the entry-point cancel exists for.
+
+_RECYCLE_ENV = "WS_CHAT_IDLE_RECYCLE_SECONDS"
+
+
+def _ka1_script(session_id: str):
+    """Answer one turn completely, then go silent on the socket."""
+
+    async def script(ws, conn, idx):
+        await ws.send_json({"type": "session", "session_id": session_id})
+        await ws.send_json(
+            {"type": "content", "content": "答案", "session_id": session_id}
+        )
+        await ws.send_json(
+            {"type": "done", "turn_id": f"turn-{session_id}", "session_id": session_id}
+        )
+
+    return script
+
+
+@pytest.mark.asyncio
+async def test_ka1_idle_recycle_closes_the_socket_silently(
+    client, p3_upstream, monkeypatch
+):
+    """T1: a parked socket is recycled — zero audit rows, zero frames.
+
+    The child must see nothing at all: not an error, not a stray frame, not
+    even a close. The relay is still its live session; only the engine-side
+    leg was refreshed. Audit gains no row, so 驗收② keeps its clean baseline.
+    """
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+    monkeypatch.setenv(_RECYCLE_ENV, "0.3")
+
+    p3_upstream.on_message = _ka1_script("unified_ka1")
+
+    ws = await _open_chat(client, session, student_id)
+    await ws.send_json({"type": "message", "capability": "chat", "message": "我想學數學"})
+    events = await _collect(ws, 3)
+    assert [e["type"] for e in events] == ["session", "content", "done"]
+    assert _audit(event="turn_end")[0]["final_status"] == "completed"
+
+    before = len(_audit())
+    recycled = await _wait_for(lambda: p3_upstream.disconnects >= 1, timeout=3.0)
+    assert recycled, "the parked upstream socket was never recycled"
+
+    # silent by contract: nothing to the child, nothing to the audit
+    await _assert_quiet(ws)
+    assert len(_audit()) == before
+    assert _audit(event="midstream_error") == []
+    assert _audit(event="watchdog_kill") == []
+    await ws.close()
+
+
+@pytest.mark.asyncio
+async def test_ka1_next_turn_redials_and_keeps_the_session(
+    client, p3_upstream, monkeypatch
+):
+    """T2: the next turn rides a fresh socket with the P4 session intact.
+
+    Re-dialling must not cost continuity: the relay still stamps the mapped
+    session id onto the frame, so the engine sees one unbroken conversation
+    across two sockets. This is the §3.2 red line under test.
+    """
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+    monkeypatch.setenv(_RECYCLE_ENV, "0.3")
+
+    p3_upstream.on_message = _ka1_script("unified_ka1_redial")
+
+    ws = await _open_chat(client, session, student_id)
+    await ws.send_json({"type": "message", "capability": "chat", "message": "第一問"})
+    await _collect(ws, 3)
+    assert p3_upstream.connections == 1
+
+    assert await _wait_for(lambda: p3_upstream.disconnects >= 1, timeout=3.0)
+
+    # a client that picks its own session id must still be overruled (P4)
+    await ws.send_json(
+        {
+            "type": "message",
+            "capability": "chat",
+            "message": "第二問",
+            "session_id": "client-tried-to-choose",
+        }
+    )
+    events = await _collect(ws, 3, timeout=8.0)
+    assert [e["type"] for e in events] == ["session", "content", "done"]
+
+    assert p3_upstream.connections == 2, "the second turn reused the old socket"
+    second = [f for f in p3_upstream.frames if f["conn"] == 2]
+    assert second, "the second turn never reached a fresh upstream socket"
+    assert second[0]["frame"].get("session_id") == "unified_ka1_redial"
+    assert _audit(event="turn_end")[-1]["final_status"] == "completed"
+    await ws.close()
+
+
+@pytest.mark.asyncio
+async def test_ka1_recycle_never_fires_while_a_turn_is_open(
+    client, p3_upstream, monkeypatch
+):
+    """T3: an open turn is never recycled — silence belongs to the watchdog.
+
+    The window is shorter than the silence, so a recycle that forgot the
+    `self._turn is None` guard would kill the socket mid-turn and the child
+    would never get its answer. The watchdog is parked far away so that only
+    the recycle could possibly fire.
+    """
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+    monkeypatch.setenv(_RECYCLE_ENV, "0.3")
+    monkeypatch.setenv(_IDLE_WATCHDOG_ENV, "30")
+
+    async def script(ws, conn, idx):
+        sid = "unified_ka1_open"
+        await ws.send_json({"type": "session", "session_id": sid})
+        await asyncio.sleep(1.0)  # > 3x the recycle window, still a live turn
+        await ws.send_json({"type": "content", "content": "遲來的答案", "session_id": sid})
+        await ws.send_json({"type": "done", "turn_id": "turn-ka1-open", "session_id": sid})
+
+    p3_upstream.on_message = script
+
+    ws = await _open_chat(client, session, student_id)
+    await ws.send_json({"type": "message", "capability": "chat", "message": "我想學數學"})
+
+    events = await _collect(ws, 3, timeout=8.0)
+    assert [e["type"] for e in events] == ["session", "content", "done"]
+    assert p3_upstream.disconnects == 0, "an open turn's socket was recycled"
+    assert p3_upstream.connections == 1, "an open turn's socket was re-dialled"
+    assert _audit(event="turn_end")[0]["final_status"] == "completed"
+    assert _audit(event="watchdog_kill") == []
+    await ws.close()
+
+
+# ---------------------------------------------------------------------------
 # P4 — session map schema + upsert semantics (boss conditions 1 & 4)
 # ---------------------------------------------------------------------------
 

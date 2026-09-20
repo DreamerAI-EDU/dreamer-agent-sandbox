@@ -59,6 +59,19 @@ EVENT_GREETING_SHORT_CIRCUIT = "greeting_short_circuit"
 #: delivered (client socket died mid-stream). Previously only a log warning;
 #: now an audit row so delivery gaps are reconstructable end to end.
 EVENT_DELIVERY_FAIL = "delivery_fail"
+#: PR-D-b — the engine asked the child to pick an option on a clarification
+#: card. The frame itself is forwarded verbatim (it is a contract frame now);
+#: the row exists so "the turn was waiting on a human" is reconstructable and
+#: separable from "the engine went quiet" (watchdog) in the ledger.
+EVENT_TOOL_CALL = "tool_call"
+#: PR-D-b — the child's pick came back and was forwarded upstream on the same
+#: open turn. One row per forwarded pick; a dropped (non-pending) pick leaves
+#: no row, exactly like the frame it never sent.
+EVENT_TOOL_RESULT = "tool_result"
+#: PR-D-b — the clarify wait budget expired while the turn was still awaiting
+#: the child's pick. Paired with ERR_CLARIFY_TIMEOUT on the midstream row and
+#: on the turn_end row so a killed wait is never mistaken for an idle kill.
+EVENT_CLARIFY_TIMEOUT = "clarify_timeout"
 
 #: every event name this module may write (nothing else is allowed into the table)
 EVENTS = (
@@ -71,6 +84,9 @@ EVENTS = (
     EVENT_SESSION_MAP_INVALIDATED,
     EVENT_GREETING_SHORT_CIRCUIT,
     EVENT_DELIVERY_FAIL,
+    EVENT_TOOL_CALL,
+    EVENT_TOOL_RESULT,
+    EVENT_CLARIFY_TIMEOUT,
 )
 
 # --- upstream_error codes (normalized; the relay never logs raw upstream text) --
@@ -86,6 +102,11 @@ ERR_CONNECT_FAILED = "connect_failed"      # relay could not dial the upstream
 #: active turn (same student, second tab). Distinct from rate_limited on
 #: purpose: busy never spends the retry budget and is audited separately.
 ERR_SESSION_BUSY = "session_busy"
+#: PR-D-b — the child never picked an option on a clarification card within
+#: `_CLARIFY_WAIT_MAX_SECONDS` (design v0.2.1 §A.5). Deliberately NOT
+#: ERR_IDLE_TIMEOUT: the engine was not silent here, the turn was parked on a
+#: human, and the two must stay separable in the ledger. Non-retryable.
+ERR_CLARIFY_TIMEOUT = "clarify_timeout"
 
 # --- final_status values --------------------------------------------------
 

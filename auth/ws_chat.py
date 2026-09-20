@@ -251,12 +251,36 @@ _TERMINAL_FRAME_TYPES = ("done", "error")
 #: of these has been forwarded, the turn must never be re-sent.
 _VISIBLE_FRAME_TYPES = ("content", "progress")
 
+#: PR-D-b — upstream frame types that ask the child something (a clarification
+#: card) instead of answering them. A `tool_call` is a contract frame now: the
+#: relay forwards it verbatim (it is neither terminal nor visible answer text),
+#: and parks the turn in "awaiting the child" so the idle watchdog can tell an
+#: engine that went quiet from a child still reading a card (design §A.5 #1/#3).
+_INTERACTIVE_FRAME_TYPES = ("tool_call",)
+
+#: PR-D-b — frames worth replaying to a re-subscribing child. `content` is the
+#: answer text (PR-C item 6); `tool_call` is the clarification card, without
+#: which a refresh mid-wait would drop the question the child was answering.
+#: R5 β (boss-signed): the engine's terminal `result` frame joins them — that
+#: is the 7a fix proper, so a replayed turn ends on the same terminal frame the
+#: live turn ended on instead of "card and answer text but no terminal state".
+#: The child's own pick is deliberately NOT here: `tool_result` is a
+#: client→engine frame with no consumer on the child side (design §A.7 7a).
+_REPLAYABLE_FRAME_TYPES = ("content", "tool_call", "result")
+
 #: how long the upstream may stay silent *inside an open turn* before the
 #: watchdog reaps it. Idle-based (boss review condition 2): the timer restarts
 #: on every upstream frame and only runs while a turn is open, so a long but
 #: live turn (deep reasoning / many tool calls) is never killed. Never an
 #: absolute turn deadline.
 _IDLE_WATCHDOG_SECONDS = 90.0
+
+#: PR-D-b — how long a turn may stay parked on a clarification card before the
+#: relay closes it (boss-signed 2026-09-20: 300s). The idle watchdog cannot
+#: serve here: it measures *engine* silence, and a card the child is reading is
+#: not a silent engine. Env-tunable like the other timings, so a future
+#: tightening to 240s stays a config one-liner (design §A.5 #1/#5).
+_CLARIFY_WAIT_MAX_SECONDS = 300.0
 
 #: 案 1 — idle upstream socket recycle. A turn that just finished leaves the
 #: relay<->engine socket parked; the engine evicts idle sessions and anything
@@ -329,6 +353,11 @@ _CLIENT_ERROR_CODE = {
     relay_audit.ERR_IDLE_TIMEOUT: "upstream_idle_timeout",
     relay_audit.ERR_CONNECT_FAILED: "upstream_unavailable",
     relay_audit.ERR_SESSION_BUSY: "session_busy",
+    # PR-D-b: the wire value is the literal §A.8 expects the frontend to match
+    # (`code === 'ERR_CLARIFY_TIMEOUT'`) so the card can fall to its timeout
+    # state and the banner show the clarify-specific copy instead of the
+    # generic upstream one.
+    relay_audit.ERR_CLARIFY_TIMEOUT: "ERR_CLARIFY_TIMEOUT",
 }
 
 
@@ -347,6 +376,13 @@ def _env_positive_float(name: str, default: float) -> float:
 def _idle_watchdog_seconds() -> float:
     return _env_positive_float(
         "WS_CHAT_IDLE_WATCHDOG_SECONDS", _IDLE_WATCHDOG_SECONDS
+    )
+
+
+def _clarify_wait_max_seconds() -> float:
+    """PR-D-b knob: how long a parked clarify wait may last (design §A.5)."""
+    return _env_positive_float(
+        "WS_CHAT_CLARIFY_WAIT_SECONDS", _CLARIFY_WAIT_MAX_SECONDS
     )
 
 
@@ -517,6 +553,9 @@ class _TurnInFlight:
         "turn_id",
         "message_id",
         "content_frames",
+        "awaiting_tool_result",
+        "pending_tool_call_ids",
+        "clarify_wait_started",
     )
 
     def __init__(self, raw_frame: str, language: str, student_mask: str) -> None:
@@ -534,6 +573,19 @@ class _TurnInFlight:
         # turn — kept so a later subscribe_session can replay the completed
         # turn without dialing the engine again.
         self.content_frames: list[str] = []
+        # PR-D-b: the turn is parked on a clarification card the engine asked
+        # for (`tool_call`) and is waiting for the child's `tool_result`. While
+        # this is true the idle watchdog is replaced by the clarify wait budget
+        # (design §A.5 #5) — a card being read is not a silent engine.
+        self.awaiting_tool_result = False
+        # The tool_call_ids this turn is still waiting on (engine-owned ids,
+        # opaque, never generated relay-side). Deliberately NOT a dedup record:
+        # it only decides whether a `tool_result` belongs to the open turn and
+        # whether the wait is still on (design §A.6, OB-1).
+        self.pending_tool_call_ids: set[str] = set()
+        # monotonic() at the moment the wait started (re-set on each tool_call);
+        # None = not waiting. Cleared with the wait, never across turns.
+        self.clarify_wait_started: Optional[float] = None
 
 
 class _ChatRelay:
@@ -575,6 +627,9 @@ class _ChatRelay:
         self._upstream_dropped = False
         self._backoff = _retry_backoff_seconds()
         self._idle_timeout = _idle_watchdog_seconds()
+        # PR-D-b: budget for a turn parked on a clarification card. Resolved
+        # once per relay, exactly like the idle watchdog it stands in for.
+        self._clarify_wait = _clarify_wait_max_seconds()
         # 案 1 — idle upstream socket recycle (design v1.1). `_recycle_timer` is
         # the armed task, `_recycled_socket` marks the socket *this relay* closed
         # on purpose (so the reader can tell hygiene from a real fault), and
@@ -804,6 +859,15 @@ class _ChatRelay:
             await self._handle_subscribe_session(frame)
             return
 
+        # PR-D-b — the child picked an option on a clarification card. This is
+        # NOT a new turn: it is the answer to the `tool_call` the engine is
+        # already waiting on, so it rides the open turn upstream. A pick this
+        # relay is not waiting on is dropped silently (idempotent), and either
+        # way no turn is opened and no dedup entry is written.
+        if ftype == "tool_result":
+            await self._handle_tool_result(raw, frame)
+            return
+
         # PR-C item 4/5 — immediate-receipt ack + dedup. Any turn frame
         # carrying a client message_id is acked BEFORE any engine work so a
         # slow engine can never trip the client's 10s resend timer (ack means
@@ -913,6 +977,50 @@ class _ChatRelay:
             }
         )
 
+    async def _handle_tool_result(self, raw: str, frame: dict) -> None:
+        """PR-D-b — forward the child's card pick upstream, or drop it silently.
+
+        Only a `tool_call_id` this relay is actually waiting on is forwarded —
+        the id came from the engine, so an unknown one cannot belong to the
+        open turn. Everything else (a replay of an old pick, a pick that
+        arrived after the clarify wait was already killed, a forged id) is
+        dropped without a turn, without a dial and without an audit row: the
+        turn it belonged to is over and the engine must never see it. That
+        idempotence is what lets the frontend resend freely.
+
+        ``raw`` arrives already session-restamped by the caller (P4 blanket
+        rewrite), so a pick can only ever travel on this student's session.
+        """
+        turn = self._turn
+        tool_call_id = frame.get("tool_call_id")
+        if (
+            turn is None
+            or not isinstance(tool_call_id, str)
+            or not tool_call_id
+            or tool_call_id not in turn.pending_tool_call_ids
+        ):
+            logger.info(
+                "ws_chat relay dropped a non-pending tool_result mask=%s",
+                self.student_mask,
+            )
+            return
+        turn.pending_tool_call_ids.discard(tool_call_id)
+        if not turn.pending_tool_call_ids:
+            # every card this turn was waiting on has been answered: the turn
+            # is no longer parked on a human, so the idle watchdog takes over
+            # again on the next receive (design §A.5 #6 — "re-arm watchdog").
+            turn.awaiting_tool_result = False
+            turn.clarify_wait_started = None
+        relay_audit.record(
+            relay_audit.EVENT_TOOL_RESULT,
+            student_mask=self.student_mask,
+            session_id=turn.session_id,
+            turn_id=turn.turn_id,
+            detail=f"tool_call_id={tool_call_id}",
+        )
+        if not await self._send_upstream(raw):
+            logger.warning("ws_chat relay could not forward a tool_result")
+
     async def _start_turn(self, raw: str) -> None:
         if self._turn is not None:
             # client opened a new turn while the previous one never finished
@@ -983,7 +1091,7 @@ class _ChatRelay:
 
             # Idle-based watchdog: the timeout only arms while a turn is open,
             # and it restarts on every frame (review condition 2).
-            timeout = self._idle_timeout if self._turn is not None else None
+            timeout = self._receive_timeout()
             try:
                 msg = await asyncio.wait_for(upstream.receive(), timeout=timeout)
             except asyncio.TimeoutError:
@@ -998,7 +1106,7 @@ class _ChatRelay:
             if msg.type == aiohttp.WSMsgType.TEXT:
                 if await self._on_upstream_text(msg.data):
                     continue
-                self._remember_content(msg.data)
+                self._remember_frame(msg.data)
                 await self._forward(msg.data)
             elif msg.type == aiohttp.WSMsgType.BINARY:
                 await self._forward(msg.data, binary=True)
@@ -1038,6 +1146,29 @@ class _ChatRelay:
 
         if turn is not None:
             self._note_turn_metadata(turn, frame)
+
+        if turn is not None and frame.get("type") in _INTERACTIVE_FRAME_TYPES:
+            # PR-D-b: the engine is asking the child to pick an option — a
+            # clarification card. The frame is a contract frame now, so it is
+            # forwarded verbatim (`return False` below); what the relay adds is
+            # the knowledge that this turn is parked on a human, so the idle
+            # watchdog stops measuring engine silence and the clarify wait
+            # budget takes over (design §A.5 #3/#5). The id is the engine's
+            # own — never generated here, or the engine could not match the
+            # pick back to its call.
+            tool_call_id = frame.get("tool_call_id")
+            if isinstance(tool_call_id, str) and tool_call_id:
+                turn.pending_tool_call_ids.add(tool_call_id)
+            turn.awaiting_tool_result = True
+            turn.clarify_wait_started = time.monotonic()
+            relay_audit.record(
+                relay_audit.EVENT_TOOL_CALL,
+                student_mask=self.student_mask,
+                session_id=turn.session_id,
+                turn_id=turn.turn_id,
+                detail=f"tool_call_id={tool_call_id}",
+            )
+            return False
 
         if turn is not None and frame.get("type") == "error":
             # Every `error` frame of an open turn is consumed here, so the
@@ -1084,15 +1215,18 @@ class _ChatRelay:
             self._finish_turn(relay_audit.STATUS_COMPLETED, None)
         return False
 
-    def _remember_content(self, raw: str) -> None:
-        """PR-C item 6 — keep the raw content frames of the current turn so a
-        later subscribe_session can replay a completed answer without the
-        engine. Bounded to the same constant as the tail cache."""
+    def _remember_frame(self, raw: str) -> None:
+        """PR-C item 6 / PR-D-b — keep the raw replayable frames of the current
+        turn so a later subscribe_session can replay a completed turn without
+        the engine. Widened in D-b: the answer text is no longer the only thing
+        worth replaying — the clarification card and the engine's terminal
+        `result` frame belong to the same screen (7a). Bounded to the same
+        constant as the tail cache."""
         turn = self._turn
         if turn is None:
             return
         frame = _parse_frame(raw)
-        if frame.get("type") != "content":
+        if frame.get("type") not in _REPLAYABLE_FRAME_TYPES:
             return
         if len(turn.content_frames) >= _COMPLETED_TURN_TAIL_MAX:
             return
@@ -1223,21 +1357,59 @@ class _ChatRelay:
         if self._turn is turn:
             self._finish_turn(relay_audit.STATUS_FAILED, code)
 
+    def _receive_timeout(self) -> Optional[float]:
+        """How long the next upstream receive may block.
+
+        None outside a turn, the idle watchdog inside one, and the clarify wait
+        budget while the turn is parked on a clarification card (PR-D-b §A.5
+        #5). The parked case must be *wider*: a child reading a card produces
+        no upstream traffic at all, so the 90s idle watchdog would kill a
+        perfectly healthy turn. It is a deadline, not an idle timer — counted
+        from the `tool_call`, so an engine that keeps talking while still
+        awaiting the pick cannot extend the child's budget either.
+        """
+        turn = self._turn
+        if turn is None:
+            return None
+        if turn.awaiting_tool_result and turn.clarify_wait_started is not None:
+            remaining = self._clarify_wait - (
+                time.monotonic() - turn.clarify_wait_started
+            )
+            return remaining if remaining > 0 else 0.0
+        return self._idle_timeout
+
     async def _watchdog_kill(self) -> None:
         turn = self._turn
-        idle = self._idle_timeout
+        # PR-D-b: the budget that just expired names the kill. A turn parked on
+        # a clarification card is not a silent engine — it is a child still
+        # deciding — so it gets its own error code and its own event, and the
+        # child gets the clarify copy instead of the "upstream is unavailable"
+        # one (design §A.5 #5/#8). Same teardown either way.
+        clarify = bool(turn is not None and turn.awaiting_tool_result)
+        if clarify:
+            budget = self._clarify_wait
+            code = relay_audit.ERR_CLARIFY_TIMEOUT
+            event = relay_audit.EVENT_CLARIFY_TIMEOUT
+            detail = f"clarify_wait>{budget}s"
+            reason = "clarify wait"
+        else:
+            budget = self._idle_timeout
+            code = relay_audit.ERR_IDLE_TIMEOUT
+            event = relay_audit.EVENT_WATCHDOG_KILL
+            detail = f"upstream_idle>{budget}s"
+            reason = "upstream idle"
         relay_audit.record(
-            relay_audit.EVENT_WATCHDOG_KILL,
+            event,
             student_mask=self.student_mask,
             session_id=turn.session_id if turn else None,
             turn_id=turn.turn_id if turn else None,
-            upstream_error=relay_audit.ERR_IDLE_TIMEOUT,
-            detail=f"upstream_idle>{idle}s",
+            upstream_error=code,
+            detail=detail,
         )
         logger.warning(
-            "ws_chat relay watchdog kill: upstream idle %.1fs with a turn open "
-            "mask=%s",
-            idle,
+            "ws_chat relay watchdog kill: %s %.1fs with a turn open mask=%s",
+            reason,
+            budget,
             self.student_mask,
         )
         upstream = self._upstream
@@ -1245,11 +1417,11 @@ class _ChatRelay:
         await _close_quietly(upstream)
         if turn is not None:
             await self._send_error_frame(
-                relay_audit.ERR_IDLE_TIMEOUT,
+                code,
                 turn.language,
-                self._graceful_copy(relay_audit.ERR_IDLE_TIMEOUT, turn.language),
+                self._graceful_copy(code, turn.language),
             )
-            self._finish_turn(relay_audit.STATUS_FAILED, relay_audit.ERR_IDLE_TIMEOUT)
+            self._finish_turn(relay_audit.STATUS_FAILED, code)
 
     async def _upstream_unavailable(self, code: Optional[str]) -> None:
         code = code or relay_audit.ERR_CONNECT_FAILED
@@ -1318,6 +1490,13 @@ class _ChatRelay:
                     list(turn.content_frames),
                 )
                 _ChatRelay._prune_completed_tail()
+        # PR-D-b: the wait state belongs to the turn, so it dies with the turn
+        # whatever ended it (done / error / watchdog / teardown). Nothing is
+        # carried across turns, so no stale id can ever gate the next turn's
+        # `tool_result` — and the next turn starts on the idle watchdog again.
+        turn.awaiting_tool_result = False
+        turn.pending_tool_call_ids.clear()
+        turn.clarify_wait_started = None
         self._turn = None
         # 案 1: the socket is idle between turns now — start the recycle clock.
         self._arm_recycle()

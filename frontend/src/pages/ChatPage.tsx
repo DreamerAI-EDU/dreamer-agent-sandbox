@@ -13,9 +13,11 @@ import { BAND_THEMES, MOCK_TURNS } from '../lib/mock';
 import type { ChatPayload, Lang } from '../lib/mock';
 import { createStream, isRealWsMode } from '../lib/stream';
 import { hasInflightTurn } from '../lib/chatWs';
+import type { StreamCleanup } from '../lib/chatWs';
 import type { ChatStreamStatus, KidErrorKind } from '../lib/chatErrors';
 import { ERROR_COPY, RETRY_LABEL, STATUS_COPY, STOP_LABEL } from '../lib/chatErrors';
 import { StageLoader, type ActiveStage } from '../components/StageLoader';
+import { ClarifyCard, type ClarifyBand, type ClarifyOption, type ClarifyStatus } from '../components/ClarifyCard';
 import { AssistantMessage } from '../components/ChatMessage';
 import { StreamingMessage } from '../components/StreamingMessage';
 import { Dibi } from '../components/Dibi';
@@ -40,6 +42,20 @@ interface Profile {
   name: string;
   bandIdx: number;
   student?: string; // 8-char mask from ?student=
+}
+
+// PR-D-b2 §3 — the live clarify card. One at a time: the engine asks a single
+// question per turn (§A.6), so a fresh `tool_call` replaces the previous card.
+// `status` is owned here (not by the card) because two page-level events move
+// it: the kid's pick (`selected`) and any error frame (`timeout`, §B.4).
+interface ClarifyState {
+  toolCallId: string;
+  question?: string;
+  options: ClarifyOption[];
+  allowFreeText: boolean;
+  band?: ClarifyBand; // absent ⇒ fall back to the page theme band (§B.2)
+  status: ClarifyStatus;
+  selected?: string[];
 }
 
 const LANGS: { id: Lang; label: string }[] = [
@@ -166,8 +182,12 @@ export default function ChatPage() {
     null,
   );
   const [welcomeText, setWelcomeText] = useState<string | null>(null);
+  // PR-D-b2 §3 — the live clarify card (null = none on screen).
+  const [clarify, setClarify] = useState<ClarifyState | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const cancelRef = useRef<(() => void) | null>(null);
+  // StreamCleanup, not a bare () => void: the handle also carries
+  // sendToolResult, the only way a card can answer the engine (§A.2 F2).
+  const cancelRef = useRef<StreamCleanup | null>(null);
   const lastQuestionRef = useRef('');
   const idRef = useRef(0);
 
@@ -193,9 +213,45 @@ export default function ChatPage() {
 
   const activeStreaming =
     wsStatus === 'connecting' || wsStatus === 'streaming' || wsStatus === 'disconnected' || wsStatus === 'reconnecting';
-  const busy = stages !== null || activeStreaming;
+  // PR-D-b2 §B.1 — a `waiting` card must never lock the composer: typing below
+  // is one of the two ways to answer (free text), so it has to stay reachable
+  // even though the turn is still live. Every other in-flight state keeps the
+  // original lock (`stages !== null` alone, per §4.1).
+  const clarifyWaiting = clarify !== null && clarify.status === 'waiting' && kidError === null;
+  const busy = (stages !== null || activeStreaming) && !clarifyWaiting;
   const blockedByError = kidError === 'auth' || kidError === 'permission' || kidError === 'no-student';
   const inputDisabled = busy || !profile.name || blockedByError;
+
+  // PR-D-b2 §4.1 — single exit for the transient turn UI. Every error path
+  // (and both terminal statuses) lands here, so one helper covers them all.
+  const clearTransient = () => {
+    setStages(null);
+    setProgressNote(null);
+  };
+
+  // §B.4 hard rule — a visible banner and a `waiting` card must never coexist:
+  // the kid would send a tool_result the relay is bound to drop. The page, not
+  // the card, owns this downgrade.
+  const cardStatus: ClarifyStatus | null = clarify
+    ? kidError !== null && clarify.status === 'waiting'
+      ? 'timeout'
+      : clarify.status
+    : null;
+
+  // §B.2 — the frame band is lowercase; the theme carries the uppercase
+  // display id. Same value, one direction, never guessed.
+  const bandForCard: ClarifyBand = (clarify?.band ?? (theme.band.toLowerCase() as ClarifyBand));
+
+  // §A.2 F2 — the kid's pick goes back on the SAME socket, never as a new
+  // turn. The card flips to `selected` right away (optimistic); the engine's
+  // own content then closes it out. A double tap costs nothing: the relay
+  // drops ids it is not waiting for (§A.5 #6), and this client forgets the id
+  // on first send.
+  const handleClarifySelect = (ids: string[]) => {
+    if (!clarify || clarify.status !== 'waiting') return;
+    setClarify({ ...clarify, status: 'selected', selected: ids });
+    cancelRef.current?.sendToolResult?.(clarify.toolCallId, { selected: ids, free_text: '' });
+  };
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -335,16 +391,27 @@ export default function ChatPage() {
           setStages(null);
           setProgressNote(null);
         },
+        onToolCall: (call) => {
+          // Replayed cards land here too (§A.5 #5): same frame shape, same card.
+          setClarify({
+            toolCallId: call.toolCallId,
+            question: call.question || undefined,
+            options: call.options,
+            allowFreeText: call.allowFreeText,
+            band: call.band,
+            status: 'waiting',
+          });
+        },
         onStatus: (status) => {
           setWsStatus(status);
-          if (status === 'idle') {
-            setStages(null);
-            setProgressNote(null);
-          }
+          if (status === 'idle' || status === 'failed') clearTransient();
         },
         onError: (kind) => {
           setKidError(kind);
           setWsStatus('failed');
+          // §B.4 — a waiting card can never outlive an error frame.
+          setClarify((c) => (c && c.status === 'waiting' ? { ...c, status: 'timeout' } : c));
+          clearTransient();
         },
       },
       { student: mask, resumeFromMount: true },
@@ -354,12 +421,26 @@ export default function ChatPage() {
 
   const ask = (text?: string) => {
     const userText = (text ?? input).trim();
-    if (!userText || busy || !profile.name) return;
+    if (!userText || !profile.name) return;
+    // §B.1 free-text path — while a card is waiting, typing below IS the
+    // answer (§B.1 state machine: waiting ──pick／type──> selected). It goes
+    // back as the F2 `tool_result` on the SAME socket, never as a new turn: a
+    // new turn would collide with the still-running one and dead-lock on
+    // session_busy. `text !== undefined` (retry button) always opens a turn —
+    // and a retry is only offered when no card is waiting (§B.4 exclusion).
+    if (text === undefined && clarify !== null && clarify.status === 'waiting' && kidError === null) {
+      setInput('');
+      setClarify({ ...clarify, status: 'selected', selected: [] });
+      cancelRef.current?.sendToolResult?.(clarify.toolCallId, { selected: [], free_text: userText });
+      return;
+    }
+    if (busy) return;
     cancelRef.current?.(); // clear any previous stream before opening a new one
     setInput('');
     setStages([]);
     setProgressNote(null);
     setKidError(null);
+    setClarify(null); // PR-D-b2 — a new turn retires any card from the last one
     setWsStatus(realWs ? 'connecting' : 'idle');
     lastQuestionRef.current = userText;
     const id = ++idRef.current;
@@ -381,17 +462,30 @@ export default function ChatPage() {
           setStages(null);
           setProgressNote(null);
         },
+        onToolCall: (call) => {
+          // One card at a time (§A.6): a fresh tool_call replaces the last one.
+          setClarify({
+            toolCallId: call.toolCallId,
+            question: call.question || undefined,
+            options: call.options,
+            allowFreeText: call.allowFreeText,
+            band: call.band,
+            status: 'waiting',
+          });
+        },
         onStatus: (status) => {
           setWsStatus(status);
-          if (status === 'idle') {
+          if (status === 'idle' || status === 'failed') {
             // turn fully terminal — nothing in flight
-            setStages(null);
-            setProgressNote(null);
+            clearTransient();
           }
         },
         onError: (kind) => {
           setKidError(kind);
           setWsStatus('failed');
+          // §B.4 — a waiting card can never outlive an error frame.
+          setClarify((c) => (c && c.status === 'waiting' ? { ...c, status: 'timeout' } : c));
+          clearTransient();
         },
       },
       { student: profile.student },
@@ -411,6 +505,7 @@ export default function ChatPage() {
     setWsStatus('idle');
     setStages(null);
     setProgressNote(null);
+    setClarify(null); // PR-D-b2 — the kid ended the turn; no card outlives it
   };
 
   // Gallery deep link keeps the chat session context (mask / name / band).
@@ -565,6 +660,24 @@ export default function ChatPage() {
             </div>
           ))}
 
+          {/* PR-D-b2 §3 — the live clarify card. Rendered from the engine's
+              tool_call, right in the flow so it never covers the send bar.
+              `cardStatus` is forced to `timeout` whenever a banner is up
+              (§B.4 mutual exclusion). */}
+          {clarify && cardStatus && (
+            <ClarifyCard
+              toolCallId={clarify.toolCallId}
+              question={clarify.question}
+              options={clarify.options}
+              band={bandForCard}
+              status={cardStatus}
+              selected={clarify.selected}
+              allowFreeText={clarify.allowFreeText}
+              lang={lang}
+              onSelect={handleClarifySelect}
+            />
+          )}
+
           {/* Connection / error banner — lives at the bottom of the flow so
               children see it without it covering the send bar. */}
           {wsStatus === 'disconnected' && (
@@ -580,7 +693,12 @@ export default function ChatPage() {
               hint={err.hint[lang]}
               lang={lang}
               canRetry={
-                kidError === 'network' || kidError === 'upstream' || kidError === 'turn-lost'
+                // §A.8 — clarify-timeout joins the retryable list: the turn was
+                // killed, so "Try again" is the kid's way back in.
+                kidError === 'network' ||
+                kidError === 'upstream' ||
+                kidError === 'turn-lost' ||
+                kidError === 'clarify-timeout'
               }
               onRetry={retryLast}
             />

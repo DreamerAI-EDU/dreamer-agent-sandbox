@@ -9,7 +9,8 @@ export type KidErrorKind =
   | 'network' // transport-level failure (cannot reach server)
   | 'upstream' // server relay / DeepTutor turn rejected with an error frame
   | 'turn-lost' // reconnect succeeded but the server no longer replays the turn
-  | 'resume-lost'; // mount-resume: subscribe_session answered session_closed (turn reaped / not replayable)
+  | 'resume-lost' // mount-resume: subscribe_session answered session_closed (turn reaped / not replayable)
+  | 'clarify-timeout'; // PR-D-b2 — the relay's clarify wait expired (ERR_CLARIFY_TIMEOUT, §A.8)
 
 export type ChatStreamStatus =
   | 'idle' // no connection in flight (before ask / after terminal done)
@@ -111,6 +112,21 @@ export const ERROR_COPY: Record<KidErrorKind, KidErrorCopy> = {
       en: 'Ask again and Dibi will give you a fresh answer.',
       hk: '再問多次，Dibi 會重新答你。',
       cn: '再问一次，Dibi 会重新回答你。',
+    },
+  },
+  // PR-D-b2 §A.8 (MF-2, C-1 甲案) — the clarify card ran out of time: the relay
+  // killed the turn, so the options are dead. The hint therefore points at the
+  // ONLY door still open — typing below — and never at the retired card.
+  'clarify-timeout': {
+    title: {
+      en: 'Dibi is still waiting.',
+      hk: 'Dibi 仲等緊你。',
+      cn: 'Dibi 还在等你。',
+    },
+    hint: {
+      en: "Type your question below and she'll answer.",
+      hk: '喺下面打字講返你想問嘅，佢會再答你。',
+      cn: '在下面打字说出你的问题，她会再答你。',
     },
   },
 };

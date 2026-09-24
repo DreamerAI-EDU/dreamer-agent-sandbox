@@ -9,6 +9,7 @@ import type { ChatPayload, Lang } from './mock';
 import { MOCK_TURNS, LANG_CODE } from './mock';
 import type { ActiveStage } from '../components/StageLoader';
 import type { ChatStreamStatus, KidErrorKind } from './chatErrors';
+import type { StreamCleanup, ToolCallPayload } from './chatWs';
 import { createWsChatStream } from './chatWs';
 
 export type StreamHandlers = {
@@ -19,6 +20,7 @@ export type StreamHandlers = {
   onResult: (payload: ChatPayload) => void; // ← result + done
   onStatus?: (status: ChatStreamStatus) => void; // ← ws lifecycle (connecting/streaming/disconnected/reconnecting/failed)
   onError?: (kind: KidErrorKind) => void; // ← kid-safe error class (raw error never surfaces)
+  onToolCall?: (call: ToolCallPayload) => void; // PR-D-b2 ← engine asks a clarifying question (§A.6 #2)
 };
 
 export interface StreamContext {
@@ -33,7 +35,7 @@ export type PlayStream = (
   lang: Lang,
   h: StreamHandlers,
   ctx?: StreamContext,
-) => () => void;
+) => StreamCleanup;
 
 // Resolve which mock scripted turn matches the user's input; fall back to
 // cycling by hash so any input still produces a demo answer.
@@ -52,7 +54,7 @@ export function playStream(
   band: ChatPayload['age_band'],
   lang: Lang,
   h: StreamHandlers,
-): () => void {
+): StreamCleanup {
   const script = MOCK_TURNS[pickTurn(input, lang)];
   const timers: ReturnType<typeof setTimeout>[] = [];
   const live: ActiveStage[] = [];
@@ -122,6 +124,7 @@ export function createStream(): PlayStream {
         onResult: h.onResult,
         onStatus: h.onStatus ?? (() => {}),
         onError: h.onError ?? (() => {}),
+        onToolCall: h.onToolCall ?? (() => {}),
       };
       return createWsChatStream(input, band, lang, handlers, ctx ?? { student: undefined });
     };

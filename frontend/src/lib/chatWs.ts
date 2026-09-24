@@ -22,6 +22,7 @@
 import type { ChatPayload, CostSummaryUsd, Lang } from './mock';
 import { MOCK_NO_DATA_COST } from './mock';
 import type { ActiveStage } from '../components/StageLoader';
+import type { ClarifyBand, ClarifyOption } from '../components/ClarifyCard';
 import type { ChatStreamStatus, KidErrorKind } from './chatErrors';
 
 // Frame keys observed on the real unified WS (docs/phase2-websocket.md +
@@ -39,6 +40,57 @@ interface RawFrame {
   message_id?: unknown;   // PR-C item 4 — ack 收據含 message_id（TS2339 fix-forward）
   status?: unknown;       // PR-C item 4 — ack 含 status（'dup' 等）
   turn_state?: unknown;   // PR-C item 4 — dup-ack 含 turn_state（'completed' 判 turn-lost）
+  tool_call_id?: unknown; // PR-D-b2 — engine-owned clarify id (card de-dup key)
+  tool_name?: unknown;    // PR-D-b2 — 'ask_user' today
+  tool_args?: unknown;    // PR-D-b2 — { question, options, allow_free_text }
+  band?: unknown;         // PR-D-b2 — lowercase band id for card chrome (§B.2)
+}
+
+// PR-D-b2 — one clarify request, normalised for the page (§A.6 #2). The page
+// renders it and answers with a `tool_result` frame; this client never invents
+// options and never guesses a band.
+export interface ToolCallPayload {
+  toolCallId: string;
+  toolName: string;
+  question: string;
+  options: ClarifyOption[];
+  allowFreeText: boolean;
+  /** Undefined when the frame carried no band — the page falls back to its own
+   *  theme band (§B.2); guessing one here would mis-style the card. */
+  band?: ClarifyBand;
+}
+
+/** PR-D-b2 — the kid's answer, sent back as the F2 `tool_result` frame (§A.2). */
+export interface ToolResultPayload {
+  selected: string[];
+  free_text: string;
+}
+
+/** Cleanup handle for one stream. The real WS client also exposes
+ *  `sendToolResult` so the page can answer a clarify card without ever
+ *  holding the socket itself; mock streams simply omit it. */
+export type StreamCleanup = (() => void) & {
+  sendToolResult?: (toolCallId: string, result: ToolResultPayload) => void;
+};
+
+const CLARIFY_BANDS: ClarifyBand[] = ['s1-s3', 'p1-p3', 'p4-p6'];
+
+function normalizeClarifyBand(v: unknown): ClarifyBand | undefined {
+  const s = getStr(v).toLowerCase();
+  return (CLARIFY_BANDS as string[]).includes(s) ? (s as ClarifyBand) : undefined;
+}
+
+function normalizeClarifyOptions(v: unknown): ClarifyOption[] {
+  if (!Array.isArray(v)) return [];
+  const out: ClarifyOption[] = [];
+  for (const item of v) {
+    if (!item || typeof item !== 'object') continue;
+    const o = item as Record<string, unknown>;
+    const id = getStr(pick(o, 'id'));
+    const label = getStr(pick(o, 'label'));
+    if (id && label) out.push({ id, label });
+  }
+  return out;
 }
 
 interface ChatSource {
@@ -226,9 +278,10 @@ export function createWsChatStream(
     onResult: (payload: ChatPayload) => void;
     onStatus: (s: ChatStreamStatus) => void;
     onError: (kind: KidErrorKind) => void;
+    onToolCall?: (payload: ToolCallPayload) => void; // PR-D-b2 — clarify card
   },
   ctx: WsStreamContext,
-): () => void {
+): StreamCleanup {
   const student = (ctx.student ?? '').trim();
   if (!student) {
     // No profile in the URL — never even try to open a socket.
@@ -253,6 +306,7 @@ export function createWsChatStream(
   let frameCount = 0;
   let lastFrameType = '';
   let currentTurnId = '';
+  let turnMessageId = ''; // PR-D-b2 — the open turn's message_id, echoed on F2
 
   // Turn state (one session ⇒ one connection ⇒ one turn at a time)
   // P4 §4.1(7): seed from the persisted engine session ('' = first ever
@@ -262,6 +316,12 @@ export function createWsChatStream(
   const chunks: string[] = [];
   const sources: ChatSource[] = [];
   const live: ActiveStage[] = [];
+
+  // PR-D-b2 — the clarify requests this turn is still waiting on. It only
+  // answers "is a reply owed?" and gets cleared on every terminal path (done /
+  // fail / quiet finish / cancel) so a card can never outlive its turn.
+  // De-dup is NOT done here: the page keys cards by tool_call_id (§A.6 OB-1).
+  const pendingToolCallIds = new Set<string>();
 
   // Reconnect resume markers
   let resumeHangTimer: ReturnType<typeof setTimeout> | null = null;
@@ -302,6 +362,7 @@ export function createWsChatStream(
     closedByUser = true;
     clearTimers();
     clearInflight(student);
+    pendingToolCallIds.clear(); // PR-D-b2 — no card outlives a failed turn
     h.onStatus('failed');
     h.onError(kind);
     safeClose();
@@ -323,6 +384,7 @@ export function createWsChatStream(
     closedByUser = true;
     clearTimers();
     clearInflight(student);
+    pendingToolCallIds.clear(); // PR-D-b2 — no card outlives a quiet finish
     h.onStatus('idle');
     safeClose();
   };
@@ -405,6 +467,7 @@ export function createWsChatStream(
     logObservation('turn-start');
     setInflight(student);
     pendingAckMid = messageId;
+    turnMessageId = messageId; // PR-D-b2 — echoed back on the F2 tool_result
     resendCount = 0;
     const frame = {
       type: 'message',
@@ -535,6 +598,34 @@ export function createWsChatStream(
         }
         break;
       }
+      case 'tool_call': {
+        // PR-D-b2 — the engine is asking the kid a clarifying question
+        // (design §A.6 #2). Neither answer content nor terminal: hand it to
+        // the page so the clarify card can render, and keep the turn live —
+        // the relay parks its watchdog upstream while a card is unanswered.
+        const toolCallId = getStr(ev.tool_call_id);
+        if (!toolCallId) {
+          console.warn('[chat-ws] tool_call without tool_call_id — dropped');
+          break;
+        }
+        pendingToolCallIds.add(toolCallId);
+        const args =
+          ev.tool_args && typeof ev.tool_args === 'object'
+            ? (ev.tool_args as Record<string, unknown>)
+            : {};
+        h.onToolCall?.({
+          toolCallId,
+          toolName: getStr(ev.tool_name),
+          question: getStr(pick(args, 'question')),
+          options: normalizeClarifyOptions(pick(args, 'options')),
+          allowFreeText: pick(args, 'allow_free_text') === true,
+          // No band in the frame → left undefined so the page falls back to
+          // its own theme band (§B.2). This client never guesses one.
+          band: normalizeClarifyBand(ev.band ?? pick(meta ?? {}, 'band')),
+        });
+        h.onStatus('streaming'); // a card is live UI, not a terminal state
+        break;
+      }
       case 'sources': {
         const list = Array.isArray(ev.content) ? ev.content : Array.isArray(pick(meta ?? {}, 'sources')) ? (pick(meta ?? {}, 'sources') as unknown[]) : [];
         mergeSources(list, sources);
@@ -557,6 +648,7 @@ export function createWsChatStream(
         // PR-C item 2 — the turn is over: clear the in-flight marker so the
         // next send (even after a F5) starts a fresh turn instead of resuming.
         clearInflight(student);
+        pendingToolCallIds.clear(); // PR-D-b2 — turn over, no card survives it
         if (!resultSeen) {
           // Result was never emitted (rare) — build the contract payload from
           // what content events delivered; empty → kid-safe turn-lost.
@@ -614,7 +706,16 @@ export function createWsChatStream(
           }
           break;
         }
-        fail(code === 'upstream_unavailable' || code === '' ? 'upstream' : 'upstream');
+        // §A.8 — the relay's clarify wait is the single clock (§B.3). When it
+        // expires the engine has already given up on this card: the kid gets
+        // the timeout banner and the page retires the card to `timeout`.
+        if (code === 'ERR_CLARIFY_TIMEOUT') {
+          fail('clarify-timeout');
+          break;
+        }
+        // Every other upstream failure degrades the same way. (The old ternary
+        // here mapped both branches to 'upstream' — kept explicit on purpose.)
+        fail('upstream');
         break;
       }
       default: {
@@ -727,17 +828,46 @@ export function createWsChatStream(
     }, wait);
   };
 
+  // PR-D-b2 — F2: hand the child's card pick back to the engine (§A.2). It
+  // travels on the SAME socket and never opens a turn — the engine is still
+  // inside the running turn, waiting for exactly this frame. The relay checks
+  // the id against its own pending set and silently drops anything else
+  // (§A.5 #6), so a double tap or a replayed card is harmless; this client
+  // therefore answers optimistically and forgets the id at once.
+  const sendToolResult = (toolCallId: string, result: ToolResultPayload) => {
+    if (!toolCallId) return;
+    if (!pendingToolCallIds.has(toolCallId)) {
+      console.warn('[chat-ws] tool_result for an unknown/answered tool_call — dropped');
+      return;
+    }
+    pendingToolCallIds.delete(toolCallId);
+    logObservation('tool-result');
+    sendFrame({
+      type: 'tool_result',
+      tool_call_id: toolCallId,
+      // The open turn's own message_id; empty on a resumed turn (the page
+      // that opened it is gone) — the relay forwards on tool_call_id alone.
+      message_id: turnMessageId,
+      result,
+      session_id: sessionId,
+    });
+  };
+
   // Start
   h.onStatus('connecting');
   connect();
 
   // ---- cancel / cleanup (unmount or next turn) ----
-  return () => {
+  const cancel = () => {
     closedByUser = true;
     clearAll(c);
     clearTimers();
     clearInflight(student);
+    pendingToolCallIds.clear(); // PR-D-b2 — an abandoned turn owes no answer
     safeClose();
     ws = null;
   };
+  const handle: StreamCleanup = cancel;
+  handle.sendToolResult = sendToolResult;
+  return handle;
 }

@@ -428,6 +428,14 @@ export default function ChatPage() {
     // new turn would collide with the still-running one and dead-lock on
     // session_busy. `text !== undefined` (retry button) always opens a turn —
     // and a retry is only offered when no card is waiting (§B.4 exclusion).
+    //
+    // `allow_free_text` is a HINT, never a gate (D-b2 review, observation 1):
+    // when the engine sends `allow_free_text: false` the kid can still type,
+    // and that text is still sent as `free_text`. This is deliberate — do NOT
+    // "fix" it by locking the composer (that breaks §B.1 "a waiting card never
+    // locks input") or by opening a new turn (that collides with the still-live
+    // turn → session_busy). Sending it and letting the engine decide what to do
+    // with text it did not ask for is the only sane option.
     if (text === undefined && clarify !== null && clarify.status === 'waiting' && kidError === null) {
       setInput('');
       setClarify({ ...clarify, status: 'selected', selected: [] });

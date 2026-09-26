@@ -94,6 +94,15 @@ EVENT_NON_CONTRACT_FRAME = "non_contract_frame"
 #: never got it" stay separable. Best-effort by contract: a cancel that could
 #: not be delivered is recorded, never raised.
 EVENT_CANCEL_SENT = "cancel_sent"
+#: PR-D-b4 PR-4 (B4-4) — the engine answered a NEW turn of this student with
+#: `session_busy` even though THIS connection had already asked it to cancel a
+#: turn of its own. The leftover was ours, so the relay retries the cancel for
+#: the turn ids it opened itself (idempotent) and the child is told to ask
+#: again instead of being locked out. The row carries `retried=<n>` — the size
+#: of this connection's own cancel set, never a turn id this connection did not
+#: open (G-01). A busy with an empty set is the true second-tab case: no row
+#: here, and it keeps its non-retryable `session_busy` semantics (T-09).
+EVENT_BUSY_AFTER_CANCEL = "busy_after_cancel"
 
 #: every event name this module may write (nothing else is allowed into the table)
 EVENTS = (
@@ -112,6 +121,7 @@ EVENTS = (
     EVENT_UNMAPPED_PICK,
     EVENT_NON_CONTRACT_FRAME,
     EVENT_CANCEL_SENT,
+    EVENT_BUSY_AFTER_CANCEL,
 )
 
 # --- upstream_error codes (normalized; the relay never logs raw upstream text) --

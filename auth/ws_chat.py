@@ -75,6 +75,16 @@ the relay:
   (second tab) is non-retryable under its own code ``session_busy``, with
   markers deliberately disjoint from the rate-limit set so the 429 budget
   and the audit trail stay clean.
+
+PR-D-b4 PR-4 (B4-4) narrows the ``busy`` rule to *true* concurrency. A busy
+that arrives after this connection has itself asked the engine to cancel one of
+its own turns is the leftover of that cancel, not a second tab: the relay
+re-sends the cancel for those turn ids (``cancel_turn`` is idempotent), audits
+``busy_after_cancel``, and tells the child to ask again — a retryable stop
+instead of a lock-out. A busy with nothing of ours pending keeps the P4
+non-retryable semantics untouched (T-09). The set only ever holds turn ids this
+connection opened, so the four residual ``running`` rows stay off limits
+(紅線 1 / G-01).
 """
 
 from __future__ import annotations
@@ -85,6 +95,7 @@ import logging
 import os
 import re
 import time
+from collections import deque
 from pathlib import Path
 from typing import Optional
 
@@ -346,6 +357,26 @@ _GRACEFUL_BUSY_COPY = {
 }
 
 _DEFAULT_LANGUAGE = "zh-hk"
+
+#: PR-D-b4 PR-4 — the retryable twin of ``_GRACEFUL_BUSY_COPY``. Same stop, but
+#: the stop was the relay's own leftover (a cancel it had already sent and the
+#: engine had not yet acted on), so "ask again" is not a lie: the engine's
+#: session is on its way back to idle. Kept separate from the P4 busy copy so
+#: the two states stay tellable apart on screen and in the ledger.
+_BUSY_RETRYABLE_COPY = {
+    "zh-hk": "Dibi 啱啱有啲嘢卡住咗，我已經幫你清好，再問一次就得。",
+    "zh-cn": "Dibi 刚才有点卡住了，我已经帮你清好，再问一次就行。",
+    "en": "Dibi was stuck a moment ago — that is cleared now, please ask again.",
+}
+
+#: PR-D-b4 PR-4 — how many of this connection's own cancels stay remembered.
+#: Bounded on purpose: the set has to outlive the turn that sent the cancel,
+#: because the `session_busy` it exists for arrives on a *later* turn (the
+#: child asks again, the engine still holds the old turn). A long-lived
+#: connection must not grow it without limit, and eviction only ever forgets
+#: the OLDEST cancel — which at worst loses a self-heal for a long-dead turn,
+#: never makes the relay cancel a turn it did not open.
+_SELF_CANCELLED_MAX = 16
 
 #: unchanged copy for "the relay cannot reach the engine at all"
 _UPSTREAM_UNAVAILABLE_COPY = "連線暫時不可用，請稍後再試"
@@ -740,6 +771,16 @@ class _ChatRelay:
         self._recycle_timer: Optional[asyncio.Task] = None
         self._recycled_socket = None
         self._upstream_ready = asyncio.Event()
+        # PR-D-b4 PR-4 (B4-4): the turn ids *this connection* has already asked
+        # the engine to cancel. Deliberately relay-scoped rather than carried on
+        # `_TurnInFlight`: the `session_busy` it answers arrives on a later turn,
+        # after the cancelled turn's `_TurnInFlight` is long gone. Only ever
+        # filled from `_send_upstream_cancel` (a cancel that actually went out),
+        # and never from anywhere else — which is what keeps the four residual
+        # `running` rows out of reach (G-01). Bounded FIFO, see
+        # `_SELF_CANCELLED_MAX`.
+        self.self_cancelled_turn_ids: set = set()
+        self._self_cancelled_order: deque = deque()
 
     # -- connection --------------------------------------------------------
 
@@ -1388,11 +1429,43 @@ class _ChatRelay:
                 # turn (second tab). Deliberately non-retryable: spending the
                 # retry budget here would leak the 429 budget, and the audit
                 # row keeps busy apart from rate_limited (boss condition 3).
-                await self._midstream_error(
-                    turn,
-                    relay_audit.ERR_SESSION_BUSY,
-                    detail="session_busy_non_retryable",
-                )
+                if self.self_cancelled_turn_ids:
+                    # PR-D-b4 PR-4 (B4-4): the active turn the engine is
+                    # complaining about is one WE asked it to finish (the set
+                    # only ever holds this connection's own cancels) — a
+                    # leftover of the cancel, not a second tab. Re-send the
+                    # cancel for those ids: `cancel_turn` is idempotent, so the
+                    # frame is safe whether the engine is still working on the
+                    # first one or missed it. The child then gets a retryable
+                    # stop instead of a lock-out; the turn still closes out
+                    # through `_midstream_error`, so no half-answer is left
+                    # hanging and the poisoned socket is dropped exactly as on
+                    # any other refused turn.
+                    for turn_id in list(self.self_cancelled_turn_ids):
+                        await self._send_upstream(
+                            json.dumps({"type": "cancel_turn", "turn_id": turn_id})
+                        )
+                    relay_audit.record(
+                        relay_audit.EVENT_BUSY_AFTER_CANCEL,
+                        student_mask=self.student_mask,
+                        session_id=turn.session_id,
+                        turn_id=turn.turn_id,
+                        detail=f"retried={len(self.self_cancelled_turn_ids)}",
+                    )
+                    await self._midstream_error(
+                        turn,
+                        relay_audit.ERR_SESSION_BUSY,
+                        detail="busy_after_cancel",
+                        retryable=True,
+                    )
+                else:
+                    # T-09: nothing of ours is pending, so this IS the second
+                    # tab. The P4 semantics stand, unchanged.
+                    await self._midstream_error(
+                        turn,
+                        relay_audit.ERR_SESSION_BUSY,
+                        detail="session_busy_non_retryable",
+                    )
             else:
                 # Review Q: only `rate_limited` may spend retry budget. Any
                 # other upstream error — 500, timeout, provider fault — is not
@@ -1515,9 +1588,20 @@ class _ChatRelay:
         return True
 
     async def _midstream_error(
-        self, turn: _TurnInFlight, code: str, *, detail: Optional[str] = None
+        self,
+        turn: _TurnInFlight,
+        code: str,
+        *,
+        detail: Optional[str] = None,
+        retryable: bool = False,
     ) -> None:
-        """Non-retry failure: never leave half an answer hanging (条件 1)."""
+        """Non-retry failure: never leave half an answer hanging (条件 1).
+
+        `retryable` only picks the copy: PR-D-b4 PR-4 uses it for the one
+        refusal where asking again really is the fix (a busy the relay itself
+        caused, see `_BUSY_RETRYABLE_COPY`). Every other behaviour — the audit
+        row, the dropped socket, the closed turn — is identical either way.
+        """
         relay_audit.record(
             relay_audit.EVENT_MIDSTREAM_ERROR,
             student_mask=self.student_mask,
@@ -1553,7 +1637,9 @@ class _ChatRelay:
         self._upstream = None
         await _close_quietly(upstream)
         await self._send_error_frame(
-            code, turn.language, self._graceful_copy(code, turn.language)
+            code,
+            turn.language,
+            self._graceful_copy(code, turn.language, retryable=retryable),
         )
         # The child may have opened a new turn during the awaits above (asking
         # again without waiting for the error frame): only close *our* turn.
@@ -1649,7 +1735,9 @@ class _ChatRelay:
         bound to no engine-side turn — the engine would not honour it, so the
         helper returns instead of dialling (T-07b). Best-effort by contract:
         a send that fails is audited (`ok=False`), never raised — every caller
-        is already on its way out.
+        is already on its way out. A cancel that *did* go out is also remembered
+        on the relay (PR-D-b4 PR-4), which is how a later `session_busy` on this
+        connection gets recognised as our own leftover.
         """
         if turn is None or not turn.turn_id:
             return
@@ -1657,6 +1745,13 @@ class _ChatRelay:
             return
         payload = json.dumps({"type": "cancel_turn", "turn_id": turn.turn_id})
         ok = await self._send_upstream(payload)
+        if ok:
+            # PR-D-b4 PR-4 (B4-4): remember what we asked for, so a later
+            # `session_busy` on this same connection can tell "our cancel has
+            # not landed yet" from "someone else is talking to this session".
+            # Registered only on a delivered frame: a cancel the engine never
+            # received is not a leftover we own.
+            self._remember_self_cancelled(turn.turn_id)
         relay_audit.record(
             relay_audit.EVENT_CANCEL_SENT,
             student_mask=self.student_mask,
@@ -1664,6 +1759,23 @@ class _ChatRelay:
             turn_id=turn.turn_id,
             detail=f"ok={ok}",
         )
+
+    def _remember_self_cancelled(self, turn_id: str) -> None:
+        """Add a turn id to this connection's bounded cancel ledger.
+
+        FIFO, oldest first: the cap is a memory bound, not a policy. Losing an
+        old id only ever costs a self-heal for a turn nobody is waiting on any
+        more — it can never widen what the relay is willing to cancel, because
+        the set is only ever read to re-cancel ids already in it.
+        """
+        if turn_id in self.self_cancelled_turn_ids:
+            return
+        self.self_cancelled_turn_ids.add(turn_id)
+        self._self_cancelled_order.append(turn_id)
+        while len(self._self_cancelled_order) > _SELF_CANCELLED_MAX:
+            self.self_cancelled_turn_ids.discard(
+                self._self_cancelled_order.popleft()
+            )
 
     async def _upstream_unavailable(self, code: Optional[str]) -> None:
         code = code or relay_audit.ERR_CONNECT_FAILED
@@ -1690,10 +1802,15 @@ class _ChatRelay:
             logger.warning("ws_chat graceful error not delivered: %s", exc)
 
     @staticmethod
-    def _graceful_copy(code: str, language: str) -> str:
+    def _graceful_copy(code: str, language: str, *, retryable: bool = False) -> str:
         if code in (relay_audit.ERR_RATE_LIMITED, relay_audit.ERR_SESSION_BUSY):
             lang = _normalise_language(language)
-            return _GRACEFUL_BUSY_COPY.get(lang) or _GRACEFUL_BUSY_COPY[_DEFAULT_LANGUAGE]
+            # PR-D-b4 PR-4: a busy the relay caused itself says "ask again"
+            # (and means it) — see `_BUSY_RETRYABLE_COPY`. Only the busy has a
+            # retryable twin, so the flag can never reach the 429 copy.
+            use_retryable = retryable and code == relay_audit.ERR_SESSION_BUSY
+            copy = _BUSY_RETRYABLE_COPY if use_retryable else _GRACEFUL_BUSY_COPY
+            return copy.get(lang) or copy[_DEFAULT_LANGUAGE]
         return _UPSTREAM_UNAVAILABLE_COPY
 
     def _finish_turn(

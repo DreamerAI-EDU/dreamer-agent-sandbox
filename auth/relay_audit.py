@@ -77,6 +77,13 @@ EVENT_CLARIFY_TIMEOUT = "clarify_timeout"
 #: is dropped rather than guessed at, and the row makes the drop visible: the
 #: engine must only ever be handed labels it actually offered.
 EVENT_UNMAPPED_PICK = "unmapped_pick"
+#: PR-D-b4 PR-2 (B4-2) — the engine emitted a frame outside the Dreamer
+#: frontend contract (today: its own `tool_result` trace emit,
+#: `tool_dispatch.py:547-554`). The relay now classifies it explicitly instead
+#: of letting it fall through to the child, where it was silently dropped as
+#: noise. The row is the only trace it leaves: the frame is consumed, never
+#: forwarded, and the card it duplicates travelled on the `tool_call` frame.
+EVENT_NON_CONTRACT_FRAME = "non_contract_frame"
 
 #: every event name this module may write (nothing else is allowed into the table)
 EVENTS = (
@@ -93,6 +100,7 @@ EVENTS = (
     EVENT_TOOL_RESULT,
     EVENT_CLARIFY_TIMEOUT,
     EVENT_UNMAPPED_PICK,
+    EVENT_NON_CONTRACT_FRAME,
 )
 
 # --- upstream_error codes (normalized; the relay never logs raw upstream text) --

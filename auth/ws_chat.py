@@ -556,6 +556,7 @@ class _TurnInFlight:
         "awaiting_tool_result",
         "pending_tool_call_ids",
         "clarify_wait_started",
+        "pending_ask_user",
     )
 
     def __init__(self, raw_frame: str, language: str, student_mask: str) -> None:
@@ -586,6 +587,92 @@ class _TurnInFlight:
         # monotonic() at the moment the wait started (re-set on each tool_call);
         # None = not waiting. Cleared with the wait, never across turns.
         self.clarify_wait_started: Optional[float] = None
+        # PR-D-b4 PR-1: the card this turn is parked on, as the relay needs it
+        # to translate the child's pick back into the engine's own channel —
+        # `{questionId, labels: {opt_N -> label}, multi_select}`. The labels are
+        # the relay↔frontend private contract minted in
+        # `_clarify_contract_args` (the engine's own options carry no id at all,
+        # F-b4-6(b)); the pick comes back as those ids and must reach the engine
+        # as labels. None = no card parked on.
+        self.pending_ask_user: Optional[dict] = None
+
+
+def _contract_tool_call_id(frame: dict) -> tuple[str, str]:
+    """Return (id, source) for a contract `tool_call` frame.
+
+    The engine never puts a call id at the frame top level (StreamEvent has
+    no such field); it lives in `metadata`. Relay maps, never mints.
+    """
+    top = frame.get("tool_call_id")
+    if isinstance(top, str) and top:
+        return top, "top"
+    meta = frame.get("metadata") if isinstance(frame.get("metadata"), dict) else {}
+    for key in ("tool_call_id", "call_id"):  # provider id first, trace id second
+        val = meta.get(key)
+        if isinstance(val, str) and val:
+            return val, f"metadata.{key}"
+    return "", "missing"
+
+
+def _clarify_contract_args(args: dict) -> tuple[dict, dict]:
+    """Flatten the engine's native `ask_user` args into the frontend contract.
+
+    Engine side (image `v1.5.8`, `tools/ask_user.py`): `metadata.args` is
+    `{intro?, questions:[{id, prompt, header?, multi_select?, allow_free_text?,
+    options:[{label, description}]}]}` — **options carry no id**, and
+    `allow_free_text` sits on the *question*, not on the payload root
+    (`ask_user.py` reads it per question). Frontend side (`chatWs.ts:617-621`)
+    is `{question, options:[{id,label}], allow_free_text}`, and
+    `normalizeClarifyOptions` **drops every option without an id**
+    (`chatWs.ts:83-94`). Without this flatten+mint the card renders with zero
+    options (F-b4-6(b)). The minted `opt_1…opt_N` is positional and stable, and
+    is a relay↔frontend private contract — NOT an engine call id.
+
+    Returns (tool_args_for_frame, pending_ask_user).
+    """
+    args = args if isinstance(args, dict) else {}
+    questions = args.get("questions")
+    if not isinstance(questions, list) or not questions:
+        questions = [
+            {  # legacy single-question shape
+                "prompt": args.get("question") or "",
+                "options": args.get("options") or [],
+            }
+        ]
+    q = questions[0] if isinstance(questions[0], dict) else {}
+    labels: dict[str, str] = {}
+    options = []
+    for idx, opt in enumerate(q.get("options") or [], start=1):
+        if isinstance(opt, dict):
+            label = str(opt.get("label") or "").strip()
+            description = opt.get("description")
+        else:
+            label, description = str(opt or "").strip(), None
+        if not label:
+            continue
+        oid = f"opt_{idx}"
+        labels[oid] = label
+        options.append({"id": oid, "label": label, "description": description})
+    # W-b4-1 (對版修正): the engine keeps `allow_free_text` on the *question*
+    # (`tools/ask_user.py` `AskUserQuestion.to_dict()` / the per-question raw
+    # read), so the question is the authoritative level — the args-level read
+    # only covers the legacy single-question shape, and True is the engine's
+    # own default when neither is set.
+    free_text = q.get("allow_free_text")
+    if free_text is None:
+        free_text = args.get("allow_free_text")
+    tool_args = {
+        "question": str(q.get("prompt") or q.get("header") or ""),
+        "options": options,
+        "allow_free_text": True if free_text is None else bool(free_text),
+        "multi_select": bool(q.get("multi_select")),
+    }
+    pending = {
+        "questionId": str(q.get("id") or ""),
+        "labels": labels,
+        "multi_select": tool_args["multi_select"],
+    }
+    return tool_args, pending
 
 
 class _ChatRelay:
@@ -978,15 +1065,22 @@ class _ChatRelay:
         )
 
     async def _handle_tool_result(self, raw: str, frame: dict) -> None:
-        """PR-D-b — forward the child's card pick upstream, or drop it silently.
+        """PR-D-b — resume the parked turn with the child's pick, or drop it.
 
-        Only a `tool_call_id` this relay is actually waiting on is forwarded —
-        the id came from the engine, so an unknown one cannot belong to the
-        open turn. Everything else (a replay of an old pick, a pick that
-        arrived after the clarify wait was already killed, a forged id) is
-        dropped without a turn, without a dial and without an audit row: the
-        turn it belonged to is over and the engine must never see it. That
-        idempotence is what lets the frontend resend freely.
+        Only a `tool_call_id` this relay is actually waiting on is accepted —
+        it came from the engine, so an unknown one cannot belong to the open
+        turn. Everything else (a replay of an old pick, a pick that arrived
+        after the clarify wait was already killed, a forged id) is dropped
+        without a turn, without a dial and without an audit row: the turn it
+        belonged to is over and the engine must never see it. That idempotence
+        is what lets the frontend resend freely.
+
+        PR-D-b4 PR-1 (design v0.2.1 §A.2 F2): what leaves here is no longer the
+        child's frame. The engine never had a `tool_result` consumer, so the
+        pick is translated into its own resume channel — `submit_user_reply`,
+        keyed by the `turn_id` the engine already carries — and the option ids
+        the child echoed are mapped back to the labels the engine offered
+        (`_build_user_reply`).
 
         ``raw`` arrives already session-restamped by the caller (P4 blanket
         rewrite), so a pick can only ever travel on this student's session.
@@ -1018,8 +1112,57 @@ class _ChatRelay:
             turn_id=turn.turn_id,
             detail=f"tool_call_id={tool_call_id}",
         )
-        if not await self._send_upstream(raw):
-            logger.warning("ws_chat relay could not forward a tool_result")
+        if not await self._send_upstream(self._build_user_reply(turn, frame)):
+            logger.warning("ws_chat relay could not forward a user reply")
+
+    def _build_user_reply(self, turn: _TurnInFlight, frame: dict) -> str:
+        """Translate the child's pick into the engine's own resume channel.
+
+        The engine has no consumer for a `tool_result` frame — it never sent
+        one — so the pick has to arrive as the frame it *does* understand:
+        `submit_user_reply`, keyed by `turn_id`, which the engine already
+        carries on every event (N-1). The relay therefore neither mints nor
+        stores a resume id, and the answer's `questionId` is the engine's own
+        question id when it sent one.
+
+        The option ids are the relay↔frontend private contract minted in
+        `_clarify_contract_args`, so they are mapped back to labels here: the
+        engine must only ever be handed labels it actually offered
+        (F-b4-6(b)(d)). An id this relay never minted is dropped, never
+        guessed at, and the drop is audited — a stale card the child really
+        saw can then be told apart from a forged frame.
+        """
+        pending = turn.pending_ask_user or {}
+        labels = pending.get("labels") or {}
+        result = frame.get("result") if isinstance(frame.get("result"), dict) else {}
+        selected = result.get("selected")
+        selected = selected if isinstance(selected, list) else []
+        picked: list[str] = []
+        unknown: list[str] = []
+        for oid in selected:
+            label = labels.get(oid) if isinstance(oid, str) else None
+            if label:
+                picked.append(label)
+            else:
+                unknown.append(str(oid))
+        free_text = result.get("free_text")
+        free_text = str(free_text).strip() if isinstance(free_text, str) else ""
+        text = "、".join(picked + ([free_text] if free_text else []))
+        if unknown:
+            relay_audit.record(
+                relay_audit.EVENT_UNMAPPED_PICK,
+                student_mask=self.student_mask,
+                session_id=turn.session_id,
+                turn_id=turn.turn_id,
+                detail="ids=" + ",".join(unknown),
+            )
+        payload: dict = {"type": "submit_user_reply", "turn_id": turn.turn_id}
+        question_id = pending.get("questionId")
+        if question_id:
+            payload["answers"] = [{"questionId": question_id, "text": text}]
+        else:
+            payload["text"] = text
+        return json.dumps(payload, ensure_ascii=False)
 
     async def _start_turn(self, raw: str) -> None:
         if self._turn is not None:
@@ -1149,16 +1292,25 @@ class _ChatRelay:
 
         if turn is not None and frame.get("type") in _INTERACTIVE_FRAME_TYPES:
             # PR-D-b: the engine is asking the child to pick an option — a
-            # clarification card. The frame is a contract frame now, so it is
-            # forwarded verbatim (`return False` below); what the relay adds is
-            # the knowledge that this turn is parked on a human, so the idle
-            # watchdog stops measuring engine silence and the clarify wait
-            # budget takes over (design §A.5 #3/#5). The id is the engine's
-            # own — never generated here, or the engine could not match the
-            # pick back to its call.
-            tool_call_id = frame.get("tool_call_id")
-            if isinstance(tool_call_id, str) and tool_call_id:
+            # clarification card. What the relay adds is the knowledge that
+            # this turn is parked on a human, so the idle watchdog stops
+            # measuring engine silence and the clarify wait budget takes over
+            # (design §A.5 #3/#5).
+            #
+            # PR-D-b4 PR-1 (design v0.2.1 §A.2 F2): the frame can no longer be
+            # forwarded verbatim. The engine puts its call id in `metadata`
+            # (never at the top level, B4-1) and its options carry no id at all,
+            # so the relay maps the id in and mints the card's option ids
+            # (F-b4-6(b)) — the id itself is only ever *mapped*, never minted,
+            # or the engine could not match the pick back to its call.
+            tool_call_id, id_source = _contract_tool_call_id(frame)
+            if tool_call_id:
                 turn.pending_tool_call_ids.add(tool_call_id)
+            meta = (
+                frame.get("metadata")
+                if isinstance(frame.get("metadata"), dict)
+                else {}
+            )
             turn.awaiting_tool_result = True
             turn.clarify_wait_started = time.monotonic()
             relay_audit.record(
@@ -1166,8 +1318,21 @@ class _ChatRelay:
                 student_mask=self.student_mask,
                 session_id=turn.session_id,
                 turn_id=turn.turn_id,
-                detail=f"tool_call_id={tool_call_id}",
+                detail=f"tool_call_id={tool_call_id} id_source={id_source}",
             )
+            if tool_call_id:
+                frame["tool_call_id"] = tool_call_id
+                frame["tool_args"], turn.pending_ask_user = _clarify_contract_args(
+                    meta.get("args") or meta.get("tool_metadata") or {}
+                )
+                frame.setdefault("status", "awaiting_input")
+                enriched = json.dumps(frame, ensure_ascii=False)
+                # `tool_call` stays in `_REPLAYABLE_FRAME_TYPES`, so the replay
+                # cache keeps carrying the card a refresh must still show.
+                self._remember_frame(enriched)
+                await self._forward(enriched)
+                return True
+            # No id anywhere (U-1 scenario): forward as-is, never mint one.
             return False
 
         if turn is not None and frame.get("type") == "error":
@@ -1494,9 +1659,13 @@ class _ChatRelay:
         # whatever ended it (done / error / watchdog / teardown). Nothing is
         # carried across turns, so no stale id can ever gate the next turn's
         # `tool_result` — and the next turn starts on the idle watchdog again.
+        # PR-D-b4 PR-1: the parked card (its minted option ids and their labels)
+        # is turn state too, and goes with the same sweep — a later pick can
+        # never be mapped against a card from a turn that is already over.
         turn.awaiting_tool_result = False
         turn.pending_tool_call_ids.clear()
         turn.clarify_wait_started = None
+        turn.pending_ask_user = None
         self._turn = None
         # 案 1: the socket is idle between turns now — start the recycle clock.
         self._arm_recycle()

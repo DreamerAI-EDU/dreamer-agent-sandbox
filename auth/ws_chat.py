@@ -1350,6 +1350,29 @@ class _ChatRelay:
             # No id anywhere (U-1 scenario): forward as-is, never mint one.
             return False
 
+        if turn is not None and frame.get("type") == "tool_result":
+            # PR-D-b4 PR-2 (B4-2): the engine's `tool_result` is its own trace
+            # emit (`tool_dispatch.py:547-554`) and, for `ask_user`, also
+            # carries the card payload for the engine's own UI. It is NOT in
+            # the Dreamer frontend contract, so it is classified here —
+            # explicitly, with an audit row — instead of being left to the
+            # child, which dropped it as noise. The card itself travels on the
+            # `tool_call` frame handled above (N-2: the engine is not asked to
+            # stop emitting; the relay is the one that classifies).
+            meta = (
+                frame.get("metadata")
+                if isinstance(frame.get("metadata"), dict)
+                else {}
+            )
+            relay_audit.record(
+                relay_audit.EVENT_NON_CONTRACT_FRAME,
+                student_mask=self.student_mask,
+                session_id=turn.session_id,
+                turn_id=turn.turn_id,
+                detail=f"frame=tool_result trace_kind={meta.get('trace_kind')}",
+            )
+            return True  # consumed: the non-contract frame never reaches the child
+
         if turn is not None and frame.get("type") == "error":
             # Every `error` frame of an open turn is consumed here, so the
             # provider's raw wording never reaches the child.

@@ -26,6 +26,14 @@ PR-D-b4 PR-1 closes F-b4-6 on top of that (design v0.2.1 §A.2 F2 / §4.1):
     T-12   the enriched card is still `tool_call`, so it still replays
     G-01   nothing this relay does ever names one of the 4 residual rows
 
+PR-D-b4 PR-2 closes B4-2 on top of that (design v0.2 §5.1/§5.4, gate D-3 甲):
+    T-11   an upstream `tool_result` is intercepted relay-side and audited;
+           the child never sees it
+    T-10   the engine keeps emitting its own `tool_result` (N-2) — the relay
+           is the one that classifies it; the child still gets only the card
+    T-12   `content` / `tool_call` / `result` still ride the open turn and
+           still replay; the replay key set is untouched (gate condition)
+
 The upstream is the same scripted stand-in the P3/P4 suites use, wired into
 `ws_chat._upstream_ws_url`, so no real DeepTutor is needed.
 """
@@ -1189,3 +1197,199 @@ async def test_pr1_g01_no_residual_turn_is_ever_touched(
     # no cancel path and no turn-status write exists in this PR's relay
     assert all(f["frame"]["type"] != "cancel_turn" for f in p3_upstream.frames)
     assert not any("turn_status" in sql.lower() for sql in statements)
+
+
+# ---------------------------------------------------------------------------
+# PR-2 (design v0.2 §5.1/§5.4) — the engine's non-contract frame is classified
+# relay-side: intercepted, audited, never forwarded. Same scripted-upstream
+# shape as the PR-1 block (C-b4-4: no engine, no raw-frame capture).
+# ---------------------------------------------------------------------------
+
+def _engine_tool_result_frame(
+    *, trace_kind: str | None = "tool_result", tool_call_id: str | None = _TCID
+) -> dict:
+    """The engine's own `tool_result` emit (`tool_dispatch.py:547-554`) in the
+    shape N-2 read off the deployed image: a trace / panel frame that, for
+    `ask_user`, also carries the engine UI's card payload. It is *not* in the
+    Dreamer frontend contract — the card the child must see travels on the
+    `tool_call` frame instead."""
+    meta: dict = {"tool_metadata": {"ask_user": {"intro": "你想問邊樣？"}}}
+    if trace_kind is not None:
+        meta["trace_kind"] = trace_kind
+    if tool_call_id is not None:
+        meta["tool_call_id"] = tool_call_id
+    return {
+        "type": "tool_result",
+        "session_id": _SID,
+        "turn_id": _TURN_ID,
+        "metadata": meta,
+    }
+
+
+@pytest.mark.asyncio
+async def test_pr2_t11_upstream_tool_result_is_intercepted_not_forwarded(
+    client, p3_upstream
+):
+    """T-11 (§5.4): an upstream `tool_result` no longer falls through to the
+    child. The relay consumes it, writes exactly one `non_contract_frame` row
+    naming the frame and its trace kind, and the child's screen stays exactly
+    the contract frames — the frame is never re-routed anywhere else either."""
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+
+    async def script(ws, conn, idx):
+        frame = p3_upstream.frames[idx]["frame"]
+        if frame.get("type") == "message":
+            await ws.send_json({"type": "session", "session_id": _SID})
+            await ws.send_json(_engine_tool_result_frame())
+            await ws.send_json(
+                {"type": "content", "content": "好嘅。", "session_id": _SID}
+            )
+            await ws.send_json(
+                {"type": "done", "turn_id": _TURN_ID, "session_id": _SID}
+            )
+
+    p3_upstream.on_message = script
+
+    ws = await _open_chat(client, session, student_id)
+    await _start_turn(ws)
+    events = await _collect(ws, 3)
+    assert [e["type"] for e in events] == ["session", "content", "done"]
+    await ws.close()
+
+    rows = _audit(event="non_contract_frame")
+    assert len(rows) == 1
+    assert rows[0]["detail"] == "frame=tool_result trace_kind=tool_result"
+    assert rows[0]["session_id"] == _SID
+    assert rows[0]["turn_id"] == _TURN_ID
+    # 紅線 8: the new event writes the 8-char mask like every other row
+    assert rows[0]["student_mask"] == student_id[:8]
+    assert student_id not in json.dumps(dict(rows[0]), ensure_ascii=False)
+    # the interception is a classification, not a re-route: the engine saw
+    # nothing beyond the turn itself
+    assert [f["frame"]["type"] for f in p3_upstream.frames] == ["message"]
+
+
+@pytest.mark.asyncio
+async def test_pr2_t10_engine_keeps_emitting_the_relay_classifies(
+    client, p3_upstream
+):
+    """T-10 (§8.3, revised; N-2): the engine is *not* asked to stop emitting its
+    `tool_result` trace frame — it keeps emitting it through the whole
+    `ask_user` cycle, and the relay is what classifies it. The child sees the
+    card and never the trace frame, and the two directions stay separable in
+    the ledger: the engine's frame is a `non_contract_frame` row, the child's
+    own pick is still a `tool_result` row."""
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+
+    async def script(ws, conn, idx):
+        frame = p3_upstream.frames[idx]["frame"]
+        if frame.get("type") == "message":
+            await ws.send_json({"type": "session", "session_id": _SID})
+            await ws.send_json(_card_frame())
+            # the engine's own emit, right behind the card it duplicates
+            await ws.send_json(_engine_tool_result_frame())
+        elif frame.get("type") == "submit_user_reply":
+            await ws.send_json(
+                {"type": "content", "content": "好嘅。", "session_id": _SID}
+            )
+            await ws.send_json(
+                {"type": "done", "turn_id": _TURN_ID, "session_id": _SID}
+            )
+
+    p3_upstream.on_message = script
+
+    ws = await _open_chat(client, session, student_id)
+    await _start_turn(ws)
+    live = await _collect(ws, 2)
+    assert [e["type"] for e in live] == ["session", "tool_call"]
+    assert live[1]["tool_call_id"] == _TCID
+    # the engine's frame arrived between the card and the pick: the child
+    # waited for its own answer and got none of it
+    await _assert_quiet(ws, timeout=0.4)
+
+    await ws.send_json(_pick_frame())
+    events = await _collect(ws, 2)
+    assert [e["type"] for e in events] == ["content", "done"]
+    await ws.close()
+
+    non_contract = _audit(event="non_contract_frame")
+    assert len(non_contract) == 1
+    assert non_contract[0]["detail"] == "frame=tool_result trace_kind=tool_result"
+    picks = _audit(event="tool_result")
+    assert len(picks) == 1
+    assert picks[0]["detail"] == f"tool_call_id={_TCID}"
+    # the cycle still runs end to end on the engine's own resume channel
+    assert [f["frame"]["type"] for f in p3_upstream.frames] == [
+        "message",
+        "submit_user_reply",
+    ]
+    assert _audit(event="turn_end")[-1]["final_status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_pr2_t12_contract_frames_still_ride_the_open_turn(
+    client, p3_upstream
+):
+    """T-12 (§5.4, gate condition): the interception is scoped to `tool_result`
+    only. `content` / `tool_call` / `result` still reach the child unchanged and
+    still replay after the turn, the replay key set is untouched, and no
+    contract frame leaves a `non_contract_frame` row."""
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+
+    async def script(ws, conn, idx):
+        frame = p3_upstream.frames[idx]["frame"]
+        if frame.get("type") == "message":
+            await ws.send_json({"type": "session", "session_id": _SID})
+            await ws.send_json(
+                {"type": "content", "content": "第一步。", "session_id": _SID}
+            )
+            await ws.send_json(_card_frame())
+            await ws.send_json(
+                {
+                    "type": "result",
+                    "session_id": _SID,
+                    "turn_id": _TURN_ID,
+                    "content": "完成。",
+                }
+            )
+            await ws.send_json(
+                {"type": "done", "turn_id": _TURN_ID, "session_id": _SID}
+            )
+
+    p3_upstream.on_message = script
+
+    ws = await _open_chat(client, session, student_id)
+    await _start_turn(ws)
+    live = await _collect(ws, 5)
+    assert [e["type"] for e in live] == [
+        "session",
+        "content",
+        "tool_call",
+        "result",
+        "done",
+    ]
+    assert live[2]["tool_call_id"] == _TCID
+
+    # all three contract frames were cached, so the completed turn replays
+    await ws.send_json({"type": "subscribe_session", "session_id": _SID})
+    replayed = await _collect(ws, 4)
+    assert [e["type"] for e in replayed] == [
+        "content",
+        "tool_call",
+        "result",
+        "done",
+    ]
+    await ws.close()
+
+    # the gate's added condition: PR-2 changes no replay key set
+    assert ws_chat_mod._REPLAYABLE_FRAME_TYPES == (
+        "content",
+        "tool_call",
+        "result",
+    )
+    assert "tool_result" not in ws_chat_mod._REPLAYABLE_FRAME_TYPES
+    # no false positive: nothing contract-shaped was classified as non-contract
+    assert _audit(event="non_contract_frame") == []

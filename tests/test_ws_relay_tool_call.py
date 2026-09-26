@@ -46,6 +46,22 @@ PR-D-b4 PR-3 closes B4-3 on top of that (design v0.2 §6.1/§6.4, gate §3i):
     G-02   the trigger is not a janitor: cancels name only turns this
            connection opened, no session sweep, no turn-status write
 
+PR-D-b4 PR-4 closes B4-4 on top of that (design v0.2 §7, gate §3j) — the last
+relay PR. The clarify timeout is self-healing within one connection: the turn
+the relay cancelled is remembered, so the `session_busy` that meets the child's
+next question is recognised as that leftover rather than as a second tab.
+    T-08   after the cancel, the same student's next turn on the same
+           connection is not busy-locked: the cancel is re-sent for the id
+           this connection opened, `busy_after_cancel` is audited, and the
+           child gets the retryable copy
+    T-09   a busy with nothing of ours pending is still true concurrency: the
+           P4 non-retryable semantics are not weakened (no re-cancel, no
+           `busy_after_cancel` row, the original copy)
+    G-01   the retried ids are a subset of this connection's own cancel set,
+           and that set never contains one of the 4 residual rows
+    G-02   the self-heal is a retry of our own cancel, not a janitor: no
+           session sweep, no turn-status write, no residual row named
+
 The upstream is the same scripted stand-in the P3/P4 suites use, wired into
 `ws_chat._upstream_ws_url`, so no real DeepTutor is needed.
 """
@@ -53,6 +69,7 @@ The upstream is the same scripted stand-in the P3/P4 suites use, wired into
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import os
 import socket
@@ -1478,12 +1495,22 @@ class _RelaySeam:
         self._upstream = upstream
         self._turn = turn
         self.dials = 0
+        # PR-4: the two relay-level fields `_send_upstream_cancel` now touches
+        # when its frame goes out. Same values the real `_ChatRelay` starts
+        # with, so the seam keeps exercising the real helper.
+        self.self_cancelled_turn_ids: set = set()
+        self._self_cancelled_order = collections.deque()
 
     async def _send_upstream_cancel(self, turn) -> None:
         # looked up at call time, not at import time: on the pre-PR-3 tree the
         # method does not exist, and this has to surface as a failing test
         # rather than as a collection error that hides every other test
         await ws_chat_mod._ChatRelay._send_upstream_cancel(self, turn)
+
+    def _remember_self_cancelled(self, turn_id: str) -> None:
+        # same reason as the cancel seam above: PR-4 added this call inside
+        # `_send_upstream_cancel`, so it must not be resolved at import time
+        ws_chat_mod._ChatRelay._remember_self_cancelled(self, turn_id)
 
     async def _ensure_upstream(self) -> bool:
         if self._upstream is not None and not self._upstream.closed:
@@ -1804,3 +1831,283 @@ async def test_pr3_g02_no_turn_state_is_ever_swept(
     assert "turn_status" not in lowered
     assert "update turns" not in lowered
     assert "delete from turns" not in lowered
+
+
+# ---------------------------------------------------------------------------
+# PR-4 / B4-4 — the busy that meets our *own* cancel is a leftover, not a tab
+# ---------------------------------------------------------------------------
+
+def _busy_frame() -> dict:
+    """The engine's refusal, in the shape the deployed image emits it: an
+    `error` frame whose wording is matched by `_is_busy_frame` (P4). Built per
+    call so no test can hand a mutated frame to the next one."""
+    return {
+        "type": "error",
+        "error_code": "upstream_error",
+        "content": "Session already has an active turn",
+        "session_id": _SID,
+    }
+
+
+def _relay_state_writes(statements: list[str]) -> list[str]:
+    """Statements that touch relay/turn *state*.
+
+    Three kinds of noise are dropped, all of them audit bookkeeping. The relay's
+    own audit INSERT is the one write PR-4 is allowed to add. `BEGIN`/`COMMIT`
+    are how every connection frames that insert — and `_finish_turn`'s audit row
+    lands *after* the child has already been told, so leaving them in would race
+    the snapshot below. `PRAGMA` is what `auth_db.connect()` issues on open
+    (auditing opens its own connection, so one audit row costs one pragma). What
+    is left is what a janitor would need: a read or write against a turn or
+    session table.
+    """
+    out = []
+    for statement in statements:
+        low = statement.strip().lower()
+        if "ws_chat_relay_audit" in low or low.startswith("pragma"):
+            continue
+        if low in ("begin", "commit", "rollback"):
+            continue
+        out.append(statement)
+    return out
+
+
+async def _supersede_then_busy(controller: _ScriptedUpstream) -> None:
+    """Script the two-message run PR-4 exists for.
+
+    First message: the engine parks the turn on a card (so the turn stays open
+    and, on PR-3's path, gets a cancel). Second message: the child asks again
+    without answering, which is the one window where the relay is still alive
+    to hear what the engine says about the turn it just asked it to finish.
+    """
+    seen = 0
+
+    async def script(ws, conn, idx):
+        nonlocal seen
+        if controller.frames[idx]["frame"].get("type") != "message":
+            return
+        seen += 1
+        if seen == 1:
+            await ws.send_json({"type": "session", "session_id": _SID})
+            await ws.send_json(_card_frame())
+        else:
+            await ws.send_json(_busy_frame())
+
+    controller.on_message = script
+
+
+@pytest.mark.asyncio
+async def test_pr4_t08_a_busy_after_our_own_cancel_is_retryable(
+    client, p3_upstream, monkeypatch
+):
+    """T-08 (§7, gate §3j): after PR-3 sent the cancel, the `session_busy` that
+    meets the child's next turn is that leftover — not a second tab. The relay
+    re-sends the cancel for the id *this* connection opened (`cancel_turn` is
+    idempotent, so it is safe whether the engine is still working on the first
+    one or missed it), audits `busy_after_cancel`, and hands the child the
+    retryable copy. The wire code stays `session_busy`: only the copy changes,
+    so the frontend contract is untouched."""
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+    # long budgets: the child supersedes the parked turn, the clarify wait must
+    # not be the thing that ends it
+    monkeypatch.setenv(_CLARIFY_WAIT_ENV, "30")
+    monkeypatch.setenv(_IDLE_WATCHDOG_ENV, "30")
+
+    await _supersede_then_busy(p3_upstream)
+
+    ws = await _open_chat(client, session, student_id)
+    await _start_turn(ws)
+    assert [e["type"] for e in await _collect(ws, 2)] == ["session", "tool_call"]
+
+    await _start_turn(ws)  # the child asks again, card still unanswered
+    busy = (await _collect(ws, 1, timeout=6.0))[0]
+
+    assert busy["type"] == "error"
+    assert busy["error_code"] == "session_busy"  # wire vocabulary unchanged
+    assert busy["content"] == ws_chat_mod._BUSY_RETRYABLE_COPY["zh-hk"]
+    assert busy["content"] != ws_chat_mod._GRACEFUL_BUSY_COPY["zh-hk"]
+    assert "active turn" not in json.dumps(busy)  # provider text never leaks
+
+    # the self-heal rode the socket already open: cancel, new turn, re-cancel —
+    # and both cancels name the turn this connection opened
+    assert await _wait_for(lambda: len(_cancel_frames(p3_upstream)) == 2)
+    assert [f["frame"]["type"] for f in p3_upstream.frames] == [
+        "message",
+        "cancel_turn",
+        "message",
+        "cancel_turn",
+    ]
+    assert [c["turn_id"] for c in _cancel_frames(p3_upstream)] == [
+        _TURN_ID,
+        _TURN_ID,
+    ]
+    assert p3_upstream.connections == 1  # never a fresh dial for the re-send
+
+    row = _audit(event="busy_after_cancel")[0]
+    assert row["detail"] == "retried=1"
+    mid = _audit(event="midstream_error")[0]
+    assert mid["upstream_error"] == "session_busy"
+    assert mid["detail"] == "busy_after_cancel"
+    # the re-send is accounted for by `busy_after_cancel`, not as a second
+    # cancel of its own — and busy still spends no retry budget (P4)
+    assert len(_audit(event="cancel_sent")) == 1
+    assert _audit(event="turn_retry") == []
+    await ws.close()
+
+
+@pytest.mark.asyncio
+async def test_pr4_t08b_only_a_delivered_cancel_is_remembered(client):
+    """T-08, seam half: the ledger is written where the cancel is *delivered*,
+    so it can only ever hold frames the engine actually received — a cancel the
+    helper refused to dial (T-07b) leaves nothing to self-heal from. Registering
+    is idempotent and the helper is the only writer."""
+    socket = _ScriptedSocket()
+    seam = _RelaySeam(upstream=socket, turn=_seam_turn(parked=True))
+
+    auth_db.ensure_schema()  # this seam test never touches the relay's DB
+    await seam._send_upstream_cancel(seam._turn)
+
+    assert socket.sent == [{"type": "cancel_turn", "turn_id": _TURN_ID}]
+    assert seam.self_cancelled_turn_ids == {_TURN_ID}
+    assert list(seam._self_cancelled_order) == [_TURN_ID]
+    assert _audit(event="cancel_sent")[0]["detail"] == "ok=True"
+
+    await seam._send_upstream_cancel(seam._turn)  # idempotent, no duplicate
+    assert list(seam._self_cancelled_order) == [_TURN_ID]
+    assert len(_audit(event="cancel_sent")) == 2  # each delivered frame, once
+
+    undelivered = _seam_turn(parked=True)
+    undelivered.turn_id = "turn-never-delivered"
+    seam._upstream = None  # the socket this turn lived on is already gone
+    await seam._send_upstream_cancel(undelivered)
+
+    assert "turn-never-delivered" not in seam.self_cancelled_turn_ids
+    assert list(seam._self_cancelled_order) == [_TURN_ID]
+    assert len(_audit(event="cancel_sent")) == 2  # a refused dial audits nothing
+
+
+@pytest.mark.asyncio
+async def test_pr4_t09_a_busy_with_nothing_pending_is_still_a_second_tab(
+    client, p3_upstream, monkeypatch
+):
+    """T-09 (§7, P4 semantics kept): with nothing of ours in flight the engine's
+    busy is what it always was — real concurrency. No re-cancel, no
+    `busy_after_cancel` row, the original copy, and not one extra frame
+    upstream: the ledger only ever widens what is *retryable*, never what is
+    *cancellable*."""
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+    monkeypatch.setenv(_CLARIFY_WAIT_ENV, "30")
+    monkeypatch.setenv(_IDLE_WATCHDOG_ENV, "30")
+
+    async def script(ws, conn, idx):
+        await ws.send_json(_busy_frame())
+
+    p3_upstream.on_message = script
+
+    ws = await _open_chat(client, session, student_id)
+    await _start_turn(ws)
+    busy = (await _collect(ws, 1, timeout=6.0))[0]
+
+    assert busy["type"] == "error"
+    assert busy["error_code"] == "session_busy"
+    assert busy["content"] == ws_chat_mod._GRACEFUL_BUSY_COPY["zh-hk"]
+    assert busy["content"] != ws_chat_mod._BUSY_RETRYABLE_COPY["zh-hk"]
+
+    await asyncio.sleep(0.2)  # let any stray frame land before asserting none
+    await ws.close()
+
+    assert len(p3_upstream.frames) == 1  # exactly the turn frame, no re-send
+    assert _cancel_frames(p3_upstream) == []
+    assert _audit(event="cancel_sent") == []
+    assert _audit(event="busy_after_cancel") == []
+    mid = _audit(event="midstream_error")[0]
+    assert mid["upstream_error"] == "session_busy"
+    assert mid["detail"] == "session_busy_non_retryable"
+
+
+@pytest.mark.asyncio
+async def test_pr4_g01_the_ledger_is_ours_and_bounded(client):
+    """G-01 (§7, 紅線 1): the retry set is this connection's own cancels and
+    nothing else, bounded FIFO at the §7 cap. Eviction only ever forgets the
+    *oldest* cancel — that can cost a self-heal for a turn nobody is waiting on
+    any more, and can never widen what the relay is willing to cancel, because
+    the set is only ever read to re-cancel ids already in it. The four residual
+    `running` rows are not reachable through it."""
+    seam = _RelaySeam(upstream=_ScriptedSocket(), turn=None)
+
+    assert ws_chat_mod._SELF_CANCELLED_MAX == 16  # the §7 bound, pinned
+
+    for i in range(20):
+        seam._remember_self_cancelled(f"turn-{i:02d}")
+
+    expected = {f"turn-{i:02d}" for i in range(4, 20)}
+    assert len(seam.self_cancelled_turn_ids) == ws_chat_mod._SELF_CANCELLED_MAX
+    assert len(seam._self_cancelled_order) == ws_chat_mod._SELF_CANCELLED_MAX
+    assert seam.self_cancelled_turn_ids == expected
+    assert list(seam._self_cancelled_order) == sorted(expected)
+    assert "turn-00" not in seam.self_cancelled_turn_ids  # oldest evicted first
+
+    seam._remember_self_cancelled("turn-19")  # already in: no reorder, no growth
+    assert list(seam._self_cancelled_order) == sorted(expected)
+
+    for rid in _RESIDUAL_RUNNING_TURN_IDS:
+        assert rid not in seam.self_cancelled_turn_ids
+        assert rid not in seam._self_cancelled_order
+
+
+@pytest.mark.asyncio
+async def test_pr4_g02_the_self_heal_is_not_a_janitor(
+    client, p3_upstream, monkeypatch
+):
+    """G-02 (§7, 紅線 1): the self-heal re-sends a frame it already sent — it
+    does not go looking for leftovers. The busy branch issues no statement of
+    its own (its only write is the audit row), it names no residual row, and it
+    writes no turn status: the ledger decides what is *retryable*, the engine
+    still owns every state transition."""
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+    monkeypatch.setenv(_CLARIFY_WAIT_ENV, "30")
+    monkeypatch.setenv(_IDLE_WATCHDOG_ENV, "30")
+
+    statements: list[str] = []
+    real_connect = auth_db.connect
+
+    def recording_connect(*args, **kwargs):
+        conn = real_connect(*args, **kwargs)
+        conn.set_trace_callback(statements.append)
+        return conn
+
+    monkeypatch.setattr(auth_db, "connect", recording_connect)
+
+    await _supersede_then_busy(p3_upstream)
+
+    ws = await _open_chat(client, session, student_id)
+    await _start_turn(ws)
+    await _collect(ws, 2)
+    await _start_turn(ws)
+    # the new turn's own DB work is done the moment its frame goes upstream, so
+    # anything added from here on is the busy branch's doing
+    assert await _wait_for(lambda: len(p3_upstream.frames) >= 3)
+    before = len(_relay_state_writes(statements))
+
+    busy = (await _collect(ws, 1, timeout=6.0))[0]
+    assert busy["content"] == ws_chat_mod._BUSY_RETRYABLE_COPY["zh-hk"]
+    assert await _wait_for(lambda: len(_cancel_frames(p3_upstream)) == 2)
+    after = _relay_state_writes(statements)
+    assert len(after) == before  # a frame, not a sweep
+    await ws.close()
+
+    assert statements, "the recorder captured no DB traffic at all"
+    for rid in _RESIDUAL_RUNNING_TURN_IDS:
+        assert rid not in json.dumps(
+            _cancel_frames(p3_upstream), ensure_ascii=False
+        ), rid
+        assert rid not in json.dumps(_audit(), ensure_ascii=False), rid
+        assert not any(rid in sql for sql in statements), rid
+    lowered = " ".join(statements).lower()
+    assert "turn_status" not in lowered
+    assert "update turns" not in lowered
+    assert "delete from turns" not in lowered
+    assert "from turns" not in lowered  # not even a read sweep

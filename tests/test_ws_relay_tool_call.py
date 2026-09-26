@@ -34,6 +34,18 @@ PR-D-b4 PR-2 closes B4-2 on top of that (design v0.2 §5.1/§5.4, gate D-3 甲):
     T-12   `content` / `tool_call` / `result` still ride the open turn and
            still replay; the replay key set is untouched (gate condition)
 
+PR-D-b4 PR-3 closes B4-3 on top of that (design v0.2 §6.1/§6.4, gate §3i):
+    T-04   the clarify budget expiring on a parked turn cancels that turn
+           upstream, by id, and still closes the wait as a clarify kill
+    T-04b  that cancel rides the connection already open — it goes out before
+           the relay drops its socket, and nothing re-dials for it
+    T-04c  an idle kill is not a cancel (the engine's own turn stays its own)
+    T-07   the reap cancels only a turn the engine is *holding*: all three
+           teardown callers share the one gate, a streaming turn sends nothing
+    T-07b  no live socket → no cancel, and above all no fresh dial for one
+    G-02   the trigger is not a janitor: cancels name only turns this
+           connection opened, no session sweep, no turn-status write
+
 The upstream is the same scripted stand-in the P3/P4 suites use, wired into
 `ws_chat._upstream_ws_url`, so no real DeepTutor is needed.
 """
@@ -1152,7 +1164,8 @@ async def test_pr1_g01_no_residual_turn_is_ever_touched(
     PR's business. Every DB statement the relay runs during a full card→pick→
     resume cycle is recorded, and neither those statements, nor the frames it
     sends upstream, nor its ledger may name one of them — and PR-1 carries no
-    cancel frame and no turn-status write at all."""
+    cancel frame and no turn-status write at all — and PR-3, which does give the
+    relay a cancel path, may still only ever name this connection's own turn."""
     session, student_id = _confirmed_trio()
     await _agree_chat(session, student_id)
 
@@ -1194,8 +1207,16 @@ async def test_pr1_g01_no_residual_turn_is_ever_touched(
         ), rid
         assert rid not in json.dumps(_audit(), ensure_ascii=False), rid
 
-    # no cancel path and no turn-status write exists in this PR's relay
-    assert all(f["frame"]["type"] != "cancel_turn" for f in p3_upstream.frames)
+    # PR-3 gives the relay a cancel path (B4-3) — what stays forbidden is
+    # naming a turn that is not this connection's own. The four residual rows
+    # are still off limits, and nothing here writes a turn status.
+    cancels = [
+        f["frame"]
+        for f in p3_upstream.frames
+        if f["frame"]["type"] == "cancel_turn"
+    ]
+    assert all(c["turn_id"] == _TURN_ID for c in cancels)
+    assert not set(c["turn_id"] for c in cancels) & set(_RESIDUAL_RUNNING_TURN_IDS)
     assert not any("turn_status" in sql.lower() for sql in statements)
 
 
@@ -1393,3 +1414,393 @@ async def test_pr2_t12_contract_frames_still_ride_the_open_turn(
     assert "tool_result" not in ws_chat_mod._REPLAYABLE_FRAME_TYPES
     # no false positive: nothing contract-shaped was classified as non-contract
     assert _audit(event="non_contract_frame") == []
+
+
+# ---------------------------------------------------------------------------
+# PR-3 (design v0.2 §6.1/§6.4, F-b4-7) — the relay asks the engine to finish a
+# turn the engine is *holding*: the clarify budget and the teardown reap both
+# cancel on the connection that is already open, the idle branch and a merely
+# streaming reap both stay silent, and no cancel ever names a turn this
+# connection did not open. Same scripted upstream as the rest of the file
+# (C-b4-4: no engine, no raw-frame capture).
+# ---------------------------------------------------------------------------
+
+def _cancel_frames(controller: _ScriptedUpstream) -> list[dict]:
+    return [
+        f["frame"]
+        for f in controller.frames
+        if f["frame"].get("type") == "cancel_turn"
+    ]
+
+
+async def _wait_for_cancel(controller: _ScriptedUpstream) -> list[dict]:
+    """Wait for the cancel to land, then return it.
+
+    `_send_upstream` writes the frame and returns; the scripted upstream only
+    reads it on a later loop turn. Every assertion about a cancel that was sent
+    while a connection was being torn down (client close, watchdog kill) has to
+    wait for it rather than race the scheduler.
+    """
+    await _wait_for(lambda: bool(_cancel_frames(controller)))
+    return _cancel_frames(controller)
+
+
+class _ScriptedSocket:
+    """The bit of `aiohttp.ClientWebSocketResponse` `_send_upstream` touches."""
+
+    def __init__(self) -> None:
+        self.sent: list[dict] = []
+        self.closed = False
+
+    async def send_str(self, payload: str) -> None:
+        self.sent.append(json.loads(payload))
+
+
+class _RelaySeam:
+    """A `self` just rich enough to call the PR-3 seams directly.
+
+    The third teardown caller (`relay_teardown`, from `run()`) cannot be
+    reached with a live socket in a scripted run: by the time `run()` reaps,
+    `_socket_lost` / `_midstream_error` have already cleared `_upstream`
+    (ws_chat.py:1781-1806). The shared gate is asserted here instead — the real
+    `_reap_turn` / `_send_upstream_cancel`, over a scripted socket, with the
+    dial counted exactly where `_ensure_upstream` would dial
+    (ws_chat.py:770-783).
+    """
+
+    _reap_turn = ws_chat_mod._ChatRelay._reap_turn
+    _finish_turn = ws_chat_mod._ChatRelay._finish_turn
+    _send_upstream = ws_chat_mod._ChatRelay._send_upstream
+
+    student_mask = "seam0001"
+
+    def __init__(self, upstream, turn=None) -> None:
+        self._upstream = upstream
+        self._turn = turn
+        self.dials = 0
+
+    async def _send_upstream_cancel(self, turn) -> None:
+        # looked up at call time, not at import time: on the pre-PR-3 tree the
+        # method does not exist, and this has to surface as a failing test
+        # rather than as a collection error that hides every other test
+        await ws_chat_mod._ChatRelay._send_upstream_cancel(self, turn)
+
+    async def _ensure_upstream(self) -> bool:
+        if self._upstream is not None and not self._upstream.closed:
+            return True
+        self.dials += 1  # a real `_ensure_upstream` would dial here
+        return False
+
+    def _arm_recycle(self) -> None:  # not this seam's subject
+        return None
+
+
+def _seam_turn(*, parked: bool) -> object:
+    turn = ws_chat_mod._TurnInFlight("{}", "zh-hk", "seam0001")
+    turn.session_id = _SID
+    turn.turn_id = _TURN_ID
+    turn.awaiting_tool_result = parked
+    return turn
+
+
+@pytest.mark.asyncio
+async def test_pr3_t04_clarify_timeout_cancels_the_held_turn(
+    client, p3_upstream, monkeypatch
+):
+    """T-04 (§6.4): the clarify budget expires while the turn is parked — the
+    relay tells the engine to finish that turn. Without it the engine row keeps
+    `running` with a live task, which is what refuses the same student's next
+    turn with `session_busy`."""
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+    monkeypatch.setenv(_CLARIFY_WAIT_ENV, "0.4")
+    monkeypatch.setenv(_IDLE_WATCHDOG_ENV, "30")
+
+    async def script(ws, conn, idx):
+        await ws.send_json({"type": "session", "session_id": _SID})
+        await ws.send_json(_card_frame())
+
+    p3_upstream.on_message = script
+
+    ws = await _open_chat(client, session, student_id)
+    await _start_turn(ws)
+    events = await _collect(ws, 3, timeout=6.0)
+    assert [e["type"] for e in events] == ["session", "tool_call", "error"]
+    assert events[2]["error_code"] == "ERR_CLARIFY_TIMEOUT"
+    await ws.close()
+
+    # the engine was told to finish the turn it is holding, by id
+    assert [c["turn_id"] for c in await _wait_for_cancel(p3_upstream)] == [_TURN_ID]
+    rows = _audit(event="cancel_sent")
+    assert len(rows) == 1
+    assert rows[0]["turn_id"] == _TURN_ID
+    assert rows[0]["detail"] == "ok=True"
+    # and the local close-out is still the clarify kill, not an idle one
+    assert _audit(event="clarify_timeout")[0]["upstream_error"] == "clarify_timeout"
+    assert _audit(event="watchdog_kill") == []
+    end = _audit(event="turn_end")[0]
+    assert end["final_status"] == "failed"
+    assert end["upstream_error"] == "clarify_timeout"
+
+
+@pytest.mark.asyncio
+async def test_pr3_t04b_the_cancel_rides_the_original_connection(
+    client, p3_upstream, monkeypatch
+):
+    """T-04b (§6.4, F-b4-7(c)): the cancel goes out *before* the relay drops its
+    own socket, so it travels on the connection the engine already bound the
+    turn to and nothing re-dials for it. (Had it been sent after
+    `self._upstream = None`, the helper's guard would have returned and no
+    frame would exist at all — the frame on connection #1 *is* the ordering
+    proof.) It is also the last thing the engine hears from this relay."""
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+    monkeypatch.setenv(_CLARIFY_WAIT_ENV, "0.4")
+    monkeypatch.setenv(_IDLE_WATCHDOG_ENV, "30")
+
+    async def script(ws, conn, idx):
+        await ws.send_json({"type": "session", "session_id": _SID})
+        await ws.send_json(_card_frame())
+
+    p3_upstream.on_message = script
+
+    ws = await _open_chat(client, session, student_id)
+    await _start_turn(ws)
+    await _collect(ws, 3, timeout=6.0)
+    await ws.close()
+
+    await _wait_for_cancel(p3_upstream)
+    assert [f["conn"] for f in p3_upstream.frames
+            if f["frame"]["type"] == "cancel_turn"] == [1]
+    assert p3_upstream.connections == 1  # never a fresh dial for a cancel
+    assert p3_upstream.frames[-1]["frame"]["type"] == "cancel_turn"
+
+
+@pytest.mark.asyncio
+async def test_pr3_t04c_the_idle_kill_cancels_nothing(
+    client, p3_upstream, monkeypatch
+):
+    """T-04c (§6.4, F-b4-7(b)): an idle kill is not a cancel. The engine went
+    quiet on a turn of its own — the relay has no business ending that turn, and
+    must not reach for the cancel path it now owns."""
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+    monkeypatch.setenv(_IDLE_WATCHDOG_ENV, "0.4")
+    monkeypatch.setenv(_CLARIFY_WAIT_ENV, "30")
+
+    async def script(ws, conn, idx):
+        await ws.send_json({"type": "session", "session_id": _SID})
+        # then silence: not parked, so this is the idle watchdog's call
+
+    p3_upstream.on_message = script
+
+    ws = await _open_chat(client, session, student_id)
+    await _start_turn(ws)
+    events = await _collect(ws, 2, timeout=6.0)
+    assert [e["type"] for e in events] == ["session", "error"]
+    await ws.close()
+
+    assert len(_audit(event="watchdog_kill")) == 1
+    assert _audit(event="clarify_timeout") == []
+    await asyncio.sleep(0.2)  # let any stray frame land before asserting none
+    assert _cancel_frames(p3_upstream) == []
+    assert _audit(event="cancel_sent") == []
+
+
+@pytest.mark.asyncio
+async def test_pr3_t07a_client_closed_cancels_the_held_turn(
+    client, p3_upstream
+):
+    """T-07 ① (`client_closed`): the child leaves while its turn is parked on a
+    card — the engine is still holding that turn, so the reap asks it to finish
+    on the socket that is already open."""
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+
+    async def script(ws, conn, idx):
+        await ws.send_json({"type": "session", "session_id": _SID})
+        await ws.send_json(_card_frame())
+
+    p3_upstream.on_message = script
+
+    ws = await _open_chat(client, session, student_id)
+    await _start_turn(ws)
+    events = await _collect(ws, 2)
+    assert [e["type"] for e in events] == ["session", "tool_call"]
+    await ws.close()
+
+    assert await _wait_for(lambda: bool(_audit(event="turn_end")))
+    end = _audit(event="turn_end")[0]
+    assert end["detail"] == "client_closed"
+    assert end["final_status"] == "aborted"
+
+    # a frame written as the relay is tearing down is only picked up by the
+    # scripted upstream on a later loop turn: wait for it, don't race it
+    assert [c["turn_id"] for c in await _wait_for_cancel(p3_upstream)] == [_TURN_ID]
+    assert p3_upstream.connections == 1
+    rows = _audit(event="cancel_sent")
+    assert len(rows) == 1
+    assert rows[0]["detail"] == "ok=True"
+
+
+@pytest.mark.asyncio
+async def test_pr3_t07a_superseded_turn_is_cancelled_before_the_new_one(
+    client, p3_upstream
+):
+    """T-07 ① (`superseded_by_new_turn`): the child opens a new turn while the
+    old one is still parked. The parked turn is cancelled upstream *first*, and
+    only then does the new turn's frame go out — the engine is never left
+    holding two turns for one student."""
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+
+    async def script(ws, conn, idx):
+        frame = p3_upstream.frames[idx]["frame"]
+        if frame.get("type") == "message":
+            await ws.send_json({"type": "session", "session_id": _SID})
+            await ws.send_json(_card_frame())
+
+    p3_upstream.on_message = script
+
+    ws = await _open_chat(client, session, student_id)
+    await _start_turn(ws)
+    await _collect(ws, 2)
+    await _start_turn(ws)  # the child talks again without answering the card
+
+    assert await _wait_for(lambda: len(_audit(event="turn_start")) == 2)
+    await _wait_for(lambda: len(p3_upstream.frames) >= 3)
+    sent = [f["frame"] for f in p3_upstream.frames]
+    assert [f["type"] for f in sent] == ["message", "cancel_turn", "message"]
+    assert sent[1]["turn_id"] == _TURN_ID
+    assert p3_upstream.connections == 1
+
+    ends = _audit(event="turn_end")
+    assert [e["detail"] for e in ends] == ["superseded_by_new_turn"]
+    assert ends[0]["final_status"] == "aborted"
+    assert _audit(event="cancel_sent")[0]["turn_id"] == _TURN_ID
+    await ws.close()
+
+
+@pytest.mark.asyncio
+async def test_pr3_t07_reverse_a_streaming_teardown_cancels_nothing(
+    client, p3_upstream
+):
+    """T-07 ② (§6.4, F-b4-7(a)): a turn that is merely streaming has not lost
+    its engine task — the answer is still being produced and the child can come
+    back to the same connection for it. The reap still closes the relay's own
+    turn, and sends nothing upstream."""
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+
+    async def script(ws, conn, idx):
+        await ws.send_json({"type": "session", "session_id": _SID})
+        await ws.send_json(
+            {"type": "content", "content": "第一步。", "session_id": _SID}
+        )
+        # then silence: mid-answer, not parked on a card
+
+    p3_upstream.on_message = script
+
+    ws = await _open_chat(client, session, student_id)
+    await _start_turn(ws)
+    events = await _collect(ws, 2)
+    assert [e["type"] for e in events] == ["session", "content"]
+    await ws.close()
+
+    assert await _wait_for(lambda: bool(_audit(event="turn_end")))
+    end = _audit(event="turn_end")[0]
+    assert end["detail"] == "client_closed"
+    assert end["final_status"] == "aborted"
+    await asyncio.sleep(0.2)  # let any stray frame land before asserting none
+    assert _cancel_frames(p3_upstream) == []
+    assert _audit(event="cancel_sent") == []
+
+
+@pytest.mark.asyncio
+async def test_pr3_t07a_teardown_reap_shares_the_gate(client):
+    """T-07 ① (third caller, `relay_teardown`): the gate lives in `_reap_turn`,
+    so all three callers go through it. Asserted at the seam — see `_RelaySeam`
+    for why this one cannot be scripted with a live socket."""
+    socket = _ScriptedSocket()
+    seam = _RelaySeam(upstream=socket, turn=_seam_turn(parked=True))
+
+    assert await seam._reap_turn(
+        "relay_teardown", relay_audit_mod.ERR_UPSTREAM_CLOSED
+    ) is True
+
+    assert socket.sent == [{"type": "cancel_turn", "turn_id": _TURN_ID}]
+    rows = _audit(event="cancel_sent")
+    assert len(rows) == 1
+    assert rows[0]["turn_id"] == _TURN_ID
+    assert rows[0]["detail"] == "ok=True"
+    end = _audit(event="turn_end")[0]
+    assert end["detail"] == "relay_teardown"
+    assert end["final_status"] == "aborted"
+
+
+@pytest.mark.asyncio
+async def test_pr3_t07b_a_cancel_never_dials_a_fresh_connection(client):
+    """T-07b (§6.4, F-b4-7(c)): with no live socket the helper returns — it must
+    not re-dial to deliver a cancel. A cancel on a fresh connection is bound to
+    no engine-side turn, so the engine would not honour it; the dial counter
+    proves the guard is on the dial, not just on the frame."""
+    socket = _ScriptedSocket()
+    seam = _RelaySeam(upstream=socket, turn=_seam_turn(parked=True))
+    seam._upstream = None  # the socket this turn lived on is already gone
+
+    auth_db.ensure_schema()  # this seam test never touches the relay's DB
+    await seam._send_upstream_cancel(seam._turn)
+
+    assert seam.dials == 0
+    assert socket.sent == []
+    assert _audit(event="cancel_sent") == []
+
+
+@pytest.mark.asyncio
+async def test_pr3_g02_no_turn_state_is_ever_swept(
+    client, p3_upstream, monkeypatch
+):
+    """G-02 (§6.4, 紅線 1): PR-3 adds a cancel *trigger*, not a janitor. The
+    relay never scans a session for leftover turns and never writes a turn
+    status itself — every cancel it sends names a turn this connection opened,
+    and no statement it runs touches turn status. The four residual rows are
+    untouched by construction."""
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+    monkeypatch.setenv(_CLARIFY_WAIT_ENV, "0.4")
+    monkeypatch.setenv(_IDLE_WATCHDOG_ENV, "30")
+
+    statements: list[str] = []
+    real_connect = auth_db.connect
+
+    def recording_connect(*args, **kwargs):
+        conn = real_connect(*args, **kwargs)
+        conn.set_trace_callback(statements.append)
+        return conn
+
+    monkeypatch.setattr(auth_db, "connect", recording_connect)
+
+    async def script(ws, conn, idx):
+        await ws.send_json({"type": "session", "session_id": _SID})
+        await ws.send_json(_card_frame())
+
+    p3_upstream.on_message = script
+
+    ws = await _open_chat(client, session, student_id)
+    await _start_turn(ws)
+    await _collect(ws, 3, timeout=6.0)  # session, tool_call, clarify error
+    await ws.close()
+
+    # a cancel did go out on this run — and it named this connection's own turn
+    cancels = await _wait_for_cancel(p3_upstream)
+    assert [c["turn_id"] for c in cancels] == [_TURN_ID]
+    assert _audit(event="cancel_sent")[0]["turn_id"] == _TURN_ID
+    assert statements, "the recorder captured no DB traffic at all"
+    for rid in _RESIDUAL_RUNNING_TURN_IDS:
+        assert rid not in json.dumps(cancels, ensure_ascii=False), rid
+        assert rid not in json.dumps(_audit(), ensure_ascii=False), rid
+        assert not any(rid in sql for sql in statements), rid
+    lowered = " ".join(statements).lower()
+    assert "turn_status" not in lowered
+    assert "update turns" not in lowered
+    assert "delete from turns" not in lowered

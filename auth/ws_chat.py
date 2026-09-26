@@ -1615,6 +1615,14 @@ class _ChatRelay:
             budget,
             self.student_mask,
         )
+        if clarify:
+            # PR-D-b4 PR-3 (B4-3), F-b4-7(b): a parked turn is one the engine
+            # is *holding* (`ask_user` has no reply yet), so the budget that
+            # just expired is the relay's to close out — send the cancel on the
+            # socket we are about to drop (the helper never re-dials for a
+            # cancel), then tear down locally. The idle branch deliberately
+            # does not: a silent engine's turn is still the engine's to run.
+            await self._send_upstream_cancel(turn)
         upstream = self._upstream
         self._upstream = None
         await _close_quietly(upstream)
@@ -1625,6 +1633,37 @@ class _ChatRelay:
                 self._graceful_copy(code, turn.language),
             )
             self._finish_turn(relay_audit.STATUS_FAILED, code)
+
+    async def _send_upstream_cancel(self, turn) -> None:
+        """Tell the engine to finish the turn it is still holding.
+
+        The relay owns the trigger; the engine's native `cancel_turn` owns the
+        state transition (`task.cancel()` -> `finally` -> `status='cancelled'`).
+        Without this frame a clarify timeout leaves the engine row `running`
+        with a live task forever, and the same student is refused the next day
+        with `session_busy`.
+
+        Only ever sent on the EXISTING connection: `_send_upstream` re-dials
+        through `_ensure_upstream` when `self._upstream is None`
+        (ws_chat.py:770-783), and a cancel arriving on a fresh connection is
+        bound to no engine-side turn — the engine would not honour it, so the
+        helper returns instead of dialling (T-07b). Best-effort by contract:
+        a send that fails is audited (`ok=False`), never raised — every caller
+        is already on its way out.
+        """
+        if turn is None or not turn.turn_id:
+            return
+        if self._upstream is None:
+            return
+        payload = json.dumps({"type": "cancel_turn", "turn_id": turn.turn_id})
+        ok = await self._send_upstream(payload)
+        relay_audit.record(
+            relay_audit.EVENT_CANCEL_SENT,
+            student_mask=self.student_mask,
+            session_id=turn.session_id,
+            turn_id=turn.turn_id,
+            detail=f"ok={ok}",
+        )
 
     async def _upstream_unavailable(self, code: Optional[str]) -> None:
         code = code or relay_audit.ERR_CONNECT_FAILED
@@ -1725,6 +1764,15 @@ class _ChatRelay:
             self.student_mask,
             reason,
         )
+        if turn.awaiting_tool_result:
+            # PR-D-b4 PR-3 (B4-3), F-b4-7(a): only a turn the engine is
+            # *holding* is cancelled upstream. A turn that is merely streaming
+            # has not lost its engine task — the answer is still being
+            # produced and the child can come back to the same connection for
+            # it — so nothing is cancelled on its behalf. One shared gate for
+            # all three callers (`relay_teardown` / `client_closed` /
+            # `superseded_by_new_turn`), never a second track.
+            await self._send_upstream_cancel(turn)
         self._finish_turn(
             relay_audit.STATUS_ABORTED, upstream_error, detail=reason
         )

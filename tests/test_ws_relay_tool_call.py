@@ -1,17 +1,30 @@
-"""PR-D-b1 — relay-side clarification-card contract (design v0.2.1 §A.5).
+"""PR-D-b1 / PR-D-b4 PR-1 — relay-side clarification-card contract (§A.5).
 
-The backend half of the clarification card: the relay must treat `tool_call`
-as a contract frame it forwards verbatim, park the turn on the child's answer,
-forward that answer on the *same* turn, and close the wait with its own error
-code — never as an idle engine.
+The backend half of the clarification card: the relay must bridge the engine's
+card to the child, park the turn on the child's answer, resume that turn on the
+*same* turn, and close the wait with its own error code — never as an idle
+engine.
 
 Covered here (acceptance #1–#6 of §6.2, the D-b1 subset):
-    1. `tool_call` is forwarded unchanged and audited once
+    1. `tool_call` reaches the child as the frontend contract (id mapped in,
+       option ids minted) and is audited once
     2. a turn parked on a card survives the idle watchdog
-    3. `tool_result` rides the open turn; a non-pending pick is dropped
+    3. the pick rides the open turn, translated into `submit_user_reply`;
+       a non-pending pick is dropped
     4. the clarify budget closes the wait with ERR_CLARIFY_TIMEOUT, not idle
     5. replay carries the card *and* the pick (R5 β)
     6. every audit row stays mask-only (紅線 8)
+
+PR-D-b4 PR-1 closes F-b4-6 on top of that (design v0.2.1 §A.2 F2 / §4.1):
+    T-01   the id is mapped out of `metadata`, never minted
+    T-01b  the engine gets `submit_user_reply` + `turn_id`, never `tool_result`
+    T-02   the provider id wins over the trace id
+    T-03   no id anywhere → forwarded as-is, nothing minted
+    T-13   option ids are minted `opt_1…opt_N` and the labels stay in sync
+    T-14   the pick comes back as *labels* (plus free text), never as ids
+    T-15   an unmapped option id is dropped, audited, never guessed at
+    T-12   the enriched card is still `tool_call`, so it still replays
+    G-01   nothing this relay does ever names one of the 4 residual rows
 
 The upstream is the same scripted stand-in the P3/P4 suites use, wired into
 `ws_chat._upstream_ws_url`, so no real DeepTutor is needed.
@@ -51,7 +64,19 @@ _CLARIFY_WAIT_ENV = "WS_CHAT_CLARIFY_WAIT_SECONDS"
 #: engine-owned ids used across the cases (the relay never invents these)
 _SID = "engine-clarify-001"
 _TCID = "tc-abc-001"
+_CALL_ID = "call-xyz-001"  # the trace-side id: only the T-01 fallback
 _TURN_ID = "turn-clarify-001"
+
+#: the four `running` rows the D3 window left behind (D3_window_report §7).
+#: 紅線 1 — no PR of this series may reap them, so no test may either: G-01
+#: asserts the relay never so much as *names* one of them (G-02, which adds
+#: the cancel/status half of that guard, ships with PR-3/PR-4).
+_RESIDUAL_RUNNING_TURN_IDS = (
+    "turn_1789805286986_8ceb544b05",
+    "turn_1789823910953_50c861e378",
+    "turn_1789827929607_6e48b23116",
+    "turn_1790249010368_9ab1fd387c",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -247,26 +272,60 @@ def _audit(*, event: str | None = None) -> list[dict]:
     return [r for r in rows if event is None or r["event"] == event]
 
 
-def _card_frame() -> dict:
-    """The clarification card as the engine would send it (opaque to the relay)."""
+def _card_frame(
+    *,
+    tool_call_id: str | None = _TCID,
+    call_id: str | None = _CALL_ID,
+    options: list | None = None,
+    allow_free_text: bool | None = True,
+    multi_select: bool = False,
+) -> dict:
+    """The clarification card in the engine's *real* shape (design §4.6, read
+    off the deployed image): the call id rides in `metadata` (never at the top
+    level, B4-1), the question and its options ride in `args.questions[0]`, and
+    an option carries no id at all — those are minted relay-side for the
+    frontend contract (T-13)."""
+    meta: dict = {
+        "args": {
+            "questions": [
+                {
+                    "id": "q-1",
+                    "prompt": "你想問邊樣？",
+                    "allow_free_text": allow_free_text,
+                    "multi_select": multi_select,
+                    "options": (
+                        options
+                        if options is not None
+                        else [{"label": "數學"}, {"label": "科學"}]
+                    ),
+                }
+            ]
+        }
+    }
+    if tool_call_id is not None:
+        meta["tool_call_id"] = tool_call_id
+    if call_id is not None:
+        meta["call_id"] = call_id
     return {
         "type": "tool_call",
-        "tool_call_id": _TCID,
         "session_id": _SID,
-        "prompt": "你想問邊樣？",
-        "options": [
-            {"id": "opt-1", "label": "數學"},
-            {"id": "opt-2", "label": "科學"},
-        ],
+        "turn_id": _TURN_ID,
+        "metadata": meta,
     }
 
 
-def _pick_frame() -> dict:
+def _pick_frame(option_ids: list | None = None, free_text: str = "") -> dict:
+    """The pick as the frontend actually sends it (`chatWs.ts:65` /
+    `ChatPage.tsx:253`): the option ids it was handed, plus whatever the child
+    typed in the free-text box."""
     return {
         "type": "tool_result",
         "tool_call_id": _TCID,
         "session_id": _SID,
-        "option_id": "opt-1",
+        "result": {
+            "selected": ["opt_1"] if option_ids is None else list(option_ids),
+            "free_text": free_text,
+        },
     }
 
 
@@ -277,15 +336,17 @@ async def _start_turn(ws) -> None:
 
 
 # ---------------------------------------------------------------------------
-# #1 — tool_call is forwarded verbatim and audited
+# #1 — tool_call reaches the child as the frontend contract, audited once
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_db1_tool_call_is_forwarded_verbatim_and_audited(
+async def test_db1_tool_call_reaches_the_child_as_the_frontend_contract(
     client, p3_upstream
 ):
-    """Acceptance #1: the card reaches the child byte-for-byte and leaves one
-    audit row naming the engine's tool_call_id. The turn stays open."""
+    """Acceptance #1 / PR-1 (T-01, T-02, T-13): the card the child gets is the
+    frontend contract — the engine's call id mapped to the top level, its option
+    ids minted `opt_1…opt_N` — and it leaves one audit row naming the id and the
+    level it was read from. The turn stays open."""
     session, student_id = _confirmed_trio()
     await _agree_chat(session, student_id)
 
@@ -302,8 +363,21 @@ async def test_db1_tool_call_is_forwarded_verbatim_and_audited(
 
     events = await _collect(ws, 2)
     assert [e["type"] for e in events] == ["session", "tool_call"]
-    # verbatim: the relay is not allowed to reshape the contract frame
-    assert events[1] == card
+    out = events[1]
+    # mapped, never minted: the id is the engine's own, lifted out of metadata
+    assert out["tool_call_id"] == _TCID
+    assert out["status"] == "awaiting_input"
+    # the contract the card renderer needs — `normalizeClarifyOptions` drops
+    # every option without an id, so the relay mints them (F-b4-6(b)/(c))
+    assert out["tool_args"] == {
+        "question": "你想問邊樣？",
+        "options": [
+            {"id": "opt_1", "label": "數學", "description": None},
+            {"id": "opt_2", "label": "科學", "description": None},
+        ],
+        "allow_free_text": True,
+        "multi_select": False,
+    }
     # the card does not end the turn: no turn_end yet, and no kill of any kind
     assert _audit(event="turn_end") == []
     assert _audit(event="watchdog_kill") == []
@@ -314,7 +388,10 @@ async def test_db1_tool_call_is_forwarded_verbatim_and_audited(
     assert len(calls) == 1
     assert calls[0]["student_mask"] == student_id[:8]
     assert calls[0]["session_id"] == _SID
-    assert calls[0]["detail"] == f"tool_call_id={_TCID}"
+    assert (
+        calls[0]["detail"]
+        == f"tool_call_id={_TCID} id_source=metadata.tool_call_id"
+    )
     # the child left mid-wait: the turn is reaped as a client close, not killed
     assert await _wait_for(lambda: bool(_audit(event="turn_end")))
     assert _audit(event="turn_end")[0]["detail"] == "client_closed"
@@ -365,9 +442,10 @@ async def test_db1_parked_turn_survives_the_idle_watchdog(
 
 @pytest.mark.asyncio
 async def test_db1_tool_result_rides_the_open_turn(client, p3_upstream):
-    """Acceptance #3: the pick is forwarded upstream on the *same* turn (one
-    turn_start in the ledger), the engine's answer still reaches the child,
-    and the pick is audited once."""
+    """Acceptance #3 / PR-1 (T-01b, T-14): the pick is answered on the *same*
+    turn (one turn_start in the ledger) and the engine's answer still reaches
+    the child — but what travels upstream is the translated resume frame, never
+    the child's `tool_result`, and the pick is audited once."""
     session, student_id = _confirmed_trio()
     await _agree_chat(session, student_id)
 
@@ -376,7 +454,7 @@ async def test_db1_tool_result_rides_the_open_turn(client, p3_upstream):
         if frame.get("type") == "message":
             await ws.send_json({"type": "session", "session_id": _SID})
             await ws.send_json(_card_frame())
-        elif frame.get("type") == "tool_result":
+        elif frame.get("type") == "submit_user_reply":
             await ws.send_json(
                 {"type": "content", "content": "好嘅，我哋由數學開始。",
                  "session_id": _SID}
@@ -398,10 +476,11 @@ async def test_db1_tool_result_rides_the_open_turn(client, p3_upstream):
     assert tail[0]["content"] == "好嘅，我哋由數學開始。"
     await ws.close()
 
-    # the engine saw the pick, on the same connection, after the card
+    # the engine saw the translated pick, on the same connection, after the card
     sent = [f["frame"] for f in p3_upstream.frames]
-    assert [f["type"] for f in sent] == ["message", "tool_result"]
-    assert sent[1]["tool_call_id"] == _TCID
+    assert [f["type"] for f in sent] == ["message", "submit_user_reply"]
+    assert sent[1]["turn_id"] == _TURN_ID
+    assert sent[1]["answers"] == [{"questionId": "q-1", "text": "數學"}]
     assert p3_upstream.connections == 1
 
     results = _audit(event="tool_result")
@@ -495,7 +574,8 @@ async def test_db1_replay_carries_card_and_result(client, p3_upstream):
     """Acceptance #5 / R5 β (7a): a child that refreshes after the turn gets
     the card, the answer text and the engine's terminal `result` frame back
     from relay memory, in arrival order — no engine dial, and the pick is
-    neither replayed nor re-sent upstream."""
+    neither replayed nor re-sent upstream. The card it gets back is the
+    enriched one (PR-1), so a refresh still renders options."""
     session, student_id = _confirmed_trio()
     await _agree_chat(session, student_id)
 
@@ -504,7 +584,7 @@ async def test_db1_replay_carries_card_and_result(client, p3_upstream):
         if frame.get("type") == "message":
             await ws.send_json({"type": "session", "session_id": _SID})
             await ws.send_json(_card_frame())
-        elif frame.get("type") == "tool_result":
+        elif frame.get("type") == "submit_user_reply":
             await ws.send_json(
                 {"type": "content", "content": "好嘅，我哋由數學開始。",
                  "session_id": _SID}
@@ -533,7 +613,11 @@ async def test_db1_replay_carries_card_and_result(client, p3_upstream):
         "result",
         "done",
     ]
-    assert replay[0] == _card_frame()
+    assert replay[0]["tool_call_id"] == _TCID
+    assert [o["id"] for o in replay[0]["tool_args"]["options"]] == [
+        "opt_1",
+        "opt_2",
+    ]
     assert replay[1]["content"] == "好嘅，我哋由數學開始。"
     assert replay[2]["metadata"] == {"status": "ok"}
     # the pick is a client→engine frame: the child side has no consumer for it
@@ -541,9 +625,9 @@ async def test_db1_replay_carries_card_and_result(client, p3_upstream):
     await ws.close()
 
     # the replay is local: the engine never saw the subscribe, and the pick
-    # travelled upstream exactly once
+    # travelled upstream exactly once — as the translated resume frame
     sent = [f["frame"]["type"] for f in p3_upstream.frames]
-    assert sent == ["message", "tool_result"]
+    assert sent == ["message", "submit_user_reply"]
 
 
 # ---------------------------------------------------------------------------
@@ -563,7 +647,7 @@ async def test_db1_audit_rows_stay_mask_only(client, p3_upstream, monkeypatch):
         if frame.get("type") == "message":
             await ws.send_json({"type": "session", "session_id": _SID})
             await ws.send_json(_card_frame())
-        elif frame.get("type") == "tool_result":
+        elif frame.get("type") == "submit_user_reply":
             await ws.send_json(_card_frame())  # a second card, then silence
 
     p3_upstream.on_message = script
@@ -591,3 +675,517 @@ async def test_db1_audit_rows_stay_mask_only(client, p3_upstream, monkeypatch):
         assert len(row["student_mask"]) == 8
         # no field anywhere may carry the full id
         assert student_id not in json.dumps(dict(row), ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# PR-1 (design v0.2.1 §4.1/§4.4) — the id map, the option mint, the pick
+# translation. Every case is a scripted-upstream contract test: no engine, no
+# raw-frame capture (C-b4-4).
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_pr1_t01_id_is_mapped_from_call_id_when_trace_id_is_absent(
+    client, p3_upstream
+):
+    """T-01 (§8.4): `metadata.tool_call_id` empty, `metadata.call_id` set → the
+    contract frame carries that value, mapped and never minted, and the audit
+    says which level it came from. The value only feeds rendering + the pending
+    association; the resume itself rides `turn_id`."""
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+
+    card = _card_frame(tool_call_id=None, call_id=_CALL_ID)
+
+    async def script(ws, conn, idx):
+        await ws.send_json({"type": "session", "session_id": _SID})
+        await ws.send_json(card)
+
+    p3_upstream.on_message = script
+
+    ws = await _open_chat(client, session, student_id)
+    await _start_turn(ws)
+    events = await _collect(ws, 2)
+    assert events[1]["tool_call_id"] == _CALL_ID
+    await ws.close()
+
+    row = _audit(event="tool_call")[0]
+    assert row["detail"] == f"tool_call_id={_CALL_ID} id_source=metadata.call_id"
+
+
+@pytest.mark.asyncio
+async def test_pr1_t02_the_provider_id_wins_over_the_trace_id(
+    client, p3_upstream
+):
+    """T-02 (§8.4): both ids present → `metadata.tool_call_id` is the one the
+    engine matches its pick against, so it wins over `metadata.call_id`."""
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+
+    async def script(ws, conn, idx):
+        await ws.send_json({"type": "session", "session_id": _SID})
+        await ws.send_json(_card_frame())  # both ids on the card
+
+    p3_upstream.on_message = script
+
+    ws = await _open_chat(client, session, student_id)
+    await _start_turn(ws)
+    events = await _collect(ws, 2)
+    assert events[1]["tool_call_id"] == _TCID
+    assert events[1]["tool_call_id"] != _CALL_ID
+    await ws.close()
+
+    row = _audit(event="tool_call")[0]
+    assert (
+        row["detail"] == f"tool_call_id={_TCID} id_source=metadata.tool_call_id"
+    )
+
+
+@pytest.mark.asyncio
+async def test_pr1_t03_no_id_anywhere_is_forwarded_untouched(
+    client, p3_upstream
+):
+    """T-03 (§8.4): no id at any level → the frame goes out exactly as the
+    engine sent it (nothing minted, no `tool_args` invented), the ledger records
+    `id_source=missing`, and no empty id is parked on the turn."""
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+
+    card = _card_frame(tool_call_id=None, call_id=None)
+
+    async def script(ws, conn, idx):
+        await ws.send_json({"type": "session", "session_id": _SID})
+        await ws.send_json(card)
+
+    p3_upstream.on_message = script
+
+    ws = await _open_chat(client, session, student_id)
+    await _start_turn(ws)
+    events = await _collect(ws, 2)
+    assert events[1] == card
+
+    # nothing was parked, so a pick cannot match anything: it never travels
+    await ws.send_json(_pick_frame())
+    await _assert_quiet(ws, timeout=0.4)
+    await ws.close()
+
+    row = _audit(event="tool_call")[0]
+    assert row["detail"] == "tool_call_id= id_source=missing"
+    assert [f["frame"]["type"] for f in p3_upstream.frames] == ["message"]
+    assert _audit(event="tool_result") == []
+
+
+@pytest.mark.asyncio
+async def test_pr1_t01b_engine_gets_a_resume_never_a_tool_result(
+    client, p3_upstream
+):
+    """T-01b (§8.4, N-1): the pick is translated into the engine's own resume
+    frame — `submit_user_reply` keyed by `turn_id` and the question id — and the
+    child's raw `tool_result` is never forwarded (U-3: the resume does not ride
+    the call id)."""
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+
+    async def script(ws, conn, idx):
+        frame = p3_upstream.frames[idx]["frame"]
+        if frame.get("type") == "message":
+            await ws.send_json({"type": "session", "session_id": _SID})
+            await ws.send_json(_card_frame())
+        elif frame.get("type") == "submit_user_reply":
+            await ws.send_json(
+                {"type": "content", "content": "好嘅。", "session_id": _SID}
+            )
+            await ws.send_json(
+                {"type": "done", "turn_id": _TURN_ID, "session_id": _SID}
+            )
+
+    p3_upstream.on_message = script
+
+    ws = await _open_chat(client, session, student_id)
+    await _start_turn(ws)
+    await _collect(ws, 2)
+    await ws.send_json(_pick_frame())
+    await _collect(ws, 2)
+    await ws.close()
+
+    sent = [f["frame"] for f in p3_upstream.frames]
+    assert [f["type"] for f in sent] == ["message", "submit_user_reply"]
+    assert "tool_result" not in [f["type"] for f in sent]
+    assert sent[1]["turn_id"] == _TURN_ID
+    assert sent[1]["answers"][0]["questionId"] == "q-1"
+    # the resume is turn-keyed: it carries no call id of its own
+    assert "tool_call_id" not in sent[1]
+
+
+@pytest.mark.asyncio
+async def test_pr1_t13_option_ids_are_minted_positionally(
+    client, p3_upstream
+):
+    """T-13 (§8.4, F-b4-6(b)/(c)): the engine's options carry no id at all, so
+    the relay mints `opt_1…opt_N` in place order for the frontend contract,
+    keeps every label, and copies `allow_free_text` / `multi_select` through.
+    The id→label sync itself is observed end-to-end in T-14."""
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+
+    card = _card_frame(
+        options=[
+            {"label": "數學"},
+            {"label": "科學", "description": "STEM"},
+            {"label": "   "},  # blank labels are not options
+        ],
+        allow_free_text=False,
+        multi_select=True,
+    )
+
+    async def script(ws, conn, idx):
+        await ws.send_json({"type": "session", "session_id": _SID})
+        await ws.send_json(card)
+
+    p3_upstream.on_message = script
+
+    ws = await _open_chat(client, session, student_id)
+    await _start_turn(ws)
+    events = await _collect(ws, 2)
+    out = events[1]
+    await ws.close()
+
+    assert out["tool_args"] == {
+        "question": "你想問邊樣？",
+        "options": [
+            {"id": "opt_1", "label": "數學", "description": None},
+            {"id": "opt_2", "label": "科學", "description": "STEM"},
+        ],
+        "allow_free_text": False,
+        "multi_select": True,
+    }
+    assert out["status"] == "awaiting_input"
+
+
+@pytest.mark.asyncio
+async def test_pr1_t13_legacy_flat_args_still_flatten(client, p3_upstream):
+    """T-13 (§8.4) safety net: the older flat `ask_user` payload — no `questions`
+    list, no question id — still mints its option ids. With no question id to
+    key on, the resume rides the plain `text` field instead of `answers`."""
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+
+    card = {
+        "type": "tool_call",
+        "session_id": _SID,
+        "turn_id": _TURN_ID,
+        "metadata": {
+            "tool_call_id": _TCID,
+            "args": {
+                "question": "你想問邊樣？",
+                "options": [{"label": "數學"}, {"label": "科學"}],
+            },
+        },
+    }
+
+    async def script(ws, conn, idx):
+        frame = p3_upstream.frames[idx]["frame"]
+        if frame.get("type") == "message":
+            await ws.send_json({"type": "session", "session_id": _SID})
+            await ws.send_json(card)
+        elif frame.get("type") == "submit_user_reply":
+            await ws.send_json(
+                {"type": "content", "content": "好嘅。", "session_id": _SID}
+            )
+
+    p3_upstream.on_message = script
+
+    ws = await _open_chat(client, session, student_id)
+    await _start_turn(ws)
+    events = await _collect(ws, 2)
+    assert [o["id"] for o in events[1]["tool_args"]["options"]] == [
+        "opt_1",
+        "opt_2",
+    ]
+    assert events[1]["tool_args"]["question"] == "你想問邊樣？"
+
+    await ws.send_json(_pick_frame(["opt_2"]))
+    await _collect(ws, 1)
+    await ws.close()
+
+    sent = [f["frame"] for f in p3_upstream.frames]
+    assert sent[1]["type"] == "submit_user_reply"
+    assert sent[1]["text"] == "科學"
+    assert "answers" not in sent[1]
+
+
+@pytest.mark.parametrize(
+    "question_level,args_level,expected",
+    [
+        (False, None, False),  # the engine's per-question value is authoritative
+        (True, False, True),  # ... and it beats a stray args-level value (W-b4-1)
+        (None, False, False),  # legacy flat payload: the args level still counts
+        (None, None, True),  # neither → the engine's own default
+    ],
+)
+@pytest.mark.asyncio
+async def test_pr1_w_b4_1_allow_free_text_follows_the_question_level(
+    client, p3_upstream, question_level, args_level, expected
+):
+    """W-b4-1 (§4.2 B, corrected against the engine): `ask_user` keeps
+    `allow_free_text` on the *question* (`tools/ask_user.py`), so that level
+    wins; the payload root is only the legacy fallback, and `True` is the
+    engine's default when neither is set."""
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+
+    card = _card_frame(allow_free_text=question_level)
+    if question_level is None:
+        card["metadata"]["args"]["questions"][0].pop("allow_free_text")
+    if args_level is not None:
+        card["metadata"]["args"]["allow_free_text"] = args_level
+
+    async def script(ws, conn, idx):
+        await ws.send_json({"type": "session", "session_id": _SID})
+        await ws.send_json(card)
+
+    p3_upstream.on_message = script
+
+    ws = await _open_chat(client, session, student_id)
+    await _start_turn(ws)
+    events = await _collect(ws, 2)
+    await ws.close()
+
+    assert events[1]["tool_args"]["allow_free_text"] is expected
+
+
+@pytest.mark.asyncio
+async def test_pr1_t14_pick_is_translated_to_labels_plus_free_text(
+    client, p3_upstream
+):
+    """T-14 (§8.4, F-b4-6(d)): the child answers `opt_2` — an id the engine has
+    never seen — so the relay maps it back to the label and folds in whatever
+    was typed, before resuming the turn."""
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+
+    async def script(ws, conn, idx):
+        frame = p3_upstream.frames[idx]["frame"]
+        if frame.get("type") == "message":
+            await ws.send_json({"type": "session", "session_id": _SID})
+            await ws.send_json(_card_frame())
+        elif frame.get("type") == "submit_user_reply":
+            await ws.send_json(
+                {"type": "content", "content": "好嘅。", "session_id": _SID}
+            )
+            await ws.send_json(
+                {"type": "done", "turn_id": _TURN_ID, "session_id": _SID}
+            )
+
+    p3_upstream.on_message = script
+
+    ws = await _open_chat(client, session, student_id)
+    await _start_turn(ws)
+    await _collect(ws, 2)
+    await ws.send_json(_pick_frame(["opt_2"], free_text="想學多啲"))
+    tail = await _collect(ws, 2)
+    assert [e["type"] for e in tail] == ["content", "done"]
+    await ws.close()
+
+    sent = [f["frame"] for f in p3_upstream.frames]
+    assert sent[1]["type"] == "submit_user_reply"
+    assert sent[1]["answers"] == [
+        {"questionId": "q-1", "text": "科學、想學多啲"}
+    ]
+    # the engine gets the label it knows, never the relay's private id
+    assert "opt_2" not in sent[1]["answers"][0]["text"]
+    assert _audit(event=relay_audit_mod.EVENT_UNMAPPED_PICK) == []
+
+
+@pytest.mark.asyncio
+async def test_pr1_t15_unknown_pick_id_is_dropped_and_audited(
+    client, p3_upstream
+):
+    """T-15 (§8.4, F-b4-6(d)): an id the relay never minted is dropped, the
+    payload stays legal (the turn still resumes) and the ledger records the
+    unmapped pick."""
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+
+    async def script(ws, conn, idx):
+        frame = p3_upstream.frames[idx]["frame"]
+        if frame.get("type") == "message":
+            await ws.send_json({"type": "session", "session_id": _SID})
+            await ws.send_json(_card_frame())
+        elif frame.get("type") == "submit_user_reply":
+            await ws.send_json(
+                {"type": "done", "turn_id": _TURN_ID, "session_id": _SID}
+            )
+
+    p3_upstream.on_message = script
+
+    ws = await _open_chat(client, session, student_id)
+    await _start_turn(ws)
+    await _collect(ws, 2)
+    await ws.send_json(_pick_frame(["opt_9", "opt_1"]))
+    await _collect(ws, 1)
+    await ws.close()
+
+    sent = [f["frame"] for f in p3_upstream.frames]
+    assert sent[1]["type"] == "submit_user_reply"
+    # the known id still lands; only the stranger is dropped
+    assert sent[1]["answers"] == [{"questionId": "q-1", "text": "數學"}]
+
+    assert relay_audit_mod.EVENT_UNMAPPED_PICK == "unmapped_pick"
+    rows = _audit(event=relay_audit_mod.EVENT_UNMAPPED_PICK)
+    assert len(rows) == 1
+    assert rows[0]["detail"] == "ids=opt_9"
+    assert rows[0]["student_mask"] == student_id[:8]
+
+
+@pytest.mark.asyncio
+async def test_pr1_t15b_empty_pick_still_sends_a_legal_reply(
+    client, p3_upstream
+):
+    """T-15 (§8.4) second half: an empty `selected` is not an error — the turn
+    resumes with an empty answer and nothing is logged as unmapped."""
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+
+    async def script(ws, conn, idx):
+        frame = p3_upstream.frames[idx]["frame"]
+        if frame.get("type") == "message":
+            await ws.send_json({"type": "session", "session_id": _SID})
+            await ws.send_json(_card_frame())
+        elif frame.get("type") == "submit_user_reply":
+            await ws.send_json(
+                {"type": "done", "turn_id": _TURN_ID, "session_id": _SID}
+            )
+
+    p3_upstream.on_message = script
+
+    ws = await _open_chat(client, session, student_id)
+    await _start_turn(ws)
+    await _collect(ws, 2)
+    await ws.send_json(_pick_frame([]))
+    await _collect(ws, 1)
+    await ws.close()
+
+    sent = [f["frame"] for f in p3_upstream.frames]
+    assert sent[1]["type"] == "submit_user_reply"
+    assert sent[1]["answers"] == [{"questionId": "q-1", "text": ""}]
+    assert _audit(event=relay_audit_mod.EVENT_UNMAPPED_PICK) == []
+
+
+@pytest.mark.asyncio
+async def test_pr1_t12_enriched_card_stays_replayable(client, p3_upstream):
+    """T-12 (§4.4): enrichment rewrites the card before it is forwarded — the id
+    lifted to the top level, the option ids minted — but the frame is still a
+    `tool_call`, so it still belongs to the replay set and a refresh after the
+    turn still renders the card (options and all) without dialling the engine.
+    The replay key sets themselves are untouched by PR-1."""
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+
+    async def script(ws, conn, idx):
+        frame = p3_upstream.frames[idx]["frame"]
+        if frame.get("type") == "message":
+            await ws.send_json({"type": "session", "session_id": _SID})
+            await ws.send_json(_card_frame())
+        elif frame.get("type") == "submit_user_reply":
+            await ws.send_json(
+                {"type": "content", "content": "好嘅。", "session_id": _SID}
+            )
+            await ws.send_json(
+                {"type": "done", "turn_id": _TURN_ID, "session_id": _SID}
+            )
+
+    p3_upstream.on_message = script
+
+    ws = await _open_chat(client, session, student_id)
+    await _start_turn(ws)
+    live = (await _collect(ws, 2))[1]
+    # enriched, yet still the one frame type the replay cache keys off
+    assert live["type"] == "tool_call"
+    assert live["type"] in ws_chat_mod._REPLAYABLE_FRAME_TYPES
+    assert live["tool_call_id"] == _TCID
+
+    await ws.send_json(_pick_frame())
+    await _collect(ws, 2)
+
+    # the completed turn replays the *enriched* card, not the engine's raw one
+    await ws.send_json({"type": "subscribe_session", "session_id": _SID})
+    replayed = (await _collect(ws, 3))[0]
+    assert replayed["type"] == "tool_call"
+    assert replayed["tool_call_id"] == _TCID
+    assert replayed["status"] == "awaiting_input"
+    assert [o["id"] for o in replayed["tool_args"]["options"]] == [
+        "opt_1",
+        "opt_2",
+    ]
+    await ws.close()
+
+    # the replay is local: one dial, and the engine only ever saw the turn and
+    # the translated resume — never a second `message`, never a `tool_result`
+    assert p3_upstream.connections == 1
+    assert [f["frame"]["type"] for f in p3_upstream.frames] == [
+        "message",
+        "submit_user_reply",
+    ]
+    # the gate's added condition: PR-1 changes no replay key set
+    assert ws_chat_mod._REPLAYABLE_FRAME_TYPES == (
+        "content",
+        "tool_call",
+        "result",
+    )
+    assert "tool_result" not in ws_chat_mod._REPLAYABLE_FRAME_TYPES
+    assert ws_chat_mod._INTERACTIVE_FRAME_TYPES == ("tool_call",)
+
+
+@pytest.mark.asyncio
+async def test_pr1_g01_no_residual_turn_is_ever_touched(
+    client, p3_upstream, monkeypatch
+):
+    """G-01 (§4.4, 紅線 1): the four `running` rows D3 left behind are not this
+    PR's business. Every DB statement the relay runs during a full card→pick→
+    resume cycle is recorded, and neither those statements, nor the frames it
+    sends upstream, nor its ledger may name one of them — and PR-1 carries no
+    cancel frame and no turn-status write at all."""
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+
+    statements: list[str] = []
+    real_connect = auth_db.connect
+
+    def recording_connect(*args, **kwargs):
+        conn = real_connect(*args, **kwargs)
+        conn.set_trace_callback(statements.append)
+        return conn
+
+    monkeypatch.setattr(auth_db, "connect", recording_connect)
+
+    async def script(ws, conn, idx):
+        frame = p3_upstream.frames[idx]["frame"]
+        if frame.get("type") == "message":
+            await ws.send_json({"type": "session", "session_id": _SID})
+            await ws.send_json(_card_frame())
+        elif frame.get("type") == "submit_user_reply":
+            await ws.send_json(
+                {"type": "done", "turn_id": _TURN_ID, "session_id": _SID}
+            )
+
+    p3_upstream.on_message = script
+
+    ws = await _open_chat(client, session, student_id)
+    await _start_turn(ws)
+    await _collect(ws, 2)
+    # a mapped pick plus a stranger: both the happy and the drop path run here
+    await ws.send_json(_pick_frame(["opt_1", "opt_9"]))
+    await _collect(ws, 1)
+    await ws.close()
+
+    assert statements, "the recorder captured no DB traffic at all"
+    for rid in _RESIDUAL_RUNNING_TURN_IDS:
+        assert not any(rid in sql for sql in statements), rid
+        assert rid not in json.dumps(
+            [f["frame"] for f in p3_upstream.frames], ensure_ascii=False
+        ), rid
+        assert rid not in json.dumps(_audit(), ensure_ascii=False), rid
+
+    # no cancel path and no turn-status write exists in this PR's relay
+    assert all(f["frame"]["type"] != "cancel_turn" for f in p3_upstream.frames)
+    assert not any("turn_status" in sql.lower() for sql in statements)

@@ -72,6 +72,11 @@ EVENT_TOOL_RESULT = "tool_result"
 #: the child's pick. Paired with ERR_CLARIFY_TIMEOUT on the midstream row and
 #: on the turn_end row so a killed wait is never mistaken for an idle kill.
 EVENT_CLARIFY_TIMEOUT = "clarify_timeout"
+#: PR-D-b4 PR-1 (F-b4-6(d)) — the child's pick carried an option id this relay
+#: never minted (a stale card, a replayed frame, a forged one). The unknown id
+#: is dropped rather than guessed at, and the row makes the drop visible: the
+#: engine must only ever be handed labels it actually offered.
+EVENT_UNMAPPED_PICK = "unmapped_pick"
 
 #: every event name this module may write (nothing else is allowed into the table)
 EVENTS = (
@@ -87,6 +92,7 @@ EVENTS = (
     EVENT_TOOL_CALL,
     EVENT_TOOL_RESULT,
     EVENT_CLARIFY_TIMEOUT,
+    EVENT_UNMAPPED_PICK,
 )
 
 # --- upstream_error codes (normalized; the relay never logs raw upstream text) --

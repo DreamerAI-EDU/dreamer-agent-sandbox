@@ -1327,6 +1327,65 @@ def test_p3_rate_limit_match_is_error_frames_only():
     )
 
 
+def test_p3_bare_429_needs_a_standalone_number():
+    """Backlog #15: "429" is a status code, not a substring.
+
+    A substring test also matches longer digit runs, so a connect error
+    carrying an ephemeral port such as ``127.0.0.1:42959`` was classified as
+    a rate limit (merge run of #92, 36211949372). Both directions are pinned
+    here: port-like digit runs never match, every real 429 shape still does.
+    """
+    assert "429" not in ws_chat_mod._RATE_LIMIT_MARKERS
+    for text in (
+        "127.0.0.1:42959",
+        "[Errno 111] Connect call failed ('127.0.0.1', 42959)",
+        "ws://127.0.0.1:4290/api/v1/ws",
+        "unified_42907",
+        "1429",
+        "4291",
+    ):
+        assert not ws_chat_mod._looks_rate_limited(text), text
+    for text in (
+        "429 Too Many Requests",
+        "HTTP 429",
+        "Error code: 429",
+        "upstream returned 429",
+        "status=429",
+    ):
+        assert ws_chat_mod._looks_rate_limited(text), text
+
+
+@pytest.mark.asyncio
+async def test_p3_connect_error_with_429_in_the_port_stays_unavailable(
+    client, monkeypatch
+):
+    """Backlog #15 at the call site: the port digits must not pick the code.
+
+    ``test_p3_engine_unreachable_is_audited`` binds a random ephemeral port,
+    so the defect only surfaced when that port happened to embed 429 (the
+    merge run of #92 picked 42959). This pins the same relay path with that
+    exact port, deterministically, so the boundary cannot drift back.
+    """
+    session, student_id = _confirmed_trio()
+    await _agree_chat(session, student_id)
+    monkeypatch.setattr(
+        ws_chat_mod,
+        "_upstream_ws_url",
+        lambda: "ws://127.0.0.1:42959/api/v1/ws",  # nobody listens here
+    )
+
+    ws = await _open_chat(client, session, student_id)
+    events = await _collect(ws, 1)
+    assert events[0]["type"] == "error"
+    assert events[0]["error_code"] == "upstream_unavailable"
+    assert events[0]["content"] == ws_chat_mod._UPSTREAM_UNAVAILABLE_COPY
+    await ws.close()
+
+    row = _audit(event="upstream_unavailable")[0]
+    assert row["upstream_error"] == "connect_failed"
+    assert row["student_mask"] == student_id[:8]
+
+
 def test_p3_upstream_error_code_is_normalised_for_the_audit():
     """A provider error code is untrusted text: only a short token is stored.
 

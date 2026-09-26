@@ -300,7 +300,6 @@ _RETRY_BACKOFF_SECONDS = (1.5, 4.0)
 #: string — and only inside an `error` frame, so a legitimate content frame
 #: that happens to contain "429" can never be mistaken for a limit rejection.
 _RATE_LIMIT_MARKERS = (
-    "429",
     "too many requests",
     "rate limit",
     "rate_limit",
@@ -309,6 +308,14 @@ _RATE_LIMIT_MARKERS = (
     "resourceexhausted",
     "quota",
 )
+
+#: The bare status code is deliberately NOT a substring marker (backlog #15).
+#: A plain `"429" in text` also matches longer digit runs, so an ephemeral
+#: port such as 42959 inside a connect error read as a limit rejection and
+#: the relay audited a dead engine as upstream_rate_limited. A 429 only
+#: counts as a status code when it stands alone — never glued to another
+#: digit on either side.
+_RATE_LIMIT_429_RE = re.compile(r"(?<!\d)429(?!\d)")
 
 #: P4 — upstream wording that means "this engine session already has an
 #: active turn" (same student, second tab). Deliberately disjoint from
@@ -476,8 +483,16 @@ def _parse_frame(raw) -> dict:
 
 
 def _looks_rate_limited(text: str) -> bool:
+    """Upstream wording that reads as 429 / quota exhausted.
+
+    Wording markers are plain substring matches; the bare status code is not
+    — it must stand alone (see ``_RATE_LIMIT_429_RE``), so the digits of a
+    port, an address or a request id can never be read as a limit rejection.
+    """
     lowered = (text or "").lower()
-    return any(marker in lowered for marker in _RATE_LIMIT_MARKERS)
+    if any(marker in lowered for marker in _RATE_LIMIT_MARKERS):
+        return True
+    return _RATE_LIMIT_429_RE.search(lowered) is not None
 
 
 def _is_rate_limit_frame(raw: str) -> bool:

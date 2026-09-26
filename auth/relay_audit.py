@@ -84,6 +84,16 @@ EVENT_UNMAPPED_PICK = "unmapped_pick"
 #: noise. The row is the only trace it leaves: the frame is consumed, never
 #: forwarded, and the card it duplicates travelled on the `tool_call` frame.
 EVENT_NON_CONTRACT_FRAME = "non_contract_frame"
+#: PR-D-b4 PR-3 (B4-3) — the relay asked the engine to finish a turn it is
+#: still holding (`cancel_turn`, engine-native). The trigger is the relay's
+#: (clarify budget expired / teardown with the turn parked); the state
+#: transition stays the engine's. Without this frame the engine row keeps
+#: `running` with a live task and the next turn of the same student is refused
+#: with `session_busy`. The row carries the closed `turn_id` and whether the
+#: frame made it out (`detail=ok=…`), so "the relay asked" and "the engine
+#: never got it" stay separable. Best-effort by contract: a cancel that could
+#: not be delivered is recorded, never raised.
+EVENT_CANCEL_SENT = "cancel_sent"
 
 #: every event name this module may write (nothing else is allowed into the table)
 EVENTS = (
@@ -101,6 +111,7 @@ EVENTS = (
     EVENT_CLARIFY_TIMEOUT,
     EVENT_UNMAPPED_PICK,
     EVENT_NON_CONTRACT_FRAME,
+    EVENT_CANCEL_SENT,
 )
 
 # --- upstream_error codes (normalized; the relay never logs raw upstream text) --

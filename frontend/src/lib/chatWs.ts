@@ -24,6 +24,7 @@ import { MOCK_NO_DATA_COST } from './mock';
 import type { ActiveStage } from '../components/StageLoader';
 import type { ClarifyBand, ClarifyOption } from '../components/ClarifyCard';
 import type { ChatStreamStatus, KidErrorKind } from './chatErrors';
+import { DIBI_MODE_CURRICULUM, DIBI_MODE_FLAG } from './curriculumMode';
 
 // Frame keys observed on the real unified WS (docs/phase2-websocket.md +
 // real-container probe 2026-09-05). type is always present; everything else is
@@ -117,6 +118,11 @@ export interface WsStreamContext {
   student?: string; // 8-char mask prefix, from ?student= (full ids never enter state)
   /** mount-resume: true when this stream is a fresh page-load resume attempt (F5 reload), not a same-instance reconnect */
   resumeFromMount?: boolean;
+  /** PR-D-c2 - course mode for this visit: every turn frame this stream opens
+   *  then carries the top-level dibi_mode flag. UI mode only - no week /
+   *  slug / id ever rides along (HC-c2-2); dropping it (exit button) stops
+   *  the flag at once (HC-c2-3). */
+  curriculumMode?: boolean;
 }
 
 function delayMs(attempt: number): number {
@@ -289,6 +295,10 @@ export function createWsChatStream(
     queueMicrotask(() => h.onError('no-student'));
     return () => {};
   }
+
+  // PR-D-c2 - one read of the mode for the whole stream: the flag goes on
+  // every turn frame this connection opens, never on pings or re-sends.
+  const curriculumMode = ctx.curriculumMode === true;
 
   const langCode = lang === 'en' ? 'en' : lang === 'hk' ? 'zh-hk' : 'zh-cn';
   const url = `${window.location.origin}${WS_PATH}?student=${encodeURIComponent(student)}`;
@@ -469,6 +479,10 @@ export function createWsChatStream(
     pendingAckMid = messageId;
     turnMessageId = messageId; // PR-D-b2 — echoed back on the F2 tool_result
     resendCount = 0;
+    // PR-D-c2 §2 - the frame keeps the six contract keys and gains the course-
+    // mode flag only while the child is in course mode. The flag has to stay
+    // top level: a nested sub-object hits the engine's extra="forbid" layer
+    // and kills the whole turn (F-2), so it is spread in here, never wrapped.
     const frame = {
       type: 'message',
       capability: 'chat',
@@ -476,6 +490,10 @@ export function createWsChatStream(
       language: langCode,
       session_id: sessionId, // persisted engine session; '' → server assigns
       message_id: messageId, // PR-C item 4 — relay acks this immediately
+      // PR-D-c2 §2 - course mode only: top level, one whitelisted value, and
+      // nothing else rides along (HC-c2-1 / HC-c2-2). A normal chat sends
+      // the same six keys as before (HC-c2-4).
+      ...(curriculumMode ? { [DIBI_MODE_FLAG]: DIBI_MODE_CURRICULUM } : {}),
     };
     sendFrame(frame);
     armResend(frame);

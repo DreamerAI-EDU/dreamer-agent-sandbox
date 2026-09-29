@@ -12,6 +12,10 @@ import { Link, useSearchParams } from 'react-router';
 import { BAND_THEMES, MOCK_TURNS } from '../lib/mock';
 import type { ChatPayload, Lang } from '../lib/mock';
 import { createStream, isRealWsMode } from '../lib/stream';
+import {
+  CURRICULUM_MODE_QUERY,
+  isCurriculumModeParam,
+} from '../lib/curriculumMode';
 import { hasInflightTurn } from '../lib/chatWs';
 import type { StreamCleanup } from '../lib/chatWs';
 import type { ChatStreamStatus, KidErrorKind } from '../lib/chatErrors';
@@ -144,6 +148,16 @@ const WEEK_COPY: Record<Lang, { week: (n: number, t: number) => string; done: (t
   },
 };
 
+// PR-D-c2 §3 - course-mode chrome (badge + exit). The badge is the mode marker
+// the child sees: product copy, English in every language (scope §3.1) and
+// provisional - the boss may rename it. The exit label is a UI action, so it
+// is localized like the rest of the page.
+const COURSE_COPY: Record<Lang, { badge: string; exit: string }> = {
+  en: { badge: 'Dreamer Course', exit: 'Back to normal chat' },
+  hk: { badge: 'Dreamer Course', exit: '返去普通對話' },
+  cn: { badge: 'Dreamer Course', exit: '返回普通对话' },
+};
+
 // Banner tone per error class — layered so auth vs permission vs network
 // reads differently to the grown-up who is standing behind the kid.
 function bannerTone(kind: KidErrorKind): 'auth' | 'permission' | 'soft' {
@@ -159,7 +173,7 @@ const TONE_STYLE: Record<'auth' | 'permission' | 'soft', { bg: string; border: s
 };
 
 export default function ChatPage() {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const rawName = searchParams.get('name') ?? '';
   const rawStudent = searchParams.get('student') ?? '';
   const band = searchParams.get('band') ?? 'P4-P6';
@@ -182,6 +196,15 @@ export default function ChatPage() {
     null,
   );
   const [welcomeText, setWelcomeText] = useState<string | null>(null);
+  // PR-D-c2 §3 - course mode for this visit, armed by the Welcome page
+  // (?mode=curriculum) and dropped by the exit button. UI state only: no
+  // week / slug / student id ever rides the URL (the badge and the week text
+  // both come from the backend). Seeded from the URL so a reload re-enters
+  // the mode the child was already in, and only the exact whitelisted value
+  // arms it (HC-c2-1).
+  const [curriculumMode, setCurriculumMode] = useState<boolean>(
+    isCurriculumModeParam(searchParams.get(CURRICULUM_MODE_QUERY)),
+  );
   // PR-D-b2 §3 — the live clarify card (null = none on screen).
   const [clarify, setClarify] = useState<ClarifyState | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -414,7 +437,7 @@ export default function ChatPage() {
           clearTransient();
         },
       },
-      { student: mask, resumeFromMount: true },
+      { student: mask, resumeFromMount: true, curriculumMode },
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profile.student]);
@@ -496,7 +519,7 @@ export default function ChatPage() {
           clearTransient();
         },
       },
-      { student: profile.student },
+      { student: profile.student, curriculumMode },
     );
   };
 
@@ -514,6 +537,18 @@ export default function ChatPage() {
     setStages(null);
     setProgressNote(null);
     setClarify(null); // PR-D-b2 — the kid ended the turn; no card outlives it
+  };
+
+  // PR-D-c2 §3.4 - exit course mode: the flag stops with the very next turn
+  // (HC-c2-3) and the URL is rewritten so a reload cannot silently re-enter
+  // it. Known limitation (v1, scope §3.4): the relay keeps this session's
+  // slug cache, so the course persona tone may linger until the socket
+  // closes - accepted, recorded in the report, not worked around here.
+  const exitCurriculumMode = () => {
+    setCurriculumMode(false);
+    const next = new URLSearchParams(searchParams);
+    next.delete(CURRICULUM_MODE_QUERY);
+    setSearchParams(next, { replace: true });
   };
 
   // Gallery deep link keeps the chat session context (mask / name / band).
@@ -535,6 +570,29 @@ export default function ChatPage() {
           <img src={logoWhite} alt="Dreamer AI Education" className="h-10 w-auto" />
 
           {profile.name && <p className="text-sm font-semibold text-white/80">{copy.hi(profile.name)}</p>}
+
+          {/* PR-D-c2 §3.2 - course-mode badge + exit, always visible while the
+              child is in course mode so the mode is never a hidden state. */}
+          {curriculumMode && (
+            <div
+              className="flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-bold text-white/90"
+              style={{ borderColor: `${theme.accent}66`, backgroundColor: `${theme.accent}1f` }}
+            >
+              <span
+                className="h-1.5 w-1.5 rounded-full"
+                style={{ backgroundColor: theme.accent }}
+                aria-hidden
+              />
+              <span>{COURSE_COPY[lang].badge}</span>
+              <button
+                type="button"
+                onClick={exitCurriculumMode}
+                className="ml-1 rounded-full border border-white/25 px-2 py-0.5 text-[11px] font-semibold text-white/70 transition-colors hover:text-white"
+              >
+                {COURSE_COPY[lang].exit}
+              </button>
+            </div>
+          )}
 
           {/* Bridge-3a — "Week X / 8" badge. Week frame is localized here,
               the unit title is backend text rendered verbatim. */}

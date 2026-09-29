@@ -27,6 +27,8 @@ export interface StreamContext {
   student?: string; // 8-char mask prefix passed to the WS handshake
   /** mount-resume: mark this stream as a fresh page-load resume attempt (F5 reload), not a same-instance reconnect */
   resumeFromMount?: boolean;
+  /** PR-D-c2 - course mode ("My AI Course"); forwarded verbatim to the WS frame builder */
+  curriculumMode?: boolean;
 }
 
 export type PlayStream = (
@@ -126,7 +128,7 @@ export function createStream(): PlayStream {
         onError: h.onError ?? (() => {}),
         onToolCall: h.onToolCall ?? (() => {}),
       };
-      return createWsChatStream(input, band, lang, handlers, ctx ?? { student: undefined });
+      return createWsChatStream(input, band, lang, handlers, ctx ?? {});
     };
   }
   console.info(`[stream] VITE_BACKEND=${backend} → scripted mock stream (set =ws for the real backend)`);

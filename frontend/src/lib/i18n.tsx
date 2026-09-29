@@ -42,6 +42,11 @@ export interface Copy {
   // P0 — student console chat entry
   kidStartLesson: string;
   kidStartLessonDesc: string;
+  // PR-D-c2 §3.1 - "My AI Course". Scope copy is English on purpose (the
+  // children take lessons in English) and provisional - the boss may rename
+  // it, so the string is kept identical across the three languages.
+  kidCourseBtn: string;
+  kidCourseBtnDesc: string;
   // forgot-password (W4 PR-D)
   forgotTitle: string;
   forgotSubtitle: string;
@@ -278,6 +283,8 @@ export const copyEn: Copy = {
   kidBackToStaff: 'Teacher / parent sign in',
   kidStartLesson: 'Start lesson with Dibi',
   kidStartLessonDesc: 'Ask Dibi about anything — your lesson, your questions, your ideas.',
+  kidCourseBtn: 'My AI Course',
+  kidCourseBtnDesc: 'Follow your class course with Dibi, one week at a time.',
   forgotTitle: 'Reset your password',
   forgotSubtitle: 'Enter your account email and we will send you a reset link.',
   forgotBtn: 'Send reset link',
@@ -508,6 +515,8 @@ const copyHk: Copy = {
   kidBackToStaff: '老師 / 家長登入',
   kidStartLesson: '同 Dibi 傾計',
   kidStartLessonDesc: '有咩想知、想問，都可以同 Dibi 傾。',
+  kidCourseBtn: 'My AI Course',
+  kidCourseBtnDesc: 'Follow your class course with Dibi, one week at a time.',
   forgotTitle: '重設密碼',
   forgotSubtitle: '輸入帳號 email，我哋會寄重設連結俾你。',
   forgotBtn: '寄出重設連結',
@@ -736,6 +745,8 @@ const copyCn: Copy = {
   kidBackToStaff: '老师 / 家长登录',
   kidStartLesson: '和 Dibi 聊天',
   kidStartLessonDesc: '有什么想知道的、想问的，都可以和 Dibi 聊。',
+  kidCourseBtn: 'My AI Course',
+  kidCourseBtnDesc: 'Follow your class course with Dibi, one week at a time.',
   forgotTitle: '重置密码',
   forgotSubtitle: '输入账号邮箱，我们会发送重置链接给你。',
   forgotBtn: '发送重置链接',

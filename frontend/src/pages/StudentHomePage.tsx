@@ -15,6 +15,7 @@ import { useNavigate } from 'react-router';
 import { api, ApiError } from '../lib/api';
 import { useLang } from '../lib/i18n';
 import type { StudentMeResponse } from '../lib/types';
+import { CURRICULUM_MODE_QUERY, DIBI_MODE_CURRICULUM } from '../lib/curriculumMode';
 
 export function StudentHomePage() {
   const { copy, setLang } = useLang();
@@ -122,26 +123,59 @@ export function StudentHomePage() {
           </div>
 
           {student && (
-            <button
-              type="button"
-              onClick={() =>
-                navigate(
-                  `/chat?student=${encodeURIComponent(
-                    student.id.slice(0, 8)
-                  )}&name=${encodeURIComponent(
-                    student.first_name
-                  )}&band=${encodeURIComponent(student.age_band)}&from=student`
-                )
-              }
-              className="mt-4 w-full rounded-xl bg-black px-4 py-4 text-left text-white shadow-sm hover:bg-black/85"
-            >
-              <p className="text-lg font-semibold tracking-tight">
-                {copy.kidStartLesson}
-              </p>
-              <p className="mt-1 text-sm text-white/70">
-                {copy.kidStartLessonDesc}
-              </p>
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() =>
+                  navigate(
+                    `/chat?student=${encodeURIComponent(
+                      student.id.slice(0, 8)
+                    )}&name=${encodeURIComponent(
+                      student.first_name
+                    )}&band=${encodeURIComponent(student.age_band)}&from=student`
+                  )
+                }
+                className="mt-4 w-full rounded-xl bg-black px-4 py-4 text-left text-white shadow-sm hover:bg-black/85"
+              >
+                <p className="text-lg font-semibold tracking-tight">
+                  {copy.kidStartLesson}
+                </p>
+                <p className="mt-1 text-sm text-white/70">
+                  {copy.kidStartLessonDesc}
+                </p>
+              </button>
+
+              {/* PR-D-c2 §3.1 - "My AI Course": enters course mode for this visit
+                  only (a URL mode, nothing stored). Held back for P1-P3: the
+                  relay fails open to the band persona for those weeks, so the
+                  door would promise a course lesson the backend cannot deliver
+                  (scope §4). The band comes from /api/student/me, never from the
+                  URL. */}
+              {student.age_band !== 'P1-P3' && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    navigate(
+                      `/chat?student=${encodeURIComponent(
+                        student.id.slice(0, 8)
+                      )}&name=${encodeURIComponent(
+                        student.first_name
+                      )}&band=${encodeURIComponent(
+                        student.age_band
+                      )}&from=student&${CURRICULUM_MODE_QUERY}=${DIBI_MODE_CURRICULUM}`
+                    )
+                  }
+                  className="mt-3 w-full rounded-xl border border-black/10 bg-white px-4 py-4 text-left shadow-sm hover:bg-black/[0.03]"
+                >
+                  <p className="text-lg font-semibold tracking-tight">
+                    {copy.kidCourseBtn}
+                  </p>
+                  <p className="mt-1 text-sm text-black/50">
+                    {copy.kidCourseBtnDesc}
+                  </p>
+                </button>
+              )}
+            </>
           )}
 
           <button

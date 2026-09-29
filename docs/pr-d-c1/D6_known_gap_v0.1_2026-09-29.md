@@ -1,0 +1,32 @@
+# D6 線 Known Gap 與已知限制（v0.1 · 2026-09-29）
+
+- 立項依據：gate 裁決 2 —— ⑤ week 越界接受「部分覆蓋」結案，寫入 runbook known gap；同輪裁決 C —— 本檔入 repo `docs/pr-d-c1/`，走 Tier 0（純 docs）。
+- 範圍：D6 窗 ⑤ 覆蓋缺口（Gap ①）＋ 已批 c2 v1 已知限制（Limitation ②）。
+- 本檔可直接入 repo `docs/pr-d-c1/`（無水印尾行）。
+- 本檔僅記已實測／已批文稿內容（證據座標見各節），未新增未驗證結論。
+
+---
+
+## 1. Known gap ①：⑤ week 越界情境未做實機覆蓋（結案＝部分覆蓋）
+
+| 欄位 | 內容 |
+| --- | --- |
+| 情境 | D6 窗 smoke ⑤「異常途徑 → band persona」之實機覆蓋 |
+| 裁決 | 接受**部分覆蓋**結案 |
+| 未覆蓋範圍 | `week_index` 超出 1–8 範圍（即 > `total_weeks` = 8）；同類未覆蓋亦含 badge `locked`、`class_curriculum` 無 active 但有 history 等異常途徑 |
+| 未覆蓋原因 | 構造需經 DB 造數（屬 Tier 2 寫入），與本輪風險／成本唔對稱；本輪未改任何 DB 現狀 |
+| 替代證據 ①（實機，最常見真實情境） | D8 fail-open：P1 smoke（引擎 session `6842abf2`，登入回應 `badge={"state":"none","week_index":null,"total_weeks":8,...}`）帶 `dibi_mode` flag → **唔入課程模式**，落 `dibi-p1-p3` band persona；回覆為 P1 年齡帶泛化主題、零課程週內容；relay audit id362／368 記 `frame_type=message mode=curriculum slug=dibi-p1-p3`；引擎 session persona `dibi-p1-p3` |
+| 替代證據 ②（單元測試，覆蓋邊界） | `tests/test_ws_chat_curriculum_mode.py::test_hc_d_guard_falls_back_to_the_band_persona`：逐項斷言 `state=none`、`state=active week_index=9`（**越界**）、`week_index=None`、未知 state、lookup 拋錯 → 一律 band persona 且唔拋錯；healthy edge `completed week_index=8` → `wk08` |
+| 殘留觀察（非缺陷） | relay audit 近 24h slug 分佈曾見 `slug=dibi-s1-s3` 而 `mode=none`（session `b57a9846`）——屬 persona 解析層 fail-open 正常行為（未帶 flag 走 band persona），**非**路由缺陷；D9 期間列持續觀察項 |
+| 後續 | D9 觀察期（至 10/6）如真機學生自然行到 `week_index` 越界／badge 異常，順手補 ⑤ 實機證據並回填本節；D10 收口時複核 |
+| 證據座標 | `D6_window_routeA_smoke_report_D7-D8_2026-09-29.md` §2 表③④、§3.2、§6.1；`D6_window_closeout_and_D9_baseline_2026-09-29.md` §4.2、收尾結論 5（兩份為 D6 窗工作報告，落 repo 工作目錄 `output/`，該目錄受 `.gitignore` 忽略） |
+
+---
+
+## 2. Known limitation ②：c2 v1 退出課程模式後 session slug cache 殘留
+
+- 來源：`docs/pr-d-c1/PR-D-c2_scope_v0.1_2026-09-29.md` §3.4（已批文稿，原文「v1 接受，寫入 known limitations」）。
+- 內容：client 按「Back to normal chat」後停發 `dibi_mode` flag；relay 側 session slug cache 仍留喺該條 WS session，persona 語氣可能延續至該 session 斷線；新 session 建立時 reset。
+- 影響邊界：限同一條 WS session 之生命週期；新 session／重新登入即回復。
+- 現狀：v1 接受，非本輪修復項；hard check HC-c2-3（退出後停發 flag）不變。
+- D9／staging 抽查方式：退出後於同一 session 再對話一句，核對 audit `mode=`／`slug=`、引擎 persona slug 及語氣是否延續。

@@ -105,6 +105,7 @@ from aiohttp import web
 from . import api as api_mod
 from . import classes as classes_mod
 from . import consent as consent_mod
+from . import curriculum as curriculum_mod
 from . import db
 from . import relay_audit
 from . import students as students_mod
@@ -209,6 +210,44 @@ _PERSONA_BY_BAND = {
     "s1-s3": "dibi-s1-s3",
 }
 
+# --- c1-1 — Dibi curriculum mode (PR-D-c1 v0.3 §2.2 / §3) ------------------
+#: top-level client frame key asking for the week's curriculum persona. Turn
+#: frames only; the relay consumes it and never forwards it upstream (HC-G).
+_CURRICULUM_MODE_FLAG = "dibi_mode"
+#: the only accepted flag value — anything else is ignored, never guessed.
+_CURRICULUM_MODE_VALUE = "curriculum"
+#: bands wired to curriculum personas. P1-P3 is deliberately absent: the
+#: simplified curriculum is not authored yet, so those students stay on the
+#: band persona (v0.3 §4.3; fallback row 2).
+_CURRICULUM_ROUTE_BANDS = ("p4-p6", "s1-s3")
+#: deeptutor/personas/<slug>/ directory prefix of a curriculum persona
+_CURRICULUM_PERSONA_PREFIX = "dibi-curriculum"
+#: the 16 slugs this relay may ever stamp, frozen in code. c1-1 lands before
+#: the files (c1-2) so the repo half of the pin lives in the test — a slug can
+#: only ever be stamped for a persona that actually shipped (HC-C / HC-F).
+_CURRICULUM_PERSONA_SLUGS = frozenset(
+    f"{_CURRICULUM_PERSONA_PREFIX}-{band}-wk{week:02d}"
+    for band in _CURRICULUM_ROUTE_BANDS
+    for week in curriculum_mod.ALL_WEEKS
+)
+#: badge states that route to a curriculum persona; "none" (no confirmed
+#: class / no mounted course / non-linear rows) keeps the band persona (HC-D)
+_CURRICULUM_ROUTE_STATES = (
+    curriculum_mod.STATE_ACTIVE,
+    curriculum_mod.STATE_COMPLETED,
+)
+
+
+def _curriculum_slug(band: Optional[str], week) -> Optional[str]:
+    """Curriculum persona slug for one band+week, or None if it did not ship."""
+    if band not in _CURRICULUM_ROUTE_BANDS:
+        return None
+    if not isinstance(week, int) or isinstance(week, bool):
+        return None
+    slug = f"{_CURRICULUM_PERSONA_PREFIX}-{band}-wk{week:02d}"
+    return slug if slug in _CURRICULUM_PERSONA_SLUGS else None
+
+
 #: frames that open or carry a turn (match the unified_ws dispatch table)
 _TURN_FRAME_TYPES = ("message", "start_turn")
 
@@ -221,6 +260,21 @@ def _row_get(row, key):
         return None
 
 
+def _band_for_student(student) -> Optional[str]:
+    """Resolve the age band from the student row resolved by the gate.
+
+    Same rule as `_persona_for_student`, one level up: the band is read from
+    the DB row — never from the query string or a client frame — so a tampered
+    request cannot move a student onto another band's persona. Unknown /
+    missing band -> None.
+    """
+    band = _row_get(student, "age_band")
+    if not band:
+        return None
+    band = str(band).strip().lower().replace("\u2013", "-")
+    return band if band in _PERSONA_BY_BAND else None
+
+
 def _persona_for_student(student) -> Optional[str]:
     """Resolve the persona slug from the student row resolved by the gate.
 
@@ -228,25 +282,123 @@ def _persona_for_student(student) -> Optional[str]:
     client frame — so a tampered request cannot move a student onto
     another band's persona. Unknown / missing band -> None (no injection).
     """
-    band = _row_get(student, "age_band")
+    band = _band_for_student(student)
     if not band:
         return None
-    return _PERSONA_BY_BAND.get(str(band).strip().lower().replace("\u2013", "-"))
+    return _PERSONA_BY_BAND.get(band)
 
 
-def _inject_persona(raw: str, persona: Optional[str]) -> str:
-    """Return the frame unchanged unless it is a turn frame needing persona."""
-    if not persona:
-        return raw
+def _mode_word(value) -> str:
+    """Audit-safe spelling of a client `dibi_mode` value (bounded, never PII)."""
+    if isinstance(value, str) and value.strip():
+        return value.strip()[:32]
+    return "none"
+
+
+class _PersonaRouter:
+    """c1-1 — curriculum-mode -> persona slug routing for one chat connection.
+
+    The week is authority-of-record server side only
+    (`curriculum.student_week_badge`, keyed by the student id the gate already
+    resolved): the client says *that* it is in curriculum mode, never *which*
+    week (HC-B). Every failure path keeps the band persona — an unknown flag
+    value (HC-A), a P1-P3 student, a badge that hides itself (no confirmed
+    class / no mounted course / non-linear rows), an out-of-range week, or a
+    lookup that raises (HC-D). Routing must never cost a child a turn.
+
+    `last_route` carries the mode/slug *words* of the frame just routed, for
+    the turn_start audit row (D9). It never carries the student id (red-line 8).
+    """
+
+    def __init__(
+        self,
+        band: Optional[str],
+        band_persona: Optional[str],
+        student_id: str,
+        *,
+        badge_fn=None,
+    ) -> None:
+        self.band = band
+        self.band_persona = band_persona
+        # server-internal full id: the badge lookup key and nothing else. It
+        # never reaches a log line, an audit row or a frame (red-line 8).
+        self._student_id = student_id
+        self._badge_fn = badge_fn or curriculum_mod.student_week_badge
+        self._cached_slug: Optional[str] = None
+        #: mode/slug words of the frame just routed (turn_start audit, D9)
+        self.last_route: Optional[dict] = None
+
+    def reset_route(self) -> None:
+        """One frame = one decision: forget the route of the previous frame."""
+        self.last_route = None
+
+    def slug_for(self, mode) -> Optional[str]:
+        """The persona slug for one turn frame's `dibi_mode` value."""
+        slug = self.band_persona
+        if mode == _CURRICULUM_MODE_VALUE:
+            routed = self._week_slug()
+            if routed is not None:
+                slug = routed
+        self.last_route = {"mode": mode, "slug": slug}
+        return slug
+
+    def _week_slug(self) -> Optional[str]:
+        """Curriculum slug for the student's current server-side week, or None."""
+        if self._cached_slug is not None:
+            return self._cached_slug
+        try:
+            badge = self._badge_fn(self._student_id)
+        except Exception:
+            # Fail-open: a lookup fault keeps the band persona, and it is NOT
+            # cached — one transient DB hiccup must not lock this connection
+            # out of curriculum mode for its whole life.
+            logger.warning("ws_chat curriculum badge lookup failed — band persona kept")
+            return None
+        slug = None
+        if isinstance(badge, dict) and badge.get("state") in _CURRICULUM_ROUTE_STATES:
+            week = badge.get("week_index")
+            if isinstance(week, int) and not isinstance(week, bool):
+                slug = _curriculum_slug(self.band, week)
+        if slug is not None:
+            self._cached_slug = slug  # §3.4: resolve once per session
+        return slug
+
+
+def _inject_persona(
+    raw: str,
+    persona: Optional[str],
+    *,
+    router: Optional["_PersonaRouter"] = None,
+) -> str:
+    """Return the frame unchanged unless it is a turn frame needing persona.
+
+    c1-1: on turn frames the curriculum flag is consumed right here — it is a
+    relay control word, not engine input (HC-G) — and, when it asks for
+    curriculum mode and the server-side week resolves, the band persona is
+    replaced by that week's curriculum persona (v0.3 §2.2). Non-turn frames
+    are forwarded verbatim, flag untouched (F-5). `router` is optional so the
+    pre-c1-1 call shape keeps working unchanged.
+    """
     try:
         frame = json.loads(raw)
     except (TypeError, ValueError):
         return raw  # not JSON — forward verbatim
     if not isinstance(frame, dict) or frame.get("type") not in _TURN_FRAME_TYPES:
         return raw
-    if frame.get("persona") == persona:
-        return raw
-    frame["persona"] = persona
+
+    if _CURRICULUM_MODE_FLAG not in frame:
+        # pre-c1-1 path, byte-for-byte unchanged
+        if not persona:
+            return raw
+        if frame.get("persona") == persona:
+            return raw
+        frame["persona"] = persona
+        return json.dumps(frame, ensure_ascii=False)
+
+    mode = frame.pop(_CURRICULUM_MODE_FLAG)
+    slug = router.slug_for(mode) if router is not None else persona
+    if slug and frame.get("persona") != slug:
+        frame["persona"] = slug
     return json.dumps(frame, ensure_ascii=False)
 
 
@@ -737,6 +889,7 @@ class _ChatRelay:
         session,
         upstream_url: str,
         persona: Optional[str],
+        band: Optional[str] = None,
         student_mask: str,
         student_id: str,
         language: Optional[str],
@@ -745,6 +898,11 @@ class _ChatRelay:
         self.session = session
         self.upstream_url = upstream_url
         self.persona = persona
+        # c1-1: the band comes from the student row the gate already resolved
+        # (never from a frame), and the router resolves curriculum mode inside
+        # that band. A missing band keeps the pre-c1-1 behaviour.
+        self.band = band
+        self._router = _PersonaRouter(band, persona, student_id)
         self.student_mask = student_mask or ""
         # P4: full student id, server-internal only — drives the session map
         # lookup. Never leaves the relay (red-line 8: no logs, no audit, no
@@ -1063,10 +1221,14 @@ class _ChatRelay:
                 relay_audit.record(
                     relay_audit.EVENT_GREETING_SHORT_CIRCUIT,
                     student_mask=self.student_mask,
-                    detail=f"lang={self.language}",
+                    detail=(
+                        f"lang={self.language}"
+                        f" mode={_mode_word(frame.get(_CURRICULUM_MODE_FLAG))}"
+                    ),
                 )
                 return
-        injected = _inject_persona(raw, self.persona)
+        self._router.reset_route()
+        injected = _inject_persona(raw, self.persona, router=self._router)
         if _parse_frame(injected).get("type") in _TURN_FRAME_TYPES:
             await self._start_turn(injected)
         if not await self._send_upstream(injected):
@@ -1239,10 +1401,15 @@ class _ChatRelay:
         # the *previous* turn microseconds before this one opened.)
         self._cancel_recycle()
         frame_type = _parse_frame(raw).get("type")
+        route = self._router.last_route or {}
         relay_audit.record(
             relay_audit.EVENT_TURN_START,
             student_mask=self.student_mask,
-            detail=f"frame_type={frame_type}",
+            detail=(
+                f"frame_type={frame_type}"
+                f" mode={_mode_word(route.get('mode'))}"
+                f" slug={route.get('slug') or self.persona or 'none'}"
+            ),
         )
         # PR-C item 4/5: remember this message_id as an active turn so a
         # duplicate re-send gets dup-ack + in_progress and never re-opens.
@@ -2115,6 +2282,7 @@ async def handle_ws_chat(request: web.Request) -> web.Response:
                 session=session,
                 upstream_url=_upstream_ws_url(),
                 persona=_persona_for_student(student),
+                band=_band_for_student(student),
                 # the query already carries the 8-char masked prefix only —
                 # full student ids never leave the server, audit rows included
                 student_mask=request.query.get("student", ""),

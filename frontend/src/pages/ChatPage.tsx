@@ -320,7 +320,7 @@ export default function ChatPage() {
   // URL: first_name + week_index arrive over the wire (no PII in query
   // strings / access logs) and client-supplied URL params are ignored
   // (red line 7). Personalised ONLY when BOTH first_name and a live
-  // week_index exist (pct = round(week/8*100), fixed definition); any
+  // week_index exist (pct = round(max(0, week-1)/8*100), c1-4 definition 2026-09-30); any
   // failure (no name / 200 empty / 500 / 403 / timeout) collapses to the
   // plain welcome line, which never renders a mask. The flag is marked the
   // moment the bubble is about to render, not on close.
@@ -342,7 +342,7 @@ export default function ChatPage() {
         const w = resp.badge?.week_index ?? null;
         const total = resp.badge?.total_weeks ?? 0;
         if (name && w !== null && total > 0) {
-          setWelcomeText(copy.welcomePersonal(name, w, Math.round((w / 8) * 100)));
+          setWelcomeText(copy.welcomePersonal(name, w, Math.round((Math.max(0, w - 1) / 8) * 100)));
         } else {
           setWelcomeText(copy.welcomeFallback);
         }

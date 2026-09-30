@@ -6,11 +6,45 @@ interface Props {
   payload: ChatPayload;
   theme: BandTheme;
   lang: Lang;
+  // PR-D-c1-6 §L3 — EXPLICIT OPT-IN. Only the student chat surface (ChatPage)
+  // passes `true`. Omitted / `false` reproduces the pre-L3 shared behaviour
+  // byte-for-byte, so a future teacher / parent importer of this shared
+  // component renders exactly as it did before this change.
+  stripSymbols?: boolean;
+}
+
+// PR-D-c1-6 §L3 — display-layer symbol net, STUDENT chat bubble only, and only
+// when the caller opts in (`stripSymbols` prop / `{ strip: true }`). It is a
+// pure helper: it has no module-level side effect and is never invoked unless a
+// student-surface caller explicitly asks for it. The engine is supposed to emit
+// plain text already (L1 yaml sub-clause + L2 persona de-markdown) — this only
+// cleans up a stray symbol if one still slips through. It maps line → line, so
+// the reply's line structure (and its line count) is never altered here: this
+// is a net, not the fix.
+const MD_HEADING = /^#{1,6}\s+/;
+const MD_BULLET = /^[-*]\s+/;
+const MD_HR = /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/;
+
+export function stripMarkdownSymbols(text: string): string {
+  return text
+    .split('\n')
+    .map((line) => {
+      if (MD_HR.test(line)) return '';
+      return line
+        .replace(MD_HEADING, '')
+        .replace(MD_BULLET, '')
+        .replace(/\*\*/g, '')
+        .replace(/\*([^*\n]+)\*/g, '$1');
+    })
+    .join('\n');
 }
 
 // Minimal **bold** renderer — kid replies only ever use bold, never raw HTML.
-export function renderBold(text: string) {
-  return text.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
+// `strip` is opt-in (see Props.stripSymbols); without it the input is rendered
+// exactly as the pre-L3 shared version did.
+export function renderBold(text: string, opts: { strip?: boolean } = {}) {
+  const source = opts.strip ? stripMarkdownSymbols(text) : text;
+  return source.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
     part.startsWith('**') && part.endsWith('**') ? (
       <strong key={i}>{part.slice(2, -2)}</strong>
     ) : (
@@ -36,7 +70,7 @@ function formatCost(cost: ChatPayload['cost_summary']): string | null {
   return null; // no-data marker → render layer shows "—"
 }
 
-export function AssistantMessage({ payload, theme, lang }: Props) {
+export function AssistantMessage({ payload, theme, lang, stripSymbols = false }: Props) {
   const badge = MODE_BADGE[payload.mode];
   const citationsLabel = lang === 'en' ? 'From the Dreamer library' : lang === 'hk' ? '出自 Dreamer 知識庫' : '出自 Dreamer 知识库';
   const costLine = formatCost(payload.cost_summary);
@@ -67,7 +101,7 @@ export function AssistantMessage({ payload, theme, lang }: Props) {
           className={`mt-2 rounded-3xl rounded-tl-md border border-white/10 bg-[#252949] px-5 py-4 text-white ${theme.textScale}`}
           style={{ boxShadow: `0 0 24px ${theme.accent}22` }}
         >
-          {renderBold(payload.content)}
+          {renderBold(payload.content, { strip: stripSymbols })}
         </div>
 
         {payload.citations.length > 0 && (

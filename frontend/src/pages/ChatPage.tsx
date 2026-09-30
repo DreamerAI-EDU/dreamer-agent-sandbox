@@ -722,9 +722,11 @@ export default function ChatPage() {
                 </div>
               </div>
               {turn.payload ? (
-                <AssistantMessage payload={turn.payload} theme={theme} lang={lang} />
+                // PR-D-c1-6 §L3 — this page IS the student chat surface, so it
+                // opts in explicitly; the shared components stay default-off.
+                <AssistantMessage payload={turn.payload} theme={theme} lang={lang} stripSymbols />
               ) : turn.streamContent ? (
-                <StreamingMessage content={turn.streamContent} theme={theme} />
+                <StreamingMessage content={turn.streamContent} theme={theme} stripSymbols />
               ) : (
                 stages !== null && <StageLoader stages={stages} theme={theme} lang={lang} note={progressNote} />
               )}

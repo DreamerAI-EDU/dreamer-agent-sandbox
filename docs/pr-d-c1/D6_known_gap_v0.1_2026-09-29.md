@@ -30,3 +30,18 @@
 - 影響邊界：限同一條 WS session 之生命週期；新 session／重新登入即回復。
 - 現狀：v1 接受，非本輪修復項；hard check HC-c2-3（退出後停發 flag）不變。
 - D9／staging 抽查方式：退出後於同一 session 再對話一句，核對 audit `mode=`／`slug=`、引擎 persona slug 及語氣是否延續。
+
+---
+
+## 3. T2 驗收偏差 2：`dibi_mode` 實測型別與退出語義（口徑修正）
+
+| 欄位 | 內容 |
+| --- | --- |
+| 偏差 | T2 驗收稿以「`dibi_mode >= 1` 開課程模式、退出時回落 `0`」之數值語義描述；實測與此不符 |
+| 實測 ①（型別） | 該 flag 為**字串**值：只有 `"curriculum"` 開課程模式；其餘值（含數值 `1`）一律唔路由，落 band persona |
+| 實測 ②（退出語義） | 退出課程模式時 `dibi_mode` **整鍵缺省**（key absent），**非**「值為 `0`」；relay 側以「鍵是否存在」分流 |
+| 代碼座標 | `auth/ws_chat.py` L216/218（`_CURRICULUM_MODE_FLAG = "dibi_mode"` ／ `_CURRICULUM_MODE_VALUE = "curriculum"`）；L338（`mode == _CURRICULUM_MODE_VALUE` 才路由週 persona）；L389（鍵缺省 → 走 pre-c1-1 路徑，`persona` 欄由 client 原值決定）；L1226（audit `mode=` 由 `_mode_word(frame.get("dibi_mode"))` 取值，鍵缺省印 `none`） |
+| 與 §2 互證 | §2 所述「退出後 client 停發 `dibi_mode` flag」在 relay 側即表現為鍵缺省；`_cached_slug` 於鍵缺省時不清（§3.4 resolve once per session）→ 即已批 Limitation ② |
+| 影響邊界 | 純口徑／描述修正：HC-c2-3（退出後停發 flag）與 HC-F（persona 解析）行為不變，無需改碼 |
+| 落地說明 | 本節依 gate 裁決，作為 T2 驗收偏差 2（v0.2.1 口徑）之落地段；本輪 c1-4 修復批 C 項落此 |
+| 原始驗收座標 | 偏差 2 由 gate 於 c1-4 修復批確認；具體 session／DB 座標於 T2 release 收口時回填 |

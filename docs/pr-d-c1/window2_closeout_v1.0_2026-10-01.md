@@ -241,8 +241,15 @@
 
 ## 9. 交接（→ 窗 #3 trial 窗）
 
-窗 #2 至此收口。窗 #3 之 trial 窗動作清單、證據座標、紅線繼承與首條指令範本，見本輪交付之
-`win3_newchat_handover_2026-10-01.md`（output 單一 md，供開新 chat 接手）。
+窗 #2 至此收口。窗 #3 trial 窗動作清單（摘要；詳版見本輪交付之 `win3_newchat_handover_2026-10-01.md`，output 單一 md，供開新 chat 接手）：
+
+| 步 | 動作 | Gate／口徑 |
+| --- | --- | --- |
+| T-1 | **c1-6 repo swap**：24 份 `dibi-curriculum-*/PERSONA.md` 全量替換 ＋ `deeptutor/personas/README.md` manifest 行同步（slug ＋ sha256） | 需老闆**動手指令**；Tier 1 async push；先出 diff 預覽呈審；本窗已核對 24/24 逐檔不同（§6） |
+| T-2 | CI 核驗（push 後 run 全綠，含 ci-manifest-guard 對拍 24 slug／hash） | 全綠方准入 T-3；「push ≠ 部署」不變 |
+| T-3 | host ＋ 容器換版，**engine 24 slug／hash gate**：逐 slug 對 manifest sha256（host `ok=24 / mismatch=0`；容器內 slug=24 全讀得、stub 殘留 0） | 備份先行；**注意會覆蓋本窗 ① 已部署之 8 份 P1–P3**（§6.2） |
+| T-4 | smoke 補驗「**繁體翻譯輔助**」：中文提問 → 先以 `Traditional Chinese (Hong Kong)` 解釋／翻譯 → 再返英文（本窗 NEW5 中文段為**簡體**，需重驗並以原始 frame 為準） | 逐項報紅綠；任何一項紅即停手上報 |
+| T-5 | **D9 續跑**至 10/6（Limitation ② 退出後 slug 殘留／`week_index` 越界 Gap ①／fail-open slug）＋ D10 收口複核 | 觀察期內自然取證，不造數 |
 
 ---
 
@@ -255,8 +262,8 @@
 | repo | `C:\Users\DreamerAIEdu\Github\dreamer-agent-sandbox`（branch `main`） |
 | 前期 docs 追加 | commit `024a0f8`（Tier 0 docs：D7 append §10 ＋ D6 known gap 回填） |
 | ① persona 重換 | commit `27a0bd611e245becc58c967d5c31f45015e07a50`；CI run **`36858251252`**（success，7/7） |
-| 本 closeout | 本檔 commit（見 push 回報：`docs: window2 closeout v1.0`） |
-| CI（本 closeout） | 見 push 後回報之 run id／結論 |
+| 本 closeout（本文 commit） | `586514dba5cd57100b310906e2d8943bead7c361`（`docs(pr-d-c1): window2 closeout v1.0 (Tier 0 docs-only) + D9 status`；1 file changed / +283） |
+| CI（本 closeout） | run **`36870006658`** → conclusion **success**（7/7 jobs 綠：aigc-watermark-guard／phase2-tests／frontend-build／ci-manifest-guard／trial／exit-criteria-trials／docker-push） |
 
 ### 10.2 host 備份座標
 

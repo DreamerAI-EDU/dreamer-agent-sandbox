@@ -196,3 +196,46 @@
 
 - 未改任何修復內容、未回滾 L1／L2／L3、未做任何 SQL 寫入。
 - 只新增本檔一個 docs commit 並 push；其餘檔案一律未動。
+
+---
+
+## 10. T2 release 收口追加（append · 2026-10-01）
+
+- 追加性質：本節為 **append**；§1–§9 既有內容**一字未改**（append 前 198 行 → 後 241 行，+43 行；`git diff --numstat` ＝ `43  0`，即**零刪行**）。
+- 追加授權：T2 release ops（老闆放行令）；本節不定裁決、不美化，只照實記錄。
+- 事實來源：T2 release 上站驗收 —— 真站 `app.dreamer-aiedu.com`，新 bundle `assets/index-CjszE7l-.js`（sha256 `519a81dc5cabfda23ad7fd96d640a1a05537bbfc9751380cd3209a8c88073d5d`）已上站；瀏覽器側 V8–V14 由 browser agent 實測採集。
+
+### 10.1 Remark (i)：curriculum KB registered 但 never indexed／never attached
+
+- **路徑（三處一致：host SoT／runtime raw／repo tracked）**：`/opt/dreamer/knowledge_bases/dreamer-curriculum/raw/curriculum-wk01.md` … `curriculum-wk08.md`（共 8 份）。
+- **實測座標**：
+  - metadata `needs_reindex = true`；**未見任何 `version-*` 索引目錄**。
+  - 引擎 `_seed_search_one_kb` 對 `needs_reindex` 之 KB **回 `None`** → 執行期唔會 attach／seed。
+  - 8 份 raw 內容（grep 實測）：**無中文任務標題字串**、**markdown 符號存在**。
+- **判定**：該 KB 狀態為 **registered but never indexed／never attached**（dormant）；**Dibi 課程內容全靠 persona 注入**（KB 非執行期來源）。
+- **與 L4 之關係**：KB 屬 dormant，**非** L4 輪 3 紅點之成因（紅點源頭見 10.2）。
+- **停手聲明**：依「確認唔到就停手」口徑，本輪**未**做 ②③④（未改 KB 內容、未 reindex、未 attach）。
+
+### 10.2 Remark (ii)：殘餘紅點源頭＝引擎內建 system prompt markdown 示例
+
+- L4 輪 3 之**原始模型輸出帶 `**`**（模型側确有 markdown）；UI 因 L3 前端剝符而呈零符號。
+- 殘餘紅點之**源頭為引擎內建 system prompt 之 markdown 示例**（引擎自帶示例本身即示範 markdown 寫法），**唔係** persona／yaml 子句未降格所致。
+- **結論**：**文字提示層已盡**；要硬性保證格式，只有 engine 層輸出後處理 或 D7 自有 agent 兩條路（與 §7 結論一致）。
+- 本條為 **D7 自有 agent 動機之最新例證**。
+
+### 10.3 驗收新發現（browser V13／V14 實測，事實記錄）
+
+> 以下為 T2 真站驗收過程中 browser agent 之實測發現，屬**事實記錄**，與 §2／§3 之紅旗結論並行、不互相替代。
+
+**(1) 前端會壓平原始輸出之換行與 `**`**
+
+- V14 輪**原始 `result` 幀**（節錄，原文照抄）：`"你好！我係 **Dibi**，…我哋而家可以做：  \n1. **設計卡通頭像**（用 Canva）…"`
+- 同一輪 **UI `innerText`**：呈**單行**（無 `\n`）且**無 `**`**（`1.` `2.` 序號保留）。
+- 判定：**「UI 零符號」係前端剝符／壓平之結果，唔可以單獨當綠**；格式類口徑須以**原始 WS frame** 對照。此點同時影響 V13 (b)「行數」之解釋 —— **UI 行數 ≠ 原始輸出非空行數**（V13 課程回覆 UI `innerText` 全量 426 字元、行數 = 1）。
+
+**(2) 課程模式首輪曾連續 3 次「網絡斷咗線」**
+
+- 現象：WS 握手成功（`readyState = 1 / OPEN`）後**即被 `close:1000`**，前端未及 `send`，UI 顯示「網絡斷咗線。睇下 Wi-Fi，再撳『再試一次』」，連續 3 次。
+- 成因（實測）：**前一條 WS 仍處於 `OPEN` 頂替** —— 即 V8 手測遺留之同一 session 連線未關。
+- 覆核：關閉該連線並 `reload` 後，同一 `session_id` **成功復現綠**（完整收到回覆）→ **非穩定紅**。
+- 備註：首輪連線被頂替之行為值得留意，惟成因屬測試側遺留連線、非產品缺陷；照實記錄，留待 D9 觀察期留意。

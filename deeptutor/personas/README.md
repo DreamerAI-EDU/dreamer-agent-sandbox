@@ -40,14 +40,14 @@ personas/
 
 | 檔 | bytes | sha256 |
 |---|---|---|
-| `personas/dibi-curriculum-p1-p3-wk01/PERSONA.md` | 7082 | `40d5e782cb84e225bfe64e6176b896649b86de5b615878a15ac384efbde10824` |
-| `personas/dibi-curriculum-p1-p3-wk02/PERSONA.md` | 7160 | `10671d70380e822030fbce5f2863582c082cabdd9336a302f6b54f81d0e5d7f6` |
-| `personas/dibi-curriculum-p1-p3-wk03/PERSONA.md` | 7364 | `13f3adb99482b154af52cac5a5e5d0fbabe311343bbfc1ccb5309560f577746e` |
-| `personas/dibi-curriculum-p1-p3-wk04/PERSONA.md` | 7204 | `3bd920fd84dd7393cc2c338624d6723ecc53724f0b80f3a984d73bce36cca732` |
-| `personas/dibi-curriculum-p1-p3-wk05/PERSONA.md` | 7321 | `e4690cdc96a5f67a242a9dabe85f80a08e562d2ba194a93c2ea0e750a3eeedd1` |
-| `personas/dibi-curriculum-p1-p3-wk06/PERSONA.md` | 7536 | `d22cb0af8dc68acb4f178f178d77fb8cbca7cbc9f0271fe757ba661f38b6305c` |
-| `personas/dibi-curriculum-p1-p3-wk07/PERSONA.md` | 8031 | `06c8f9f18f5ec50f7beab50f261e1e6ba2147d214156285d19c438b19c5fdc40` |
-| `personas/dibi-curriculum-p1-p3-wk08/PERSONA.md` | 7589 | `5a76f947582b53baa00f3d1e1df766ce72624b8f1c943eb9c665222afd8f000f` |
+| `personas/dibi-curriculum-p1-p3-wk01/PERSONA.md` | 7587 | `3c8dc85266733be8104f21f2adb6348531125b3dca7247dd2a96db67fa31791c` |
+| `personas/dibi-curriculum-p1-p3-wk02/PERSONA.md` | 7665 | `efa08843fa15612a97bc5f24c0afc922605707e8b9cb6ce779de69c2db5fad33` |
+| `personas/dibi-curriculum-p1-p3-wk03/PERSONA.md` | 7869 | `daa06c5b73b9c1a0201925e29d70517a217fafdc8052eb1959b3244962159c98` |
+| `personas/dibi-curriculum-p1-p3-wk04/PERSONA.md` | 7709 | `66807c53b7c11ddcf6bfc17a88abe2d5cfeac3977dc245582d79929eefa58d66` |
+| `personas/dibi-curriculum-p1-p3-wk05/PERSONA.md` | 7826 | `40026ee7922859e7e1e33de91b53ada1b72062735702f59f19a425dfec3b558b` |
+| `personas/dibi-curriculum-p1-p3-wk06/PERSONA.md` | 8041 | `904713caf24e6d737fbfd989c297b1504648b0ef56966aab598ee8fa596f64f2` |
+| `personas/dibi-curriculum-p1-p3-wk07/PERSONA.md` | 8536 | `8ad6c7066fe4ed8bb993b968665c1de186230c492e159458f9f02e849b1fa277` |
+| `personas/dibi-curriculum-p1-p3-wk08/PERSONA.md` | 8094 | `b387d49eff303b57ef16a030b192fdc50fb204abf54523f150160ce7424f7832` |
 | `personas/dibi-curriculum-p4-p6-wk01/PERSONA.md` | 5638 | `570e00af4acd9ceae396a2832989e686013d0036ffc660981086065d2eddd723` |
 | `personas/dibi-curriculum-p4-p6-wk02/PERSONA.md` | 5724 | `6b58951fc16d4938efec58a4895a847cf6d6d8e1eb74326175c97674645d7d8b` |
 | `personas/dibi-curriculum-p4-p6-wk03/PERSONA.md` | 5971 | `f6cbaef0c528101f62a0626a3f547f45e13703aeb23b9c3aad3a081f440cae0c` |

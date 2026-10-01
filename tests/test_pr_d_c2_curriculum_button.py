@@ -175,16 +175,18 @@ def test_hc_c2_5_this_file_is_in_the_ci_manifest():
 
 # ── the door ────────────────────────────────────────────────────────────
 
-def test_welcome_door_enters_course_mode_and_holds_back_p1_p3():
+def test_welcome_door_enters_course_mode_for_every_band():
     home = _read(STUDENT_HOME)
     assert "copy.kidCourseBtn" in home
     assert "${CURRICULUM_MODE_QUERY}=${DIBI_MODE_CURRICULUM}" in home, (
         "the button must arm the mode through the contract constants"
     )
-    assert "student.age_band !== 'P1-P3'" in home, (
-        "P1-P3 must not be offered the door: the relay only fails open to the "
-        "band persona for those weeks (scope §4)"
+    # c1-3 un-hid the door: every band has a shipped curriculum persona now,
+    # so no band-specific guard may gate the button any more.
+    assert "age_band !== 'P1-P3'" not in home, (
+        "the P1-P3 hold-back is retired — the relay wires all three bands"
     )
+    assert "{student.age_band !== " not in home
 
     # the band driving that guard comes from the authenticated API, never the URL
     assert "age_band: string;" in _read(TYPES)

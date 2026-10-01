@@ -216,15 +216,17 @@ _PERSONA_BY_BAND = {
 _CURRICULUM_MODE_FLAG = "dibi_mode"
 #: the only accepted flag value — anything else is ignored, never guessed.
 _CURRICULUM_MODE_VALUE = "curriculum"
-#: bands wired to curriculum personas. P1-P3 is deliberately absent: the
-#: simplified curriculum is not authored yet, so those students stay on the
-#: band persona (v0.3 §4.3; fallback row 2).
-_CURRICULUM_ROUTE_BANDS = ("p4-p6", "s1-s3")
+#: bands wired to curriculum personas. c1-3 wires all three: the P1-P3
+#: simplified-curriculum personas ship with this same release, so a P1-P3
+#: student routes to their week's persona like any other band (v0.3 §4.3;
+#: the c1-1 "not authored yet" exclusion is retired).
+_CURRICULUM_ROUTE_BANDS = ("p1-p3", "p4-p6", "s1-s3")
 #: deeptutor/personas/<slug>/ directory prefix of a curriculum persona
 _CURRICULUM_PERSONA_PREFIX = "dibi-curriculum"
-#: the 16 slugs this relay may ever stamp, frozen in code. c1-1 lands before
-#: the files (c1-2) so the repo half of the pin lives in the test — a slug can
-#: only ever be stamped for a persona that actually shipped (HC-C / HC-F).
+#: the 24 slugs this relay may ever stamp, frozen in code. c1-3 lands the
+#: last 8 (P1-P3) in the same release as this band change, so both halves of
+#: the pin — code and repo — hold from one commit on: a slug can only ever be
+#: stamped for a persona that actually shipped (HC-C / HC-F).
 _CURRICULUM_PERSONA_SLUGS = frozenset(
     f"{_CURRICULUM_PERSONA_PREFIX}-{band}-wk{week:02d}"
     for band in _CURRICULUM_ROUTE_BANDS
@@ -301,10 +303,12 @@ class _PersonaRouter:
     The week is authority-of-record server side only
     (`curriculum.student_week_badge`, keyed by the student id the gate already
     resolved): the client says *that* it is in curriculum mode, never *which*
-    week (HC-B). Every failure path keeps the band persona — an unknown flag
-    value (HC-A), a P1-P3 student, a badge that hides itself (no confirmed
-    class / no mounted course / non-linear rows), an out-of-range week, or a
-    lookup that raises (HC-D). Routing must never cost a child a turn.
+    week (HC-B). c1-3 wires every band (p1-p3/p4-p6/s1-s3), so a P1-P3 student
+    routes to their week's persona like any other. Every failure path keeps
+    the band persona — an unknown flag value (HC-A), a band the course does
+    not ship, a badge that hides itself (no confirmed class / no mounted
+    course / non-linear rows), an out-of-range week, or a lookup that raises
+    (HC-D). Routing must never cost a child a turn.
 
     `last_route` carries the mode/slug *words* of the frame just routed, for
     the turn_start audit row (D9). It never carries the student id (red-line 8).

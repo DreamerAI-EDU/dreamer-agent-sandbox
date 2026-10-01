@@ -146,35 +146,33 @@ export function StudentHomePage() {
               </button>
 
               {/* PR-D-c2 §3.1 - "My AI Course": enters course mode for this visit
-                  only (a URL mode, nothing stored). Held back for P1-P3: the
-                  relay fails open to the band persona for those weeks, so the
-                  door would promise a course lesson the backend cannot deliver
-                  (scope §4). The band comes from /api/student/me, never from the
+                  only (a URL mode, nothing stored). c1-3 un-hid it for P1-P3:
+                  every band's curriculum personas ship with this release, so
+                  the door no longer promises something the relay cannot
+                  deliver. The band comes from /api/student/me, never from the
                   URL. */}
-              {student.age_band !== 'P1-P3' && (
-                <button
-                  type="button"
-                  onClick={() =>
-                    navigate(
-                      `/chat?student=${encodeURIComponent(
-                        student.id.slice(0, 8)
-                      )}&name=${encodeURIComponent(
-                        student.first_name
-                      )}&band=${encodeURIComponent(
-                        student.age_band
-                      )}&from=student&${CURRICULUM_MODE_QUERY}=${DIBI_MODE_CURRICULUM}`
-                    )
-                  }
-                  className="mt-3 w-full rounded-xl border border-black/10 bg-white px-4 py-4 text-left shadow-sm hover:bg-black/[0.03]"
-                >
-                  <p className="text-lg font-semibold tracking-tight">
-                    {copy.kidCourseBtn}
-                  </p>
-                  <p className="mt-1 text-sm text-black/50">
-                    {copy.kidCourseBtnDesc}
-                  </p>
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() =>
+                  navigate(
+                    `/chat?student=${encodeURIComponent(
+                      student.id.slice(0, 8)
+                    )}&name=${encodeURIComponent(
+                      student.first_name
+                    )}&band=${encodeURIComponent(
+                      student.age_band
+                    )}&from=student&${CURRICULUM_MODE_QUERY}=${DIBI_MODE_CURRICULUM}`
+                  )
+                }
+                className="mt-3 w-full rounded-xl border border-black/10 bg-white px-4 py-4 text-left shadow-sm hover:bg-black/[0.03]"
+              >
+                <p className="text-lg font-semibold tracking-tight">
+                  {copy.kidCourseBtn}
+                </p>
+                <p className="mt-1 text-sm text-black/50">
+                  {copy.kidCourseBtnDesc}
+                </p>
+              </button>
             </>
           )}
 

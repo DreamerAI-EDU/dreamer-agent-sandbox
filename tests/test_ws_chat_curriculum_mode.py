@@ -7,9 +7,10 @@ The relay is driven at frame level (`_inject_persona` + `_start_turn`), so
 these tests need no socket, no upstream dial and no engine — none of the
 decisions under test involve them.
 
-HC-C / HC-F also read `deeptutor/personas/` in the repo. c1-1 lands before the
-persona files do (c1-2), so until they arrive the file half of the pin is
-skipped; once they land, the same tests assert all 16 are present.
+HC-C / HC-F also read `deeptutor/personas/` in the repo. c1-1 landed before
+the persona files did, so while the pin was half-built the file half was
+skipped; c1-3 lands the last 8 (P1-P3) in the same release as the band
+change, so both halves now assert all 24 are present.
 """
 from __future__ import annotations
 
@@ -32,13 +33,26 @@ STUDENT_MASK = "abcd1234"
 STUDENT_ID = "full-student-id-never-outward"
 WEEK_SLUG_WK03 = "dibi-curriculum-p4-p6-wk03"
 WEEK_SLUG_WK08 = "dibi-curriculum-p4-p6-wk08"
+P1_P3_SLUG_WK01 = "dibi-curriculum-p1-p3-wk01"
+P1_P3_SLUG_WK03 = "dibi-curriculum-p1-p3-wk03"
 
-#: v0.3 §4.3 — the 16 personas wired in c1-2 (p4-p6 wk01-08 + s1-s3 wk01-08)
+#: v0.3 §4.3 — the 24 personas wired after c1-3: c1-2's 16 (p4-p6 wk01-08 +
+#: s1-s3 wk01-08) plus the 8 P1-P3 files c1-3 lands with the band change.
 ALL_SLUGS = frozenset(
     f"dibi-curriculum-{band}-wk{week:02d}"
-    for band in ("p4-p6", "s1-s3")
+    for band in ("p1-p3", "p4-p6", "s1-s3")
     for week in range(1, 9)
 )
+
+#: bands whose persona prompt is English-only, so the CJK pin applies to
+#: them. P1-P3 is bilingual by design (its grown-up line carries the Chinese
+#: sentence the child copies), so its content pin is the manifest hash alone.
+ENGLISH_ONLY_BANDS = ("p4-p6", "s1-s3")
+
+
+def _band_of_slug(slug: str) -> str:
+    """The age band inside a curriculum persona slug."""
+    return slug.split("dibi-curriculum-", 1)[1].rsplit("-wk", 1)[0]
 
 
 def _has_cjk(text: str) -> bool:
@@ -122,14 +136,17 @@ def test_hc_b_week_comes_from_the_server_not_the_frame():
 
 
 # --- HC-C ------------------------------------------------------------------
-def test_hc_c_slug_allowlist_is_frozen_to_the_16_shipped_personas():
-    """HC-C: the relay may only stamp slugs from the frozen 16-item allowlist,
-    and the repo may only ever hold none of them (c1-1) or all 16 (c1-2)."""
+def test_hc_c_slug_allowlist_is_frozen_to_the_24_shipped_personas():
+    """HC-C: the relay may only stamp slugs from the frozen 24-item allowlist
+    (c1-2's 16 + the 8 P1-P3 files c1-3 lands), and the repo may only ever hold
+    none of them or all of them."""
     assert ws_chat_mod._CURRICULUM_PERSONA_SLUGS == ALL_SLUGS
-    assert len(ALL_SLUGS) == 16
+    assert len(ALL_SLUGS) == 24
 
-    # P1-P3 is deliberately unwired: those students keep the band persona
-    assert ws_chat_mod._curriculum_slug("p1-p3", 1) is None
+    # c1-3 wired P1-P3: its weeks stamp now, and only its own weeks
+    assert ws_chat_mod._curriculum_slug("p1-p3", 1) == P1_P3_SLUG_WK01
+    assert ws_chat_mod._curriculum_slug("p1-p3", 9) is None
+    assert ws_chat_mod._curriculum_slug("p1-p3", 0) is None
     # a week / value the curriculum does not have can never be stamped
     assert ws_chat_mod._curriculum_slug(BAND, 9) is None
     assert ws_chat_mod._curriculum_slug(BAND, 0) is None
@@ -148,9 +165,17 @@ def test_hc_d_guard_falls_back_to_the_band_persona():
     assert _router(badge=_badge("active", None)).slug_for("curriculum") == BAND_PERSONA
     assert _router(badge=_badge("weird", 3)).slug_for("curriculum") == BAND_PERSONA
     assert _router(raises=True).slug_for("curriculum") == BAND_PERSONA
+    # a band the course does not ship still fails open (c1-3 moved P1-P3 out
+    # of this row; the guard itself is unchanged)
     assert (
-        _router(band="p1-p3", persona=P1_P3_PERSONA).slug_for("curriculum")
-        == P1_P3_PERSONA
+        _router(band="p9-p12", persona="dibi-p9-p12").slug_for("curriculum")
+        == "dibi-p9-p12"
+    )
+    # P1-P3 is wired now: it routes to its own week's persona
+    assert (
+        _router(band="p1-p3", persona=P1_P3_PERSONA, badge=_badge("active", 3))
+        .slug_for("curriculum")
+        == P1_P3_SLUG_WK03
     )
 
     # the healthy edge: a finished course routes to its last week
@@ -202,12 +227,14 @@ def _manifest_entries() -> dict:
 
 
 def test_hc_f_shipped_persona_files_match_the_manifest_and_are_english_only():
-    """HC-F: the 16 persona files reproduce the hash manifest they ship with.
+    """HC-F: the 24 persona files reproduce the hash manifest they ship with.
 
-    Hashes are LF-normalised, so the pin holds whatever `core.autocrlf` does to
-    a working copy — the manifest is the same "before" table c1-2 is reviewed
-    against. The Chinese reference version is deliberately *not* checked here:
-    §4.4 keeps it out of the engine's persona dirs.
+    c1-3 lands the 8 P1-P3 files and their manifest rows in one release, so the
+    pin covers all 24 from this commit on. Hashes are LF-normalised, so the pin
+    holds whatever `core.autocrlf` does to a working copy. The CJK half applies
+    to the English-only bands (§4.4): P1-P3 is bilingual by design, so its
+    content pin is the hash. The Chinese reference version is deliberately
+    *not* checked here: §4.4 keeps it out of the engine's persona dirs.
     """
     manifest_path = PERSONAS_DIR / "README.md"
     if not manifest_path.is_file():
@@ -223,7 +250,8 @@ def test_hc_f_shipped_persona_files_match_the_manifest_and_are_english_only():
         size, digest = manifest[f"personas/{slug}/PERSONA.md"]
         assert len(payload) == size, f"{slug}: {len(payload)} B != manifest {size} B"
         assert hashlib.sha256(payload).hexdigest() == digest, f"{slug}: hash != manifest"
-        assert not _has_cjk(text), f"{slug}: persona file carries CJK"
+        if _band_of_slug(slug) in ENGLISH_ONLY_BANDS:
+            assert not _has_cjk(text), f"{slug}: persona file carries CJK"
 
 
 # --- HC-G ------------------------------------------------------------------

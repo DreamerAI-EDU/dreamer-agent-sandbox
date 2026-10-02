@@ -273,3 +273,102 @@ def test_hc_g_flag_never_reaches_the_engine():
 
     # pre-c1-1 call shape still stamps the band persona
     assert _inject(_turn(), router=None)["persona"] == BAND_PERSONA
+
+
+# --- A-exec (c1-8) — curriculum turns leave the relay on the English line ---
+def test_a_exec_zh_hk_curriculum_turn_forwards_language_en():
+    """A-exec (a): a zh-hk curriculum turn reaches the engine with
+    `language="en"` and the week slug — the frame the relay actually forwards
+    is rewritten, not a copy of it."""
+    router = _router(badge=_badge("active", 3))
+
+    raw = _turn(message_id="m-ae-a", dibi_mode="curriculum", language="zh-hk")
+    forwarded = ws_chat_mod._inject_persona(raw, BAND_PERSONA, router=router)
+    out = json.loads(forwarded)
+
+    assert out["language"] == "en"
+    assert out["persona"] == WEEK_SLUG_WK03
+    assert "dibi_mode" not in out
+    assert '"language": "en"' in forwarded
+
+    # every wired band gets the same treatment (P1-P3 included)
+    out = _inject(
+        _turn(dibi_mode="curriculum", language="zh-hk"),
+        persona=P1_P3_PERSONA,
+        router=_router(band="p1-p3", persona=P1_P3_PERSONA, badge=_badge("active", 1)),
+    )
+    assert out["language"] == "en"
+    assert out["persona"] == P1_P3_SLUG_WK01
+
+
+def test_a_exec_zh_hk_non_curriculum_turn_keeps_its_language():
+    """A-exec (b): homework / plain turns are not curriculum turns — the
+    language the child sent is forwarded untouched."""
+    router = _router()
+
+    out = _inject(_turn(dibi_mode="homework", language="zh-hk"), router=router)
+    assert out["language"] == "zh-hk"
+    assert out["persona"] == BAND_PERSONA
+
+    # a flag-less turn frame is still byte-identical (F-5), and no `language`
+    # key is invented where the child sent none
+    raw = _turn(language="zh-hk", persona=BAND_PERSONA)
+    assert ws_chat_mod._inject_persona(raw, BAND_PERSONA, router=router) == raw
+    out = _inject(_turn(dibi_mode="homework"), router=router)
+    assert "language" not in out
+
+
+def test_a_exec_unaccepted_flag_leaves_language_and_persona_alone():
+    """A-exec (c): the rewrite rides the stamp predicate exactly — an unknown
+    flag value, or a curriculum flag whose badge hides the week, stamps no
+    curriculum slug and rewrites no language."""
+    router = _router()
+
+    for extra in ({"dibi_mode": "homework"}, {"dibi_mode": 7}, {"dibi_mode": None}):
+        out = _inject(_turn(language="zh-hk", **extra), router=router)
+        assert out["persona"] == BAND_PERSONA
+        assert out["language"] == "zh-hk"
+
+    # flag accepted, but the server-side week does not resolve (HC-D): band
+    # persona kept, language kept — never guessed onto the English line
+    out = _inject(
+        _turn(dibi_mode="curriculum", language="zh-hk"),
+        router=_router(badge=_badge("none", None)),
+    )
+    assert out["persona"] == BAND_PERSONA
+    assert out["language"] == "zh-hk"
+
+    # non-turn frames keep the verbatim path, flag and language both untouched
+    sub = '{"type":"tool_result","dibi_mode":"curriculum","language":"zh-hk"}'
+    assert ws_chat_mod._inject_persona(sub, BAND_PERSONA, router=router) == sub
+
+
+def test_a_exec_partner_and_band_turns_are_untouched():
+    """A-exec (d): partner and band-persona turns keep their own language —
+    only curriculum turns are moved to English."""
+    router = _router()
+
+    band_turn = json.dumps(
+        {
+            "type": "message",
+            "content": "hi",
+            "message_id": "m-ae-band",
+            "persona": BAND_PERSONA,
+            "language": "zh-hk",
+        }
+    )
+    assert ws_chat_mod._inject_persona(band_turn, BAND_PERSONA, router=router) == band_turn
+
+    partner_turn = json.dumps(
+        {
+            "type": "message",
+            "content": "hi",
+            "message_id": "m-ae-partner",
+            "persona": "partner-my-companion",
+            "soul": "kind and brief",
+            "language": "zh-hk",
+        }
+    )
+    out = json.loads(ws_chat_mod._inject_persona(partner_turn, BAND_PERSONA, router=router))
+    assert out["language"] == "zh-hk"
+    assert "dibi_mode" not in out

@@ -232,6 +232,13 @@ _CURRICULUM_PERSONA_SLUGS = frozenset(
     for band in _CURRICULUM_ROUTE_BANDS
     for week in curriculum_mod.ALL_WEEKS
 )
+#: A-exec (c1-8) — the language a forwarded curriculum turn must carry.
+#: The engine picks its prompt set off the frame's `language` key (zh* ->
+#: agents/chat/prompts/zh, whose general block orders Traditional Chinese
+#: replies), so a curriculum round only ever sees the English-only persona on
+#: the English line. Rewritten on exactly the frames that get a curriculum
+#: slug stamped, never on a guess (see `_inject_persona`).
+_CURRICULUM_FORCED_LANGUAGE = "en"
 #: badge states that route to a curriculum persona; "none" (no confirmed
 #: class / no mounted course / non-linear rows) keeps the band persona (HC-D)
 _CURRICULUM_ROUTE_STATES = (
@@ -382,6 +389,15 @@ def _inject_persona(
     replaced by that week's curriculum persona (v0.3 §2.2). Non-turn frames
     are forwarded verbatim, flag untouched (F-5). `router` is optional so the
     pre-c1-1 call shape keeps working unchanged.
+
+    A-exec (c1-8): a turn that resolves to a *curriculum* slug also leaves the
+    relay with `language="en"`, so the engine loads its English prompt set and
+    the week persona's English-only rules are not overridden by the zh set's
+    Chinese-reply instruction. The rewrite rides the very same predicate as
+    the curriculum stamp — the accepted flag value and a slug off the frozen
+    allowlist — so a bad flag value, a hidden badge or an unwired band leaves
+    the frame's language exactly as the child sent it. Nothing else moves:
+    homework / band-persona / partner turns keep their own language.
     """
     try:
         frame = json.loads(raw)
@@ -403,6 +419,12 @@ def _inject_persona(
     slug = router.slug_for(mode) if router is not None else persona
     if slug and frame.get("persona") != slug:
         frame["persona"] = slug
+    # A-exec (c1-8): same predicate as the curriculum stamp above — the flag
+    # value the router accepted, resolved to a slug off the frozen allowlist.
+    # Anything short of that (bad value, hidden badge, unwired band) left the
+    # band persona in place and leaves the language untouched too.
+    if mode == _CURRICULUM_MODE_VALUE and slug in _CURRICULUM_PERSONA_SLUGS:
+        frame["language"] = _CURRICULUM_FORCED_LANGUAGE
     return json.dumps(frame, ensure_ascii=False)
 
 

@@ -9,7 +9,9 @@
   2. **P1-P3 去除 grown-up 對話場景**：8 份 P1-P3 廢除雙受眾設計（細路一句＋`Grown-up:` 一句）；所有 `Grown-up types/reads/asks...` 改為學生視角（Dibi 直接向細路講；typing/材料指向 teacher／mission sheet）；`How I Run` 第 3 點「cue cards stay offline」保留（cue card 實體材料本來就屬線下課）；Boundary 5 改為「Typing is for the offline lesson」；grown-up 僅存於(a) band 註腳「grown-up's part — offline」、(b) 安全規則「tell your grown-up right now」。**裁決 #3（P1-P3 雙受眾）隨 c1-7 作廢**。
   3. **長回覆唔截斷**：廢除「≤N 行截斷＋Would you like me to continue?」條款；新第 3 條＝內容多可 split 最多 3 段（空行分隔）、point-form 每點新行；第 4 條 one task per turn / one task per line 保留（可讀性，唔再掛行數上限）；自檢行同步（冇 `≤N lines`）。**評審缺口 2 修復（v2）**：P1-P3 採專屬第 3 條——`Short replies that never cut content`（每回覆幾句極簡單、細路可以複述嘅行；內容多就分段，但永遠唔截內容），解決同 band 註腳「keep every reply short」＋規則 4 嘅對撞；16 份 band 檔維持通用版。**裁決 #4 行數上限條款修訂**。
 - 根因：T-4 smoke 發現「解釋完返英文」紅＋T-4x 發現觸發不穩定 —— 老闆裁定方向錯（T-4y 停止），改行 c1-7 直接廢除中文助手功能。T-4/T-4x 兩紅隨功能移除而關閉。
-- **本 manifest 24 個 hash 即 c1-7 v2 after 值**（2026-10-02 評審後重凍；c1-7 v1／c1-6 值見 git 歷史）。
+- **本 manifest 24 個 hash 即 c1-10 值**（2026-10-03 tone pack 後重凍；c1-7 v3／v2／v1、c1-6 值見 git 歷史）。
+- **c1-7 v3 補記（2026-10-02）**：script pin 後重凍，隨 `73d769a` 落地——24 檔每檔 +48 bytes（檔案尾 append script pin 行）；handover 漏記，c1-11 補返文件鏈。
+- **c1-10 修訂（2026-10-03）· tone pack**：24 份 curriculum persona 校準回饋語氣同週次儀式——A 第 6 條 feedback sandwich（P1-P3 用 Praise sandwich 版）／B `Here is an example of how I reply:` 之後加回饋示範小例／C 自檢行追加 `feedback sandwich when work is shared`／D `How I Run This Week` 加 3 點（Open the week warmly、coach by modelling not correcting、Close the week）。manifest 重凍為 c1-10 值（老闆 2026-10-03 批，commit `9b31436f`）。
 - **c1-4 修訂（2026-09-30）**：16 份英文 persona 已於 `How I Run This Week` 之後加入 `How I Reply (Format Rules — Follow Every Time)` block（16 份逐字一致；第 3 條並載 8（P4-P6）／12（S1-S3））。**c1-4 after 值**已過期，見 git 歷史。
 - **c1-5 修訂（2026-09-30）**：16 份英文 persona 嘅 `How I Reply (Format Rules — Follow Every Time)` block 由 `How I Run This Week` 之後**移到檔頭**，並**刪除**原插入位置嘅同一節；第 3 條 band 改載**單一數字**（P4-P6＝8、S1-S3＝12）；新增 `Here is an example of how I reply:` worked example＋結尾自檢行。根因：smoke ① RED＝slug 正確但模型不服從格式規則。已過期，見 git 歷史。
 - **c1-6 修訂（2026-09-30）· L2 正文去 markdown**：16 份英文 persona 正文去 markdown（資訊零刪減；**檔頭格式 block 逐字凍結**）。已過期，見 git 歷史。

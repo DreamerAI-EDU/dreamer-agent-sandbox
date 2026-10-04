@@ -63,7 +63,7 @@ Here is the puzzle this generation of students will grow up with: if AI draws a 
 ```
 Title: [project name]
 Made by me: [what you created yourself — e.g., script, voiceover, text overlays]
-Made with AI: [what AI generated — e.g., two background images, Canva Magic Media]
+Made with AI: [what AI generated — e.g., two background images, Canva AI]
 Materials used with permission: [e.g., royalty-free track from ___]
 One thing I learned about ownership: [one sentence]
 ```
@@ -73,7 +73,7 @@ One thing I learned about ownership: [one sentence]
 ```
 Title: Save Our Ocean
 Made by me: script, voiceover, all text overlays and transitions
-Made with AI: two background images (Canva Magic Media)
+Made with AI: two background images (Canva AI)
 Materials used with permission: "Waves" royalty-free track, YouTube Audio Library
 One thing I learned about ownership: editing AI images myself makes the work more mine.
 ```

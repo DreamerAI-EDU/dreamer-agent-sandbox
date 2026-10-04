@@ -98,7 +98,7 @@ export function AssistantMessage({ payload, theme, lang, stripSymbols = false }:
         </div>
 
         <div
-          className={`mt-2 rounded-3xl rounded-tl-md border border-white/10 bg-[#252949] px-5 py-4 text-white ${theme.textScale}`}
+          className={`mt-2 whitespace-pre-wrap rounded-3xl rounded-tl-md border border-white/10 bg-[#252949] px-5 py-4 text-white ${theme.textScale}`}
           style={{ boxShadow: `0 0 24px ${theme.accent}22` }}
         >
           {renderBold(payload.content, { strip: stripSymbols })}

@@ -18,7 +18,7 @@ export function WelcomeBubble({ text, accent }: WelcomeBubbleProps) {
       <div className="shrink-0">
         <Dibi size={44} accent={accent} />
       </div>
-      <div className="rounded-3xl rounded-tl-md border border-white/10 bg-white/10 px-5 py-3 text-sm font-medium leading-relaxed text-white/90">
+      <div className="whitespace-pre-wrap rounded-3xl rounded-tl-md border border-white/10 bg-white/10 px-5 py-3 text-sm font-medium leading-relaxed text-white/90">
         {text}
       </div>
     </div>

@@ -47,34 +47,34 @@ personas/
 - ⏳ 8 份 P1-P3 正稿 **待簽批**。
 - 設計備註：S1-S3 版按年齡調校（聲線／oral 1-3 分鐘／中文 100-150 字／追問式）；Week 4-8 任務詳細 prompt template 喺各週 mission sheet（pinned md）度。
 
-## 檔案 manifest（LF sha256）· c1-13a 值（2026-10-04，工具名更新＋Task 1 起跑＋誠實邊界＋唔重複提示 後重凍）
+## 檔案 manifest（LF sha256）· c1-13c 值（2026-10-04，未答完唔准跳＋唔准虛構答案＋信學生 後重凍）
 
 | 檔 | bytes | sha256 |
 |---|---|---|
-| `personas/dibi-curriculum-p1-p3-wk01/PERSONA.md` | 10442 | `6d35ee49488f035862faa31ffcc77765ecd1351b07b678e94aad4e02717d7ca3` |
-| `personas/dibi-curriculum-p1-p3-wk02/PERSONA.md` | 10618 | `edc21e188beab00168884a255ffc56639f3651e96714ad6c98ede28d4f5fa5e0` |
-| `personas/dibi-curriculum-p1-p3-wk03/PERSONA.md` | 10726 | `d70df8a09320554b1a6e0a4f03f5eb0971620dac02893665dd31d1984a64752a` |
-| `personas/dibi-curriculum-p1-p3-wk04/PERSONA.md` | 10638 | `547ba7971c86af4ff4941de27a56a454d44e03af07f899df0936ca85b09d6cb7` |
-| `personas/dibi-curriculum-p1-p3-wk05/PERSONA.md` | 10781 | `32a1248a241caeea1038c0fae3c62ae9d04c2a81c2eaba2f9b6878e24bf3d640` |
-| `personas/dibi-curriculum-p1-p3-wk06/PERSONA.md` | 10940 | `aa4b282703aa48d2cee90260ade4141648acbddc7b18602ef12da267cfab2450` |
-| `personas/dibi-curriculum-p1-p3-wk07/PERSONA.md` | 11381 | `b9e253f9fafd1cff78e8f9a55b3155b6b103bfb7fb35d678f56b0c67fd8152c0` |
-| `personas/dibi-curriculum-p1-p3-wk08/PERSONA.md` | 11050 | `6cf78784660584f706bfc4350aed429b3b3da86acc33158f7dfff8279e61f61d` |
-| `personas/dibi-curriculum-p4-p6-wk01/PERSONA.md` | 10053 | `37dda3aea9e14a03839fdc20098f32f2e2326930cb21ca00260b60ed97455ef1` |
-| `personas/dibi-curriculum-p4-p6-wk02/PERSONA.md` | 10018 | `4bc54ffd8b5c47e8d9faf808df826b1248332d64773d2f7320df8daf3e1ca8e0` |
-| `personas/dibi-curriculum-p4-p6-wk03/PERSONA.md` | 10265 | `c635064098be6c9528d840e7dd411eb1a47d541cc08f95a9037439e2a7241fa1` |
-| `personas/dibi-curriculum-p4-p6-wk04/PERSONA.md` | 10081 | `a3cc69471e854b7912fbbfae0d6da442c9734d433251fb4b03d845874eb0d1af` |
-| `personas/dibi-curriculum-p4-p6-wk05/PERSONA.md` | 9817 | `0d258215f370190b29cc776e8f43610f7f011750cc7aec6b80e51b5f8b1e1240` |
-| `personas/dibi-curriculum-p4-p6-wk06/PERSONA.md` | 10156 | `f6119db31dc41d3eaec2123ddc7c57ed61b140e8765015e867ff19dfb16701b5` |
-| `personas/dibi-curriculum-p4-p6-wk07/PERSONA.md` | 10275 | `ec394f31b757c8d97c52afd352fdcd5370d8ef3e7cb0591bc26287d0b9ac9682` |
-| `personas/dibi-curriculum-p4-p6-wk08/PERSONA.md` | 10479 | `73d7b8ee84997c8536628274c968ed63f6d769934f3bf1ca059f1610afca97f5` |
-| `personas/dibi-curriculum-s1-s3-wk01/PERSONA.md` | 9855 | `2c0aeaea5ebec2260fe3b425bd13c8a3aeb31883442c66ddaa7814d65231a1b6` |
-| `personas/dibi-curriculum-s1-s3-wk02/PERSONA.md` | 9820 | `f1ca07a9dcaa7aebc1cb299c663342b350b84908569692d720909701ae8e0c75` |
-| `personas/dibi-curriculum-s1-s3-wk03/PERSONA.md` | 10067 | `31e8974d76aecf45225df67a3f6e2a51493b98d0afaededd3ccb595288fbdf68` |
-| `personas/dibi-curriculum-s1-s3-wk04/PERSONA.md` | 9883 | `c182940f10df9db7d7997e4b8145c6b1a1b4f9696ac0049004f48b3adc13a3ba` |
-| `personas/dibi-curriculum-s1-s3-wk05/PERSONA.md` | 9619 | `acd2ca1fbdaa6a7537be333d205c3b6bf7d8382f852582563f63a7f4ac16d74d` |
-| `personas/dibi-curriculum-s1-s3-wk06/PERSONA.md` | 9958 | `122cda2bea5489f3bd4dd7330045983a817120fd1f7a9e9c8e295811ddf48f29` |
-| `personas/dibi-curriculum-s1-s3-wk07/PERSONA.md` | 10077 | `8dc2bf3c95eb6149ca358ad8c97614421f9564a30abc75bef77ef8249fef3db5` |
-| `personas/dibi-curriculum-s1-s3-wk08/PERSONA.md` | 10281 | `a0665950fe9e95a0c3b961bc2359f840cfee1d67c1a42ae17eb9a8b5499e8273` |
+| `personas/dibi-curriculum-p1-p3-wk01/PERSONA.md` | 10968 | `b2bc39b8729dab3b14c7f16f75a0585622fd3f97992c1edd9a717477c4673845` |
+| `personas/dibi-curriculum-p1-p3-wk02/PERSONA.md` | 11144 | `5b38771fc56f5f8b3fb793ba7b8c2336ca00ab43f4220768e0cfc34235c2723f` |
+| `personas/dibi-curriculum-p1-p3-wk03/PERSONA.md` | 11252 | `2b8cdc7ad07970cbc60264e77be3fec7f81776a3dd7e4033bbf550beb7703707` |
+| `personas/dibi-curriculum-p1-p3-wk04/PERSONA.md` | 11164 | `97896d0907bbbfb858d007fa9e5d4184989d361ba06190f16b7752034390f368` |
+| `personas/dibi-curriculum-p1-p3-wk05/PERSONA.md` | 11307 | `abbaac69b18bf0da0ed2462f36978bb59b9518f3efbe53347accca07db2a2d95` |
+| `personas/dibi-curriculum-p1-p3-wk06/PERSONA.md` | 11466 | `e97ef2cc00a30070d81d4ca17fbf97bdec571505377f9ac6fb9454b7a59e463d` |
+| `personas/dibi-curriculum-p1-p3-wk07/PERSONA.md` | 11907 | `a484857df74c610863829875e60f5d837dd6977aaf9a0979fe305e4149e90e10` |
+| `personas/dibi-curriculum-p1-p3-wk08/PERSONA.md` | 11576 | `9d47739b72c665cd29a5bf4681f9be6fe266744632a81728e4929124587a8685` |
+| `personas/dibi-curriculum-p4-p6-wk01/PERSONA.md` | 10664 | `3739a9f931c5fb98db409a49a173a1023502d2405ae6ca2d737255788e910d74` |
+| `personas/dibi-curriculum-p4-p6-wk02/PERSONA.md` | 10629 | `2259c8ba6add4f7cec6666a8b06d0cbd571e081f8e81fe49226a6ced5d345956` |
+| `personas/dibi-curriculum-p4-p6-wk03/PERSONA.md` | 10876 | `7e07f73ef94ff21ea8188ef08566df58e1346cb2782e2c6e83b2d5ae74087cc9` |
+| `personas/dibi-curriculum-p4-p6-wk04/PERSONA.md` | 10692 | `167261c4148b52290b00e94479e0451774a2f6e1f44fcfce425042d13d038f4d` |
+| `personas/dibi-curriculum-p4-p6-wk05/PERSONA.md` | 10428 | `f4226a1019773cb26027e7643afba084a97552e67123c50bfee766a9e8bf2883` |
+| `personas/dibi-curriculum-p4-p6-wk06/PERSONA.md` | 10767 | `2a5a9fb136efe7617da4a649347ef49f2da6dd97c30235495bfcb670ae41a699` |
+| `personas/dibi-curriculum-p4-p6-wk07/PERSONA.md` | 10886 | `439c7a1d7bc824e494bb322c0d141ed7610f3410983fc004dae62671c22bd847` |
+| `personas/dibi-curriculum-p4-p6-wk08/PERSONA.md` | 11090 | `79272063778e691aa4506ed0e0f363afc32772b45d009c7c951393ac2a8738fd` |
+| `personas/dibi-curriculum-s1-s3-wk01/PERSONA.md` | 10466 | `44bf9314940a607474a400e40f9c93892abcdb0435f492036ecd131c185efa4e` |
+| `personas/dibi-curriculum-s1-s3-wk02/PERSONA.md` | 10431 | `1e37b4d0d34a6a6f903cc6fc9298929edba01e4f2a4c75c17dcd793a3d24ff7c` |
+| `personas/dibi-curriculum-s1-s3-wk03/PERSONA.md` | 10678 | `8fe3c803578f65e915c498824d9a618d21063401392bfa7fdd5f7d658e0f228e` |
+| `personas/dibi-curriculum-s1-s3-wk04/PERSONA.md` | 10494 | `12bbcda4e0a680c8621946e7274a23bb2c20fa5def3f5121cfa6064193a28195` |
+| `personas/dibi-curriculum-s1-s3-wk05/PERSONA.md` | 10230 | `1b216b3c704d04ec46b7f3fd7aba04c64b457eecb0fc480abfec035946d5db50` |
+| `personas/dibi-curriculum-s1-s3-wk06/PERSONA.md` | 10569 | `ec049fd86de2ea73b39bebef368640c265825db3bc2c732a53ee6fe88476e8de` |
+| `personas/dibi-curriculum-s1-s3-wk07/PERSONA.md` | 10688 | `cc039b7ba933bd3c7d9f7df873cf991a3bc9e263e9c6341d47c433d3a7dde2d9` |
+| `personas/dibi-curriculum-s1-s3-wk08/PERSONA.md` | 10892 | `e1278b85261e707249ee4897fa882fe90b6c51639ab9358746e2fba9cb70fd81` |
 | `docs/pr-d-c1/中文參考版.md` | 23493 | `d30bfb66a0dce588571fcb8cf806ba92de29387b774235f9efc9092d184f672b` |
 
 ---

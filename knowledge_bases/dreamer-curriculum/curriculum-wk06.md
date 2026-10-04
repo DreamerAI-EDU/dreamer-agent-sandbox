@@ -119,7 +119,7 @@ Your 4-point policy in Chinese
 
 One visual / icon representing "fair use"
 
-3. Constraint: You must generate one image with Canva Magic Media, but draw/edit the rest yourself to show your own design.
+3. Constraint: You must generate one image with Canva AI, but draw/edit the rest yourself to show your own design.
 
 4. Prompt for AI image:
 

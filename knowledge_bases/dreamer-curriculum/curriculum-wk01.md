@@ -67,7 +67,7 @@ Explain: "AI is like a very smart parrot. It listens to everything you say to le
 
 ### Task 2: My Avatar (Creative Design)
 
-**Tool: Canva (Magic Media)**
+**Tool: Canva (Canva AI)**
 
 **Time: 90 minutes**
 
@@ -75,7 +75,7 @@ Explain: "AI is like a very smart parrot. It listens to everything you say to le
 
 1. Log in to Canva. Create a new design (Custom Size: 800x800 px).
 
-2. Click "Apps" and select "Magic Media."
+2. Click "Apps" and select "Canva AI."
 
 3. Copy and paste this prompt:
 

@@ -21,17 +21,20 @@ import type { ConsentStatusEntry } from '../../lib/types';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../ui/dialog';
 import type { ConsentStatus } from './ConsentIndicator';
 
-type WithdrawableDoc = 'chat_consent' | 'media_consent';
+type WithdrawableDoc = 'chat_consent' | 'media_consent' | 'voice_consent';
 
 interface RowSpec {
   doc: WithdrawableDoc;
-  labelKey: 'consentChat' | 'consentMedia';
-  effectKey: 'consentChatEffect' | 'consentMediaEffect';
+  labelKey: 'consentChat' | 'consentMedia' | 'consentVoice';
+  effectKey: 'consentChatEffect' | 'consentMediaEffect' | 'consentVoiceEffect';
 }
 
 const ROWS: RowSpec[] = [
   { doc: 'chat_consent', labelKey: 'consentChat', effectKey: 'consentChatEffect' },
   { doc: 'media_consent', labelKey: 'consentMedia', effectKey: 'consentMediaEffect' },
+  // c1-13b: voice consent has its own row — withdrawing it stops the mic for
+  // this child and leaves every text feature untouched.
+  { doc: 'voice_consent', labelKey: 'consentVoice', effectKey: 'consentVoiceEffect' },
 ];
 
 const DOT: Record<ConsentStatus, string> = {

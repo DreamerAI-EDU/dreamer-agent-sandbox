@@ -32,6 +32,7 @@ from __future__ import annotations
 import datetime
 import json
 import logging
+import math
 import uuid
 from typing import Any, Optional
 
@@ -46,6 +47,8 @@ from . import reports as reports_mod
 from . import safety as safety_mod
 from . import student_auth as student_auth_mod
 from . import students as students_mod
+from . import voice_quota
+from . import voice_stt
 from .email import send_reset_email, send_verification_email
 from .security import (
     dummy_verify,
@@ -161,6 +164,9 @@ async def csrf_guard(request: web.Request, handler):
             # Bridge-3d kid console: login / logout are SPA POSTs and must
             # carry the custom header like every other auth POST.
             or path.startswith("/api/student/")
+            # c1-13b voice: POST carries the kid session cookie, so it needs
+            # the same custom-header CSRF scheme as the other kid surfaces.
+            or path.startswith("/api/voice/")
             or path.startswith("/api/teacher/")
             or path == "/api/invites"
             # The parent 1-click confirm link is opened from an email, not
@@ -739,9 +745,10 @@ async def handle_consent_docs(request: web.Request) -> web.Response:
     if user is None:
         return web.json_response(_ERR_AUTH, status=401)
 
-    docs = consent.load_consent_docs()
     documents = {}
-    for doc_type, cfg in docs["documents"].items():
+    # public_documents() drops trial_only drafts. None today: c1-13b
+    # voice_consent landed 2026-10-08 and is parent-visible like the rest.
+    for doc_type, cfg in consent.public_documents().items():
         documents[doc_type] = {
             "doc_type": doc_type,
             "current_version": cfg["current_version"],
@@ -774,6 +781,12 @@ async def handle_consent_sign(request: web.Request) -> web.Response:
     doc = consent.get_doc_config(doc_type)
     if doc is None:
         # Unknown doc_type — unified invalid wording, no hint of valid keys.
+        return web.json_response(_ERR_INVALID, status=400)
+    if consent.is_trial_only(doc):
+        # Draft guard (no document uses it today): an unsigned draft is marked
+        # by the operator for trial test accounts only — parents cannot
+        # self-sign unsigned copy. Unified invalid wording, so a draft's
+        # existence is not advertised.
         return web.json_response(_ERR_INVALID, status=400)
     if not _consent_doc_role_ok(user, doc):
         # W6 PR-H: a parent-scoped document is not a teacher's to sign (and
@@ -811,6 +824,9 @@ async def handle_consent_withdraw(request: web.Request) -> web.Response:
     the withdraw scope (P3-2 prior-agree gate); success writes an audit-log
     media_takedown_pending marker for the human 24h takedown flow. A second
     withdraw is rejected by the same gate — nothing to withdraw.
+    voice_consent (c1-13b): allowed on the same prior-agree gate. The
+    withdrawn row is what switches this child's microphone off — voice stops,
+    every text feature stays; no takedown marker (no stored audio to remove).
     privacy_policy: rejected — withdrawing privacy consent equals an account
     deactivation request, handled manually via info@.
     staff_data_processing: rejected — it is a condition of holding a staff
@@ -2723,8 +2739,169 @@ async def handle_student_me(request: web.Request) -> web.Response:
 # App factory
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# c1-13b Phase 1 — voice input (P1-P3 trial, Azure main / Deepgram dormant)
+#
+# Two kid-facing endpoints. Both read the gate from the student session, never
+# from a query param: flag → band → consent row → both minute meters. The
+# frontend draws the mic button only when /api/voice/config says enabled, so a
+# closed gate means the kid sees nothing at all.
+#
+# Privacy: the clip is transcribed in memory and dropped; the transcript is
+# returned to the browser and NEVER written to a log, the DB or the audit log.
+# Only the seconds (and the provider name) reach the ledger.
+# ---------------------------------------------------------------------------
+
+#: A clip may exceed the segment cap by this much before it is refused —
+#: recording stop is racy by a few hundred ms, not by whole seconds.
+_VOICE_CLIP_TOLERANCE_SECONDS = 2
+_VOICE_ERR_CLOSED = {"error": "語音輸入未開放"}
+_VOICE_ERR_TOO_LONG = {"error": "錄音太長，請講短啲"}
+_VOICE_ERR_BAD_CLIP = {"error": "錄音讀取唔到，請再試"}
+_VOICE_ERR_STT = {"error": "語音辨識暫時用唔到，可以打字問我"}
+
+
+def _wav_seconds(data: bytes) -> Optional[float]:
+    """Exact clip length for a PCM WAV, else None (declared value is used).
+
+    Recording in the browser normally yields webm/opus, where the length is
+    the client's own figure — it only ever *shorts* the charge, because the
+    byte ceiling and the per-student daily meter bound the real cost too.
+    """
+    if len(data) < 44 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+        return None
+    pos = 12
+    byte_rate: Optional[int] = None
+    data_size: Optional[int] = None
+    try:
+        while pos + 8 <= len(data):
+            chunk_id = data[pos : pos + 4]
+            size = int.from_bytes(data[pos + 4 : pos + 8], "little")
+            if chunk_id == b"fmt " and size >= 16 and pos + 20 <= len(data):
+                byte_rate = int.from_bytes(data[pos + 16 : pos + 20], "little")
+            elif chunk_id == b"data":
+                data_size = min(size, len(data) - pos - 8)
+            pos += 8 + size + (size % 2)
+    except (IndexError, ValueError):
+        return None
+    if not byte_rate or data_size is None:
+        return None
+    return data_size / byte_rate
+
+
+async def handle_voice_config(request: web.Request) -> web.Response:
+    """GET /api/voice/config — may this kid see a mic, and for how long.
+
+    200 with ``enabled: false`` when the gate is closed (still 200: a kid must
+    not be able to tell "no consent" from "feature off"). 401 only when there
+    is no kid session at all.
+    """
+    student = _student_session_student(request)
+    if student is None:
+        return web.json_response(_ERR_AUTH, status=401)
+
+    access = voice_quota.access_decision(student)
+    if not access.enabled or access.decision is None:
+        return web.json_response({"enabled": False})
+    lim = voice_quota.limits()
+    return web.json_response(
+        {
+            "enabled": True,
+            "max_seconds": access.decision.max_seconds,
+            "max_upload_bytes": lim["max_upload_bytes"],
+            "daily_remaining_seconds": access.decision.daily_remaining_seconds,
+        }
+    )
+
+
+async def handle_voice_transcribe(request: web.Request) -> web.Response:
+    """POST /api/voice/transcribe — one clip in, text out, meters moved.
+
+    The reply carries the transcript only; it is the frontend's job to drop it
+    into the composer and let the child press send (the 實施令 rule that a
+    mis-heard word must never be submitted on its own).
+    """
+    student = _student_session_student(request)
+    if student is None:
+        return web.json_response(_ERR_AUTH, status=401)
+
+    access = voice_quota.access_decision(student)
+    if not access.enabled:
+        return web.json_response(
+            {**_VOICE_ERR_CLOSED, "reason": access.reason}, status=403
+        )
+
+    lim = voice_quota.limits()
+    try:
+        form = await request.post()
+    except Exception:  # malformed multipart / body over client_max_size
+        return web.json_response(_VOICE_ERR_BAD_CLIP, status=400)
+
+    field = form.get("audio")
+    if not isinstance(field, web.FileField):
+        return web.json_response(_VOICE_ERR_BAD_CLIP, status=400)
+    audio = field.file.read()
+    if not audio:
+        return web.json_response(_VOICE_ERR_BAD_CLIP, status=400)
+    if len(audio) > lim["max_upload_bytes"]:
+        return web.json_response(_VOICE_ERR_TOO_LONG, status=413)
+
+    seconds = _wav_seconds(audio)
+    if seconds is None:
+        try:
+            declared_ms = float(str(form.get("duration_ms") or ""))
+        except ValueError:
+            declared_ms = 0.0
+        if declared_ms <= 0:
+            # No length, no way to price the clip — refuse rather than guess.
+            return web.json_response(_VOICE_ERR_BAD_CLIP, status=400)
+        seconds = declared_ms / 1000.0
+
+    if seconds <= 0 or seconds > lim["max_segment_seconds"] + _VOICE_CLIP_TOLERANCE_SECONDS:
+        return web.json_response(_VOICE_ERR_TOO_LONG, status=400)
+
+    seconds_used = max(1, math.ceil(seconds))
+    decision = voice_quota.evaluate(student["id"], seconds_used)
+    if not decision.allowed:
+        # Both meters re-checked against the real clip length, not the cap.
+        return web.json_response(
+            {**_VOICE_ERR_CLOSED, "reason": decision.code}, status=403
+        )
+
+    lang_hint = str(form.get("lang") or student["lang_code"] or "en")
+    try:
+        result = await voice_stt.transcribe(
+            audio,
+            content_type=field.content_type or "audio/wav",
+            lang_hint=lang_hint,
+        )
+    except voice_stt.SttError as exc:
+        # Operator-facing code only; the kid gets one fixed sentence and the
+        # clip is charged nothing (no upstream audio was billed to us).
+        logger.warning("voice: stt failed (%s)", exc.code)
+        return web.json_response(_VOICE_ERR_STT, status=502)
+
+    voice_quota.record_usage(
+        student_id=student["id"], seconds=seconds_used, provider=result.provider
+    )
+    return web.json_response(
+        {
+            "text": result.text,
+            "seconds_used": seconds_used,
+            "daily_remaining_seconds": max(
+                0, decision.daily_remaining_seconds - seconds_used
+            ),
+        }
+    )
+
+
 def build_app() -> web.Application:
-    app = web.Application(middlewares=[csrf_guard])
+    app = web.Application(
+        middlewares=[csrf_guard],
+        # Default aiohttp cap is 1 MiB; a compressed 60 s clip fits well
+        # inside VOICE max_upload_bytes, so the app ceiling follows it.
+        client_max_size=voice_quota.limits()["max_upload_bytes"] + 65536,
+    )
     app.router.add_post("/api/auth/register", handle_register)
     app.router.add_post("/api/auth/login", handle_login)
     app.router.add_post("/api/auth/logout", handle_logout)
@@ -2805,6 +2982,10 @@ def build_app() -> web.Application:
     app.router.add_post("/api/student/login", handle_student_login)
     app.router.add_post("/api/student/logout", handle_student_logout)
     app.router.add_get("/api/student/me", handle_student_me)
+    # c1-13b Phase 1 — voice input (P1-P3 trial; flag off by default, so the
+    # mic button never renders until VOICE_P1P3_ENABLED / the YAML flag flips).
+    app.router.add_get("/api/voice/config", handle_voice_config)
+    app.router.add_post("/api/voice/transcribe", handle_voice_transcribe)
     # Bridge-3b — parent 8-week course map (same acting-parent gate, one child
     # per parent; the family-facing reading of the same state machine).
     app.router.add_get("/api/parent/curriculum", handle_parent_curriculum)

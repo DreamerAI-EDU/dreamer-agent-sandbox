@@ -247,6 +247,34 @@ CREATE TABLE IF NOT EXISTS ws_chat_session_map (
 
 CREATE INDEX IF NOT EXISTS idx_ws_session_map_updated
     ON ws_chat_session_map(updated_at);
+
+-- c1-13b Phase 1 voice usage meters (boss 實施令 2026-10-04). Canonical DDL
+-- lives in migrations/phase9_voice_stt.sql. Additive and brand-new, carried by
+-- _DDL means ensure_schema() creates them on any DB, old or fresh — no ALTER,
+-- so the deploy window needs no extra step. Minutes only: audio never reaches
+-- the database (原音即毁 enforced in auth/voice_stt.py).
+CREATE TABLE IF NOT EXISTS voice_usage_ledger (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_id  TEXT NOT NULL,
+    day         TEXT NOT NULL,      -- local (UTC+8) calendar day, YYYY-MM-DD
+    seconds     INTEGER NOT NULL,
+    provider    TEXT NOT NULL,      -- azure | deepgram
+    created_at  TEXT NOT NULL       -- ISO-8601 UTC
+);
+
+CREATE INDEX IF NOT EXISTS idx_voice_usage_student_day
+    ON voice_usage_ledger(student_id, day);
+
+CREATE INDEX IF NOT EXISTS idx_voice_usage_day
+    ON voice_usage_ledger(day);
+
+CREATE TABLE IF NOT EXISTS voice_month_meter (
+    month       TEXT PRIMARY KEY,   -- local (UTC+8) month, YYYY-MM
+    seconds     INTEGER NOT NULL DEFAULT 0,
+    stopped_at  TEXT,
+    alerted_at  TEXT,
+    updated_at  TEXT NOT NULL
+);
 """
 
 

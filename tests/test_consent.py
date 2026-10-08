@@ -152,8 +152,18 @@ async def test_docs_registry_and_legal_pages_pair_with_yaml(
     documents = body["documents"]
     assert set(documents) == {
         "privacy_policy", "media_consent", "chat_consent",
-        "staff_data_processing",
+        "voice_consent", "staff_data_processing",
     }
+    # c1-13b: voice_consent LANDED 2026-10-08 — the copy was approved, so it
+    # is a normal parent-visible document now (its own doc_type is what makes
+    # voice separately revocable from the text-only service). It stays
+    # voluntary: required is False, so declining it never blocks signup.
+    vc = documents["voice_consent"]
+    assert vc["current_version"] == "v2026-10-08"
+    assert vc["required"] is False
+    assert vc["roles"] == ["parent"]
+    assert vc["title_zh"] == "語音輸入同意書"
+    assert vc["title_en"] == "Voice Input Consent"
 
     pp = documents["privacy_policy"]
     assert pp["current_version"] == "v2026-08-26"
@@ -225,6 +235,20 @@ async def test_docs_registry_and_legal_pages_pair_with_yaml(
     assert "Effective Date 生效日期：10 September 2026" in sd_html
     assert "職員資料處理守則" in sd_html
     assert "info@dreamer-aiedu.com" in sd_html
+
+    # c1-13b: the voice consent page ships on the same embedded-page route
+    # and {{VERSION}} injection pipeline. The slug MUST be voice-consent —
+    # ConsentPage derives it from the doc_type, so voice-input-consent would
+    # 404 the page link.
+    vc_page = await client.get("/legal/voice-consent")
+    assert vc_page.status == 200
+    vc_html = await vc_page.text()
+    assert "v2026-10-08" in vc_html
+    assert "{{VERSION}}" not in vc_html
+    assert "Effective Date 生效日期：8 October 2026" in vc_html
+    assert "原音即毀" in vc_html
+    assert "語音輸入同意書" in vc_html
+    assert "info@dreamer-aiedu.com" in vc_html
 
     # Unknown legal slug → 404.
     missing = await client.get("/legal/not-a-page")
@@ -1057,9 +1081,10 @@ async def test_teacher_sign_and_withdraw_parent_docs_forbidden(
 ):
     """A teacher session must not touch parent paperwork — 403, zero rows.
 
-    `privacy_policy` / `media_consent` / `chat_consent` bind role=parent
-    only, so a teacher (whose own gate is the staff notice) is refused on
-    both sign and withdraw, and no consent row is written either way.
+    `privacy_policy` / `media_consent` / `chat_consent` / `voice_consent`
+    bind role=parent only, so a teacher (whose own gate is the staff notice)
+    is refused on both sign and withdraw, and no consent row is written
+    either way.
     """
     token = await _setup_logged_in_user(client)
     user = auth_db.get_user_by_email("teacher@test.local")
@@ -1068,6 +1093,7 @@ async def test_teacher_sign_and_withdraw_parent_docs_forbidden(
         ("privacy_policy", "v2026-08-26"),
         ("media_consent", "v2026-08-26"),
         ("chat_consent", "v2026-09-08"),
+        ("voice_consent", "v2026-10-08"),
     ):
         sign = await client.post(
             "/api/consent/sign",

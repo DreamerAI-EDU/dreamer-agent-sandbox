@@ -48,6 +48,11 @@ DOC_TYPES = (
     "privacy_policy",
     "media_consent",
     "chat_consent",
+    # c1-13b Phase 1 voice input: LANDED 2026-10-08 — the copy was approved,
+    # so this is a normal parent-visible doc now (signup consent page section
+    # + /legal/voice-consent). Its own doc_type is what keeps voice separately
+    # revocable from the text-only service.
+    "voice_consent",
     "staff_data_processing",
 )
 
@@ -78,6 +83,10 @@ LEGAL_ROUTES = {
     "chat-consent": "chat_consent",
     # W6 PR-G: staff data-processing notice (teacher / admin scope).
     "staff-data-processing": "staff_data_processing",
+    # c1-13b: voice input consent. The slug MUST stay voice-consent —
+    # ConsentPage derives it from the doc_type (legalSlug() replaces "_" with
+    # "-"), so any other slug would 404 the "read the full text" link.
+    "voice-consent": "voice_consent",
 }
 
 _ERR_INVALID = {"error": "請求無效"}
@@ -120,6 +129,25 @@ def load_consent_docs() -> dict[str, Any]:
 def get_doc_config(doc_type: str) -> Optional[dict[str, Any]]:
     docs = load_consent_docs()
     return docs["documents"].get(doc_type)
+
+
+def is_trial_only(cfg: dict[str, Any]) -> bool:
+    """True for a draft-only document.
+
+    Such a document is a real registry entry — the mic gate and the evidence
+    chain can read it — but its copy has not been signed off yet, so it must
+    not appear in any parent-facing list/status and must not be self-signable.
+
+    No document uses this today: c1-13b voice_consent was the only draft and
+    it landed 2026-10-08 (copy approved). Kept for the next unsigned draft.
+    """
+    return bool(cfg.get("trial_only"))
+
+
+def public_documents() -> dict[str, Any]:
+    """Registry entries a parent-facing response may show (drops trial_only)."""
+    docs = load_consent_docs()["documents"]
+    return {k: v for k, v in docs.items() if not is_trial_only(v)}
 
 
 def render_legal_page(route_key: str) -> Optional[str]:
@@ -408,7 +436,11 @@ def status_for_user(
     docs = load_consent_docs()
     latest = get_latest_consent_rows(user_id)
     out: dict[str, dict[str, Any]] = {}
-    for doc_type, cfg in docs["documents"].items():
+    # public_documents(): draft-only docs (trial_only) are deliberately absent
+    # here — the parent panel must never show unsigned copy. voice_consent is
+    # a normal doc since 2026-10-08, so it shows up (and can be withdrawn) on
+    # its own, without touching the text-lesson consents.
+    for doc_type, cfg in public_documents().items():
         entry = latest.get(doc_type)
         roles = doc_roles(cfg)
         out[doc_type] = {
@@ -467,7 +499,7 @@ def status_for_student(
 
     docs = load_consent_docs()
     out: dict[str, dict[str, Any]] = {}
-    for doc_type, cfg in docs["documents"].items():
+    for doc_type, cfg in public_documents().items():
         entry = latest.get(doc_type)
         roles = doc_roles(cfg)
         out[doc_type] = {

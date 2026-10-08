@@ -202,6 +202,8 @@ function docText(docType: string, copy: ReturnType<typeof useLang>['copy']) {
       return { label: copy.consentPrivacy, desc: copy.consentPrivacyDesc };
     case 'chat_consent':
       return { label: copy.consentChat, desc: copy.consentChatDesc };
+    case 'voice_consent':
+      return { label: copy.consentVoice, desc: copy.consentVoiceDesc };
     case 'staff_data_processing':
       return { label: copy.consentStaffData, desc: copy.consentStaffDataDesc };
     default:

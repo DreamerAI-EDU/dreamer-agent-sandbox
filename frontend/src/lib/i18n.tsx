@@ -89,6 +89,10 @@ export interface Copy {
   consentDialogConfirm: string;
   consentChatEffect: string;
   consentMediaEffect: string;
+  // c1-13b voice input consent (voluntary, P1-P3 trial)
+  consentVoice: string;
+  consentVoiceDesc: string;
+  consentVoiceEffect: string;
   consentWithdrawSuccess: string;
   consentWithdrawFailed: string;
   // invite
@@ -305,6 +309,8 @@ export const copyEn: Copy = {
   consentMediaDesc: 'Optional — allow the use of child media in class materials.',
   consentChat: 'AI Chat Service Consent',
   consentChatDesc: 'Required — how AI chat messages are handled.',
+  consentVoice: 'Voice Input Consent',
+  consentVoiceDesc: 'Optional — how voice input is recorded and processed (the audio itself is never kept).',
   consentStaffData: 'Staff Data Processing Notice',
   consentStaffDataDesc: 'Required for staff — how you may access and handle student data.',
   consentRequired: 'Required',
@@ -323,6 +329,7 @@ export const copyEn: Copy = {
   consentDialogConfirm: 'Withdraw',
   consentChatEffect: 'AI chat will stop immediately for this child. No new AI chat session can start until you agree again.',
   consentMediaEffect: 'Media already collected will be taken down within 24 hours.',
+  consentVoiceEffect: 'Voice input stops immediately for this child. Text lessons are not affected.',
   consentWithdrawSuccess: 'Consent withdrawn.',
   consentWithdrawFailed: 'Withdrawal failed. Please try again.',
   inviteTitle: 'Welcome to Dreamer AI',
@@ -537,6 +544,8 @@ const copyHk: Copy = {
   consentMediaDesc: '可選 — 容許課堂教材使用小朋友嘅媒體。',
   consentChat: 'AI 對話服務同意書',
   consentChatDesc: '必需 — AI 對話內容嘅處理方式。',
+  consentVoice: '語音輸入同意書',
+  consentVoiceDesc: '可選 — 語音輸入嘅錄音同處理方式（錄音本身唔會保存）。',
   consentStaffData: '職員資料處理守則',
   consentStaffDataDesc: '職員必簽 — 查閱及處理學生資料之規範。',
   consentRequired: '必須',
@@ -555,6 +564,7 @@ const copyHk: Copy = {
   consentDialogConfirm: '確認撤回',
   consentChatEffect: '撤回後，呢位小朋友嘅 AI 對話會即時停止；要重新同意先可以再開始新對話。',
   consentMediaEffect: '已收集嘅媒體會喺 24 小時內下架。',
+  consentVoiceEffect: '呢位小朋友嘅語音輸入會即時停止；文字上堂唔受影響。',
   consentWithdrawSuccess: '已撤回同意。',
   consentWithdrawFailed: '撤回失敗，請再試一次。',
   inviteTitle: '歡迎加入 Dreamer AI',
@@ -767,6 +777,8 @@ const copyCn: Copy = {
   consentMediaDesc: '可选 — 允许课堂教材使用孩子的媒体。',
   consentChat: 'AI 对话服务同意书',
   consentChatDesc: '必需 — AI 对话内容的处理方式。',
+  consentVoice: '语音输入同意书',
+  consentVoiceDesc: '可选 — 语音输入的录制和处理方式（录音本身不会保存）。',
   consentStaffData: '职员数据处理守则',
   consentStaffDataDesc: '职员必签 — 你查阅和处理学生资料的规范。',
   consentRequired: '必须',
@@ -785,6 +797,7 @@ const copyCn: Copy = {
   consentDialogConfirm: '确认撤回',
   consentChatEffect: '撤回后，这位孩子的 AI 对话会立即停止；需要重新同意才能再次开始新对话。',
   consentMediaEffect: '已收集的媒体会在 24 小时内下架。',
+  consentVoiceEffect: '这位孩子的语音输入会立即停止；文字上课不受影响。',
   consentWithdrawSuccess: '已撤回同意。',
   consentWithdrawFailed: '撤回失败，请再试一次。',
   inviteTitle: '欢迎加入 Dreamer AI',

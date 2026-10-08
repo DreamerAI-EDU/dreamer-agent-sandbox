@@ -18,6 +18,8 @@ import {
 } from '../lib/curriculumMode';
 import { hasInflightTurn } from '../lib/chatWs';
 import type { StreamCleanup } from '../lib/chatWs';
+import { fetchVoiceConfig, type VoiceConfig } from '../lib/voice';
+import { VoiceMicButton } from '../components/kid/VoiceMicButton';
 import type { ChatStreamStatus, KidErrorKind } from '../lib/chatErrors';
 import { ERROR_COPY, RETRY_LABEL, STATUS_COPY, STOP_LABEL } from '../lib/chatErrors';
 import { StageLoader, type ActiveStage } from '../components/StageLoader';
@@ -196,6 +198,10 @@ export default function ChatPage() {
     null,
   );
   const [welcomeText, setWelcomeText] = useState<string | null>(null);
+  // c1-13b voice (P1-P3 trial): the server decides whether a mic exists at
+  // all (flag + band + signed consent + budget meters). Default is off, and
+  // every failure path leaves it off — a kid never sees a dead button.
+  const [voiceCfg, setVoiceCfg] = useState<VoiceConfig>({ enabled: false });
   // PR-D-c2 §3 - course mode for this visit, armed by the Welcome page
   // (?mode=curriculum) and dropped by the exit button. UI state only: no
   // week / slug / student id ever rides the URL (the badge and the week text
@@ -360,6 +366,24 @@ export default function ChatPage() {
       alive = false;
     };
   }, [profile.student, turns.length, copy]);
+
+  // c1-13b voice: ask the server once per mount whether this kid may see a
+  // mic. No client-side rule is ever consulted, so flipping the flag or
+  // withdrawing consent closes the button without a frontend change.
+  useEffect(() => {
+    let alive = true;
+    fetchVoiceConfig().then(
+      (cfg) => {
+        if (alive) setVoiceCfg(cfg);
+      },
+      () => {
+        if (alive) setVoiceCfg({ enabled: false });
+      },
+    );
+    return () => {
+      alive = false;
+    };
+  }, [profile.student]);
 
   // Mark the per-mask flag the moment the bubble renders.
   useEffect(() => {
@@ -798,6 +822,18 @@ export default function ChatPage() {
               aria-label={copy.placeholder}
               className="min-w-0 flex-1 rounded-full border border-white/15 bg-white/10 px-5 py-3 font-medium text-white outline-none placeholder:text-white/40 focus:border-white/40 disabled:opacity-50"
             />
+            {voiceCfg.enabled && (
+              // c1-13b: the transcript lands in the composer only — the child
+              // presses send, so a mis-heard word is never submitted alone.
+              <VoiceMicButton
+                lang={lang}
+                maxSeconds={voiceCfg.max_seconds ?? 60}
+                disabled={inputDisabled}
+                onTranscript={(text) =>
+                  setInput((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text))
+                }
+              />
+            )}
             <button
               type="submit"
               disabled={inputDisabled || !input.trim()}

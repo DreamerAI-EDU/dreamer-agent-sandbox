@@ -13,6 +13,14 @@
 // account-level NULL rows, latest row decides). Withdraw posts the 8-char
 // mask; the backend resolves it inside the parent's reachable set — the
 // full id never leaves the server (auth/api.py _consent_resolve_student).
+//
+// P0-a (2026-10-09) — the panel used to render a button only for `agreed`
+// rows, so a parent could never *create* consent from inside the app: the
+// voluntary voice_consent (mic stays hidden until signed) and any
+// withdrawn-then-changed-mind doc were dead ends. Every non-agreed row now
+// carries an independent "Sign" action, mirroring the withdraw path:
+// POST /api/consent/sign with the doc's *current* version (the status
+// response carries it, so the panel never hard-codes a version string).
 
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../../lib/api';
@@ -54,6 +62,8 @@ export function ParentConsentPanel({ studentId }: Props) {
   const [error, setError] = useState('');
   const [pendingDoc, setPendingDoc] = useState<WithdrawableDoc | null>(null);
   const [withdrawing, setWithdrawing] = useState(false);
+  const [pendingSign, setPendingSign] = useState<WithdrawableDoc | null>(null);
+  const [signing, setSigning] = useState(false);
   const [notice, setNotice] = useState('');
   const [noticeKind, setNoticeKind] = useState<'ok' | 'error'>('ok');
 
@@ -70,6 +80,8 @@ export function ParentConsentPanel({ studentId }: Props) {
   useEffect(() => {
     setDocuments(null);
     setNotice('');
+    setPendingDoc(null);
+    setPendingSign(null);
     void load();
   }, [load]);
 
@@ -91,7 +103,31 @@ export function ParentConsentPanel({ studentId }: Props) {
     }
   }, [copy.consentWithdrawFailed, copy.consentWithdrawSuccess, load, pendingDoc, studentId]);
 
+  // P0-a: the sign path needs the doc's current version — taken from the same
+  // status response that decides what gets rendered (single source of truth).
+  const runSign = useCallback(async () => {
+    if (!pendingSign) return;
+    const entry = documents?.[pendingSign];
+    if (!entry) return;
+    setSigning(true);
+    setNotice('');
+    try {
+      await api.consentSign(entry.doc_type, entry.current_version);
+      setNoticeKind('ok');
+      setNotice(copy.consentSignSuccess);
+      setPendingSign(null);
+      await load();
+    } catch {
+      setNoticeKind('error');
+      setNotice(copy.consentSignFailed);
+    } finally {
+      setSigning(false);
+    }
+  }, [copy.consentSignFailed, copy.consentSignSuccess, documents, load, pendingSign]);
+
   const pendingSpec = ROWS.find((r) => r.doc === pendingDoc) ?? null;
+  const pendingSignSpec = ROWS.find((r) => r.doc === pendingSign) ?? null;
+  const pendingSignVersion = pendingSign ? documents?.[pendingSign]?.current_version ?? '' : '';
 
   return (
     <section className="rounded-2xl border border-black/10 bg-white px-4 py-3">
@@ -123,20 +159,35 @@ export function ParentConsentPanel({ studentId }: Props) {
                     {status === 'withdrawn' && copy.consentWithdrawn}
                   </span>
                 </div>
-                {status === 'agreed' && (
+                {status === 'agreed' ? (
                   <button
                     type="button"
                     onClick={() => setPendingDoc(row.doc)}
-                    disabled={withdrawing}
+                    disabled={withdrawing || signing}
                     className="rounded-full border border-black/15 bg-white px-3 py-1 text-xs font-semibold text-[#00023D] transition-colors hover:border-[#00023D] disabled:opacity-50"
                   >
                     {copy.consentWithdrawBtn}
+                  </button>
+                ) : (
+                  // P0-a: unsigned / withdrawn rows get their own way in —
+                  // without this the voluntary voice_consent could only ever
+                  // be signed during signup, which never showed it at all.
+                  <button
+                    type="button"
+                    onClick={() => setPendingSign(row.doc)}
+                    disabled={withdrawing || signing}
+                    className="rounded-full bg-[#00023D] px-3 py-1 text-xs font-semibold text-white transition-colors hover:bg-[#00023D]/90 disabled:opacity-50"
+                  >
+                    {copy.consentSignBtn}
                   </button>
                 )}
               </li>
             );
           })}
         </ul>
+      )}
+      {documents && ROWS.every((row) => !documents[row.doc]) && (
+        <p className="mt-2 text-xs text-black/40">{copy.consentPanelEmpty}</p>
       )}
       {notice && (
         <p
@@ -170,6 +221,39 @@ export function ParentConsentPanel({ studentId }: Props) {
               className="rounded-full bg-[#00023D] px-4 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
             >
               {withdrawing ? copy.consentWithdrawingBtn : copy.consentDialogConfirm}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* P0-a: sign confirm — same shape as the withdraw dialog, but the
+          description names the document (+ its version) instead of a
+          consequence, because signing *grants* a capability. */}
+      <Dialog open={pendingSignSpec !== null} onOpenChange={(open) => !open && setPendingSign(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{copy.consentSignDialogTitle}</DialogTitle>
+            <DialogDescription className="pt-1">
+              {pendingSignSpec && copy[pendingSignSpec.labelKey]}
+              {pendingSignVersion && ` · ${pendingSignVersion}`}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2">
+            <button
+              type="button"
+              onClick={() => setPendingSign(null)}
+              disabled={signing}
+              className="rounded-full border border-black/15 bg-white px-4 py-1.5 text-sm font-semibold text-black/70 disabled:opacity-50"
+            >
+              {copy.consentDialogCancel}
+            </button>
+            <button
+              type="button"
+              onClick={() => void runSign()}
+              disabled={signing}
+              className="rounded-full bg-[#00023D] px-4 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
+            >
+              {signing ? copy.consentSigningBtn : copy.consentSignDialogConfirm}
             </button>
           </DialogFooter>
         </DialogContent>

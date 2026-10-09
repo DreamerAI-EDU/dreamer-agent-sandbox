@@ -3,7 +3,7 @@
 // used here and passed to the chat route (never stored in localStorage).
 
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { api, ApiError } from '../lib/api';
 import { useLang } from '../lib/i18n';
 import type { Student, User } from '../lib/types';
@@ -162,8 +162,20 @@ export function ParentHomePage() {
   return (
     <AppShell user={user}>
       <div className="mx-auto max-w-xl">
-        <h1 className="text-2xl font-semibold tracking-tight">{copy.homeTitle}</h1>
-        <p className="mt-1 text-sm text-black/50">{copy.homeSubtitle}</p>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight">{copy.homeTitle}</h1>
+            <p className="mt-1 text-sm text-black/50">{copy.homeSubtitle}</p>
+          </div>
+          {/* P0-b: consent can only be signed on the dashboard (/parent); the
+              only way in used to be typing the URL by hand. */}
+          <Link
+            to="/parent"
+            className="rounded-full border border-black/10 bg-white px-3 py-1.5 text-xs font-semibold text-[#00023D] transition-colors hover:border-[#00023D]"
+          >
+            {copy.consentPanelLink}
+          </Link>
+        </div>
 
         {students.length === 0 ? (
           <p className="mt-8 rounded-2xl border border-dashed border-black/10 p-8 text-center text-sm text-black/50">

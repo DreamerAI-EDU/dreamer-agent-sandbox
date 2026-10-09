@@ -52,7 +52,13 @@ SUPPORTED_PROVIDERS = ("azure", "deepgram")
 _AZURE_STT_PATH = "/speech/recognition/conversation/cognitiveservices/v1"
 _DEEPGRAM_URL = "https://api.deepgram.com/v1/listen"
 
-_DEFAULT_HTTP_TIMEOUT = 15.0
+#: The provider walks the whole clip before answering, so the wait grows with
+#: the segment: measured from the production host, a 30 s PCM clip takes ~12 s
+#: and the 60 s cap runs just as long. 15 s left a full-length press one slow
+#: round-trip away from a `stt_timeout`, which is the fault this constant now
+#: has room for. It bounds the relay, not the child: the callers still cap the
+#: segment itself at 60 s.
+_DEFAULT_HTTP_TIMEOUT = 30.0
 
 _config_cache: Optional[dict[str, Any]] = None
 

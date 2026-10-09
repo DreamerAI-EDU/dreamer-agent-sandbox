@@ -7,8 +7,20 @@
 //
 // Error discipline matches lib/api.ts: the server's `error` wording is shown
 // verbatim; the client never invents its own.
+//
+// WIRE FORMAT: what goes up is 16 kHz mono PCM WAV, never the recorder's own
+// container. MediaRecorder yields webm/opus (Chrome, Firefox) or mp4/aac
+// (Safari), and the provider's short-audio REST endpoint cannot decode webm:
+// it answers 200 "Success" with an EMPTY transcript instead of an error, so
+// the child sees the button work and get nothing back. We therefore decode
+// the finished clip in-page and re-encode it as PCM WAV (the format the
+// provider smoke test measured), which also lets the server read the exact
+// length from the header instead of trusting the client's milliseconds.
 
 import { ApiError } from './api';
+
+/** Provider-side sample rate for short-audio recognition. */
+const TARGET_SAMPLE_RATE = 16000;
 
 export type VoiceConfig = {
   enabled: boolean;
@@ -102,6 +114,63 @@ export function pickMimeType(): string {
   return '';
 }
 
+/** Little-endian 16-bit mono PCM WAV — the container the provider decodes. */
+function encodeWavPcm16(samples: Float32Array, sampleRate: number): Blob {
+  const header = 44;
+  const buffer = new ArrayBuffer(header + samples.length * 2);
+  const view = new DataView(buffer);
+  const ascii = (offset: number, text: string) => {
+    for (let i = 0; i < text.length; i += 1) view.setUint8(offset + i, text.charCodeAt(i));
+  };
+  ascii(0, 'RIFF');
+  view.setUint32(4, header - 8 + samples.length * 2, true);
+  ascii(8, 'WAVE');
+  ascii(12, 'fmt ');
+  view.setUint32(16, 16, true); // PCM fmt chunk size
+  view.setUint16(20, 1, true); // format = PCM
+  view.setUint16(22, 1, true); // mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true); // byte rate
+  view.setUint16(32, 2, true); // block align
+  view.setUint16(34, 16, true); // bits per sample
+  ascii(36, 'data');
+  view.setUint32(40, samples.length * 2, true);
+  let offset = header;
+  for (let i = 0; i < samples.length; i += 1) {
+    const sample = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+    offset += 2;
+  }
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
+/**
+ * Decode the recorder's clip and re-encode it as 16 kHz mono PCM WAV.
+ *
+ * Throws when the browser cannot decode its own recording — the caller
+ * surfaces that as a plain failure notice rather than uploading a container
+ * the provider would silently transcribe as empty.
+ */
+async function clipToWav16k(clip: Blob): Promise<Blob> {
+  const bytes = await clip.arrayBuffer();
+  const AudioCtx: typeof AudioContext =
+    window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+  const decodeCtx = new AudioCtx();
+  try {
+    const decoded = await decodeCtx.decodeAudioData(bytes);
+    const frames = Math.max(1, Math.round(decoded.duration * TARGET_SAMPLE_RATE));
+    const offline = new OfflineAudioContext(1, frames, TARGET_SAMPLE_RATE);
+    const source = offline.createBufferSource();
+    source.buffer = decoded;
+    source.connect(offline.destination);
+    source.start();
+    const rendered = await offline.startRendering();
+    return encodeWavPcm16(rendered.getChannelData(0), TARGET_SAMPLE_RATE);
+  } finally {
+    void decodeCtx.close();
+  }
+}
+
 export type RecorderHandle = {
   stop: () => void;
 };
@@ -109,10 +178,14 @@ export type RecorderHandle = {
 /**
  * Start recording, auto-stop at `maxSeconds`, resolve with the clip + its
  * measured length. Push-to-talk: the caller stops it on release too.
+ *
+ * `onAutoStop` always receives a PCM WAV blob; `onError` fires instead when
+ * the clip cannot be converted (nothing is uploaded in that case).
  */
 export async function startRecording(
   maxSeconds: number,
   onAutoStop: (clip: Blob, durationMs: number) => void,
+  onError?: (error: unknown) => void,
 ): Promise<RecorderHandle> {
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   const mimeType = pickMimeType();
@@ -129,7 +202,14 @@ export async function startRecording(
     const durationMs = Date.now() - startedAt;
     release();
     if (chunks.length === 0) return;
-    onAutoStop(new Blob(chunks, { type: recorder.mimeType || 'audio/webm' }), durationMs);
+    const raw = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+    void clipToWav16k(raw).then(
+      (wav) => onAutoStop(wav, durationMs),
+      (error: unknown) => {
+        if (onError) onError(error);
+        else onAutoStop(raw, durationMs);
+      },
+    );
   });
 
   const timer = window.setTimeout(() => {

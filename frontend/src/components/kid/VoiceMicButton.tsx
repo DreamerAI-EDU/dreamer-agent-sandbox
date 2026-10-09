@@ -104,15 +104,23 @@ export function VoiceMicButton({
     if (disabled || busy || recording) return;
     setNotice(null);
     try {
-      handleRef.current = await startRecording(maxSeconds, (clip, durationMs) => {
-        void finish(clip, durationMs);
-      });
+      handleRef.current = await startRecording(
+        maxSeconds,
+        (clip, durationMs) => {
+          void finish(clip, durationMs);
+        },
+        // Clip could not be turned into the upload format — nothing was sent.
+        () => {
+          setRecording(false);
+          setNotice(labels.failed);
+        },
+      );
       setRecording(true);
     } catch {
       setRecording(false);
       setNotice(labels.micDenied);
     }
-  }, [busy, disabled, finish, labels.micDenied, maxSeconds, recording]);
+  }, [busy, disabled, finish, labels.failed, labels.micDenied, maxSeconds, recording]);
 
   const end = useCallback(() => {
     handleRef.current?.stop();

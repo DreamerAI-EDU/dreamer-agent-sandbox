@@ -95,6 +95,16 @@ export interface Copy {
   consentVoiceEffect: string;
   consentWithdrawSuccess: string;
   consentWithdrawFailed: string;
+  // P0-a: sign entry for not-yet-signed / withdrawn documents in the panel
+  consentSignBtn: string;
+  consentSigningBtn: string;
+  consentSignDialogTitle: string;
+  consentSignDialogConfirm: string;
+  consentSignSuccess: string;
+  consentSignFailed: string;
+  // P0-b: /home header link to the consent page
+  consentPanelLink: string;
+  consentPanelEmpty: string;
   // invite
   inviteTitle: string;
   inviteSubtitle: string;
@@ -332,6 +342,14 @@ export const copyEn: Copy = {
   consentVoiceEffect: 'Voice input stops immediately for this child. Text lessons are not affected.',
   consentWithdrawSuccess: 'Consent withdrawn.',
   consentWithdrawFailed: 'Withdrawal failed. Please try again.',
+  consentSignBtn: 'Sign',
+  consentSigningBtn: 'Signing…',
+  consentSignDialogTitle: 'Sign this consent?',
+  consentSignDialogConfirm: 'Sign',
+  consentSignSuccess: 'Consent signed.',
+  consentSignFailed: 'Signing failed. Please try again.',
+  consentPanelLink: 'Consent settings',
+  consentPanelEmpty: 'No consent documents to show.',
   inviteTitle: 'Welcome to Dreamer AI',
   inviteSubtitle: 'Set your password to activate your parent account.',
   inviteName: 'Child',
@@ -567,6 +585,14 @@ const copyHk: Copy = {
   consentVoiceEffect: '呢位小朋友嘅語音輸入會即時停止；文字上堂唔受影響。',
   consentWithdrawSuccess: '已撤回同意。',
   consentWithdrawFailed: '撤回失敗，請再試一次。',
+  consentSignBtn: '簽署',
+  consentSigningBtn: '簽署中…',
+  consentSignDialogTitle: '確認簽署呢份同意書？',
+  consentSignDialogConfirm: '確認簽署',
+  consentSignSuccess: '已記錄簽署。',
+  consentSignFailed: '簽署失敗，請再試一次。',
+  consentPanelLink: '同意書管理',
+  consentPanelEmpty: '暫無需要處理嘅同意書。',
   inviteTitle: '歡迎加入 Dreamer AI',
   inviteSubtitle: '設定密碼即可啟用家長帳號。',
   inviteName: '小朋友',
@@ -800,6 +826,14 @@ const copyCn: Copy = {
   consentVoiceEffect: '这位孩子的语音输入会立即停止；文字上课不受影响。',
   consentWithdrawSuccess: '已撤回同意。',
   consentWithdrawFailed: '撤回失败，请再试一次。',
+  consentSignBtn: '签署',
+  consentSigningBtn: '签署中…',
+  consentSignDialogTitle: '确认签署这份同意书？',
+  consentSignDialogConfirm: '确认签署',
+  consentSignSuccess: '已记录签署。',
+  consentSignFailed: '签署失败，请再试一次。',
+  consentPanelLink: '同意书管理',
+  consentPanelEmpty: '暂无需处理的同意书。',
   inviteTitle: '欢迎加入 Dreamer AI',
   inviteSubtitle: '设置密码即可启用家长账号。',
   inviteName: '孩子',

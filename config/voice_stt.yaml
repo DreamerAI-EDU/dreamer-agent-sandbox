@@ -1,4 +1,4 @@
-# c1-13b Phase 1 — Voice input (P1-P3 trial) relay configuration.
+# c1-13b Phase 1 — Voice input (P1–S3, all bands) relay configuration.
 #
 # Boss-signed 實施令 2026-10-04 (Azure main / Deepgram dormant). No secrets
 # live here: both provider keys stay in the host .env (AZURE_SPEECH_KEY /
@@ -9,9 +9,10 @@ feature_flag:
   # trial only the test accounts are enabled (env VOICE_P1P3_ENABLED=1 can
   # flip a single environment without a code change).
   voice_p1p3: false
-  # Only the P1-P3 band may see the mic. The band is read from the student
-  # record server-side — a URL query param is never trusted for this.
-  bands: ["P1-P3"]
+  # Every band the invite flow can issue may see the mic (P1-P3 / P4-P6 /
+  # S1-S3). The band is read from the student record server-side — a URL
+  # query param is never trusted for this.
+  bands: ["P1-P3", "P4-P6", "S1-S3"]
 
 stt:
   provider: azure            # azure | deepgram  (env STT_PROVIDER overrides)

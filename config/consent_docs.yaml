@@ -35,10 +35,14 @@ documents:
     roles: ["parent"]
     title_zh: "AI 對話服務同意書"
     title_en: "AI Chat Service Consent"
-  # c1-13b Phase 1 - voice input (P1-P3 trial). LANDED 2026-10-08: the copy was
+  # c1-13b Phase 1 - voice input (P1-S3, all bands). LANDED 2026-10-08: the copy
+  # was
   # approved and shipped as a new section of the EXISTING signup consent page
   # (no separate flow), so this is a normal, parent-visible document now —
   # /legal/voice-consent carries the text and parents tick it in the app.
+  # SCOPE WIDENED 2026-10-09 (v2026-10-09): the "P1-P3 trial" sentence in all
+  # three languages became a P1-S3 availability sentence; no new translation,
+  # one sentence per language, effective date moved to 9 October 2026.
   # It keeps its OWN doc_type on purpose: one registry row per document is what
   # makes voice revocable on its own (a parent may stop the mic and keep the
   # text-only service; the withdrawn row is what the mic gate reads).
@@ -47,7 +51,7 @@ documents:
   # default-deny mic gate (auth/voice_quota.py) is what keeps the microphone
   # off until a current-version agreed row exists for that child.
   voice_consent:
-    current_version: "v2026-10-08"
+    current_version: "v2026-10-09"
     required: false         # 自願：唔剔都註冊到（mic gate 另有 default-deny）
     roles: ["parent"]
     title_zh: "語音輸入同意書"

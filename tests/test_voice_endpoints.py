@@ -1,4 +1,4 @@
-"""c1-13b Phase 1 — voice input endpoints (P1-P3 trial).
+"""c1-13b Phase 1 — voice input endpoints (P1–S3, all bands).
 
 Spec under test (boss 實施令 2026-10-04):
 
@@ -41,7 +41,14 @@ from auth.api import build_app  # noqa: E402
 
 HEADERS = {"X-Requested-With": "XMLHttpRequest"}
 CONFIRM_PASSWORD = "test-pass-parent1"
+#: Default band for the gate tests; the band matrix is exercised separately.
 BAND = "P1-P3"
+#: Every band the invite flow can issue — must equal auth.students.AGE_BANDS
+#: and the raw values in the students table.
+BANDS = ("P1-P3", "P4-P6", "S1-S3")
+#: Not an issuable band: the invite API refuses it, so no student can ever
+#: carry it — the gate must still answer "band", not crash or open.
+OUT_OF_SET_BAND = "S4-S6"
 TRANSCRIPT = "tell me why the sky is blue"
 
 
@@ -101,6 +108,20 @@ def _full_student_id() -> str:
         conn.close()
     assert row is not None, "no student in test DB"
     return row[0]
+
+
+def _student_row(student_id: str) -> dict:
+    """The columns voice_quota.access_decision reads (DAO row shape)."""
+    conn = sqlite3.connect(os.environ["DREAMER_DB_PATH"])
+    try:
+        row = conn.execute(
+            "SELECT id, age_band, parent_id FROM students WHERE id = ?",
+            (student_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None, "no student in test DB"
+    return {"id": row[0], "age_band": row[1], "parent_id": row[2]}
 
 
 def _latest_invite_token() -> str:
@@ -288,15 +309,73 @@ async def test_signed_consent_opens_the_button_with_segment_cap(
     assert body["max_upload_bytes"] == 2097152
 
 
+# ---------------------------------------------------------------------------
+# 1b. The band gate (2026-10-09 延伸令: three bands open, nothing else)
+# ---------------------------------------------------------------------------
+
 @pytest.mark.asyncio
-async def test_band_outside_allowed_set_means_no_button(
-    client, teacher_invite, monkeypatch
+@pytest.mark.parametrize("band", BANDS)
+async def test_every_allowed_band_gets_a_button(
+    client, teacher_invite, monkeypatch, band
 ):
+    """P1-P3 / P4-P6 / S1-S3 all open the mic — the v2026-10-09 widening."""
     _enable_flag(monkeypatch)
-    kid = await _kid_session(client, band="P4-P6")
+    kid = await _kid_session(client, band=band)
     _mark_consent(_full_student_id())
     body = await (await client.get("/api/voice/config", headers=_kid(kid))).json()
+    assert body["enabled"] is True
+    assert body["max_seconds"] == 60
+    assert body["daily_remaining_seconds"] == 900
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("band", BANDS)
+async def test_every_allowed_band_can_transcribe(
+    client, teacher_invite, monkeypatch, stub_stt, band
+):
+    """Same gate on the spend path: each band gets text out of one clip."""
+    _enable_flag(monkeypatch)
+    kid = await _kid_session(client, band=band)
+    student_id = _full_student_id()
+    _mark_consent(student_id)
+    resp = await client.post(
+        "/api/voice/transcribe",
+        data=_clip_form(_wav(2), declared_ms=2000),
+        headers=_kid(kid),
+    )
+    assert resp.status == 200, await resp.text()
+    assert (await resp.json())["text"] == TRANSCRIPT
+    assert voice_quota.student_daily_seconds(student_id) == 2
+
+
+def test_band_outside_allowed_set_means_no_button(monkeypatch):
+    """A band that is not in the set → allowed=False, reason 'band'."""
+    _enable_flag(monkeypatch)
+    assert OUT_OF_SET_BAND not in voice_quota.allowed_bands()
+    access = voice_quota.access_decision(
+        {"id": "s4smoke", "age_band": OUT_OF_SET_BAND, "parent_id": None}
+    )
+    assert access.enabled is False
+    assert access.reason == "band"
+
+
+@pytest.mark.asyncio
+async def test_band_dropped_from_config_closes_the_button(
+    client, teacher_invite, monkeypatch
+):
+    """The band is read from the student record server-side, so narrowing the
+    config closes the button again — and the reason never reaches the browser."""
+    _enable_flag(monkeypatch)
+    monkeypatch.setattr(voice_quota, "allowed_bands", lambda: {"P1-P3"})
+    kid = await _kid_session(client, band="S1-S3")
+    student_id = _full_student_id()
+    _mark_consent(student_id)
+    resp = await client.get("/api/voice/config", headers=_kid(kid))
+    assert resp.status == 200
+    body = await resp.json()
     assert body == {"enabled": False}
+    assert "reason" not in body
+    assert voice_quota.access_decision(_student_row(student_id)).reason == "band"
 
 
 @pytest.mark.asyncio

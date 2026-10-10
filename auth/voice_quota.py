@@ -1,4 +1,4 @@
-"""c1-13b Phase 1 — voice cost gates + mic access gate (P1-P3 trial).
+"""c1-13b Phase 1 — voice cost gates + mic access gate (P1–S3, all bands).
 
 Three gates, per the boss-signed 實施令 2026-10-04:
 
@@ -110,7 +110,9 @@ def flag_enabled() -> bool:
 
 def allowed_bands() -> set[str]:
     cfg = voice_stt.load_config().get("feature_flag") or {}
-    bands = cfg.get("bands") or ["P1-P3"]
+    # Fallback = every band the invite flow can issue (auth.students.AGE_BANDS):
+    # a config that loses its bands key must not silently narrow the trial.
+    bands = cfg.get("bands") or ["P1-P3", "P4-P6", "S1-S3"]
     return {str(b) for b in bands}
 
 

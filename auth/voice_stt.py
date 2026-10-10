@@ -1,4 +1,4 @@
-"""c1-13b Phase 1 — Voice STT relay layer (P1-P3 trial).
+"""c1-13b Phase 1 — Voice STT relay layer (P1–S3, all bands).
 
 Boss-signed 實施令 2026-10-04: Azure Speech (East Asia) is the main provider
 (EN WER 1.11%, mixed-language CER 9.53% — 2.3x better than Deepgram), Deepgram

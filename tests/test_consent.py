@@ -159,7 +159,7 @@ async def test_docs_registry_and_legal_pages_pair_with_yaml(
     # voice separately revocable from the text-only service). It stays
     # voluntary: required is False, so declining it never blocks signup.
     vc = documents["voice_consent"]
-    assert vc["current_version"] == "v2026-10-08"
+    assert vc["current_version"] == "v2026-10-09"
     assert vc["required"] is False
     assert vc["roles"] == ["parent"]
     assert vc["title_zh"] == "語音輸入同意書"
@@ -243,9 +243,14 @@ async def test_docs_registry_and_legal_pages_pair_with_yaml(
     vc_page = await client.get("/legal/voice-consent")
     assert vc_page.status == 200
     vc_html = await vc_page.text()
-    assert "v2026-10-08" in vc_html
+    assert "v2026-10-09" in vc_html
     assert "{{VERSION}}" not in vc_html
-    assert "Effective Date 生效日期：8 October 2026" in vc_html
+    assert "Effective Date 生效日期：9 October 2026" in vc_html
+    # 2026-10-09 scope widening: all three languages now say P1–S3
+    # availability. The old "P1–P3 trial" sentence must be gone — a signed
+    # legal text may never describe a narrower trial than the code opens.
+    assert "P1–S3" in vc_html
+    assert "P1–P3" not in vc_html
     assert "原音即毀" in vc_html
     assert "語音輸入同意書" in vc_html
     assert "info@dreamer-aiedu.com" in vc_html
@@ -1093,7 +1098,7 @@ async def test_teacher_sign_and_withdraw_parent_docs_forbidden(
         ("privacy_policy", "v2026-08-26"),
         ("media_consent", "v2026-08-26"),
         ("chat_consent", "v2026-09-08"),
-        ("voice_consent", "v2026-10-08"),
+        ("voice_consent", "v2026-10-09"),
     ):
         sign = await client.post(
             "/api/consent/sign",

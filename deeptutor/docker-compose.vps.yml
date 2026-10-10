@@ -1,0 +1,171 @@
+# =============================================================================
+# AUDIT MIRROR — VPS production compose
+# =============================================================================
+# Mirrors the live VPS compose at /opt/dreamer/deeptutor/docker-compose.yml
+# (captured 2026-10-10, sha256 18e3933d0d0b9d94774c3408a99897626785d5ced836e3e1922365ff69b3f375).
+#
+# Dual-track policy (owner ruling, 2026-10-10):
+#   1. THIS FILE is the upstream SoT-mirror / audit trail. Any future change to
+#      the VPS compose is made here first, through a PR + owner sign-off.
+#   2. The live path /opt/dreamer/deeptutor/docker-compose.yml is an INTENTIONAL
+#      local modification on the host. Never `git checkout` / `git reset` /
+#      `git restore` that path — doing so re-publishes host ports to the
+#      loopback and is a security regression.
+#
+# Intentional differences vs deeptutor/docker-compose.yml (local/dev variant):
+#   - no host port publishes at all (public ingress only via Caddy 80/443)
+#   - `ollama` runs as a compose service; embeddings base_url -> http://ollama:11434
+#   - ./user_data bind-mounted at /app/data/user
+#   - `dreamer-api` service disabled here; the live API container is managed
+#     outside this file by /root/dreamer-deploy (project dreamer-deploy)
+#
+# Provenance of this capture: host repo was ff-only fast-forwarded
+# 3a14919 -> e99ce65 on 2026-10-10; the live compose file was restored as-is
+# afterwards (this mirror is the only place it is version-controlled).
+# =============================================================================
+
+# Dreamer AI — Phase 7 W5 VPS Compose (v1.1)
+# Cloud differences vs local: NO host port publishes at all (public ingress only Caddy 80/443);
+# ollama runs as container service (no publish); model_catalog base_url -> http://ollama:11434
+
+services:
+
+  # --- DeepTutor (Core AI Engine) ---
+  deeptutor:
+    image: hkuds/deeptutor:v1.5.8
+    container_name: dreamer-deeptutor
+    restart: unless-stopped
+    # NOTE: no ports — container-network only (Caddy/Hermes reach it by name)
+    volumes:
+      # Shared KBs (read-only) — SoT sync source, immutable to the container.
+      # Compose file lives in deeptutor/, so repo-root SoT is ../knowledge_bases.
+      # Fixed 0b7c164 split: previously pointed at deeptutor/knowledge_bases
+      # (stale pre-consolidation copies) instead of the real repo-root SoT.
+      - ../knowledge_bases:/app/data/kb_sot:ro
+      # KB root (writable): kb_config.json, metadata.json, provider indexes.
+      # Single-direction discipline: host SoT -> robocopy -> kb_runtime.
+      - ./kb_runtime:/app/data/knowledge_bases
+      # Model catalog (OpenRouter profile, read-only)
+      - ./settings:/app/data/user/settings
+      # P1: Dibi self-identity prompt overrides (read-only, PR #77)
+      - ./prompt_overrides/en/agentic_chat.yaml:/app/deeptutor/agents/chat/prompts/en/agentic_chat.yaml:ro
+      - ./prompt_overrides/zh/agentic_chat.yaml:/app/deeptutor/agents/chat/prompts/zh/agentic_chat.yaml:ro
+      - ./prompt_overrides/en/chat_agent.yaml:/app/deeptutor/agents/chat/prompts/en/chat_agent.yaml:ro
+      - ./prompt_overrides/zh/chat_agent.yaml:/app/deeptutor/agents/chat/prompts/zh/chat_agent.yaml:ro
+      - ./user_data:/app/data/user
+      # Ephemeral workspaces (per-student, auto-cleaned after 24h)
+      - deeptutor_workspaces:/app/data/workspaces
+      # Model weights cache
+      - deeptutor_models:/app/models
+    environment:
+      - DEEPTUTOR_HOST=0.0.0.0
+      - DEEPTUTOR_PORT=8765
+      - DEEPTUTOR_WS_ENABLED=true
+      - DEEPTUTOR_MAX_CONCURRENT=50
+      - DEEPTUTOR_WORKSPACE_ROOT=/app/data/workspaces
+      # LLM configuration — OpenRouter (HK-accessible via sk-or-v1- key)
+      - LLM_PROVIDER=${LLM_PROVIDER:-openrouter}
+      - LLM_MODEL=${LLM_MODEL:-deepseek/deepseek-chat}
+      - LLM_API_KEY=${OPENROUTER_API_KEY}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://openrouter.ai/api/v1}
+      # Embedding model
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-BAAI/bge-m3}
+      # Session settings
+      - SESSION_TYPE=ephemeral              # v1: no persistent memory
+      - WORKSPACE_TTL_HOURS=24              # Cleanup after 24h
+      - WORKSPACE_INACTIVE_DAYS=90          # v2: persistent cleanup threshold
+    healthcheck:
+      test: ["CMD", "python3", "/app/healthcheck.py"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - dreamer-net
+
+  # --- Dreamer Database (PostgreSQL) ---
+  dreamer-db:
+    image: postgres:16-alpine
+    container_name: dreamer-db
+    restart: unless-stopped
+    # NOTE: no ports — container-network only
+    volumes:
+      - dreamer_db_data:/var/lib/postgresql/data
+      # Auto-run schema on first init
+      - ./dreamer_db_schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    environment:
+      - POSTGRES_USER=${DB_USER:-dreamer}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=${DB_NAME:-dreamer}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-dreamer} -d ${DB_NAME:-dreamer}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dreamer-net
+
+  # --- Redis (Session cache + rate limiting) ---
+  dreamer-redis:
+    image: redis:7-alpine
+    container_name: dreamer-redis
+    restart: unless-stopped
+    # NOTE: no ports — container-network only
+    volumes:
+      - dreamer_redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - dreamer-net
+
+  # --- Ollama (embedding service, container-network only) ---
+  ollama:
+    image: ollama/ollama:latest
+    container_name: dreamer-ollama
+    restart: unless-stopped
+    # NOTE: no ports — container-network only; reached as http://ollama:11434
+    environment:
+      - OLLAMA_MAX_LOADED_MODELS=1         # unload idle models, save RAM (8GB rule)
+    volumes:
+      - ollama_models:/root/.ollama
+    networks:
+      - dreamer-net
+
+  # --- Dreamer Auth API (W2) --- [F1 DISABLED 2026-09-14]
+  # 此 service 定義已停用（原 image tag 4b92054，container_name 與 live api 撞名）。
+  # live api 由 /root/dreamer-deploy（project dreamer-deploy）管理，tag 見該目錄 compose。
+  # 保留原文於下方註解，僅為歷史記錄；日後 compose 統一管理時再清理。
+#   # --- Dreamer Auth API (W2) ---
+#   dreamer-api:
+#     image: ghcr.io/dreamerai-edu/dreamer-api:4b92054
+#     container_name: dreamer-api
+#     env_file: ./.env
+#     environment:
+#       - DREAMER_DB_PATH=/data/dreamer.db
+#       - DREAMER_AUDIT_LOG_PATH=/data/audit_log.jsonl
+#       - DREAMER_FRONTEND_BASE_URL=https://app.dreamer-aiedu.com
+#       - SAFETY_EMAIL_FROM=info@dreamer-aiedu.com
+#       - PYTHONUNBUFFERED=1
+#     ports:
+#       - 127.0.0.1:8000:8000
+#     volumes:
+#       - dreamer_api_data:/data
+#     restart: unless-stopped
+#     networks:
+#       - dreamer-net
+#
+volumes:
+  deeptutor_workspaces:
+  deeptutor_models:
+  dreamer_db_data:
+  dreamer_redis_data:
+  ollama_models:
+  dreamer_api_data:
+
+networks:
+  dreamer-net:
+    driver: bridge

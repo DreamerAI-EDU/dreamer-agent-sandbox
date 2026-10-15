@@ -65,6 +65,47 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_parent_reports_one_pending
     ON parent_reports(student_id, class_id) WHERE status = 'pending_review';
 """
 
+# PR-2 teacher score audit (design book v1.1 §4.4, boss work order 2026-10-15).
+# Canonical DDL lives in migrations/phase8h_teacher_score_audit.sql; mirrored
+# here (pairing-test convention) so ensure_schema() creates it on any DB, old
+# or fresh — additive and brand-new, no ALTER, no deploy window.
+# Append-only by construction (evidence, never an editable record):
+# UPDATE/DELETE are blocked at the DB by triggers, same discipline as
+# ws_chat_relay_audit (phase8f). Red-line 8: audit rows carry only the 8-char
+# student mask (never the full student id) plus the assessment_logs row id.
+_TEACHER_SCORE_AUDIT_DDL = """\
+CREATE TABLE IF NOT EXISTS teacher_score_audit (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_mask  TEXT NOT NULL,
+    week_no       INTEGER NOT NULL,
+    skill_code    TEXT NOT NULL,
+    old_score     INTEGER,
+    old_evidence  TEXT NOT NULL DEFAULT '',
+    assessment_id INTEGER NOT NULL DEFAULT 0,
+    replaced_by   TEXT NOT NULL,
+    replaced_at   TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_teacher_score_audit_key
+    ON teacher_score_audit(student_mask, week_no, skill_code);
+
+CREATE INDEX IF NOT EXISTS idx_teacher_score_audit_assessment
+    ON teacher_score_audit(assessment_id);
+
+CREATE TRIGGER IF NOT EXISTS teacher_score_audit_no_update
+BEFORE UPDATE ON teacher_score_audit
+BEGIN
+    SELECT RAISE(ABORT, 'teacher_score_audit is append-only (no UPDATE)');
+END;
+
+CREATE TRIGGER IF NOT EXISTS teacher_score_audit_no_delete
+BEFORE DELETE ON teacher_score_audit
+BEGIN
+    SELECT RAISE(ABORT, 'teacher_score_audit is append-only (no DELETE)');
+END;
+"""
+
+
 # Mirrors migrations/phase8_auth.sql (must be kept in sync; the schema-pairing
 # test asserts the live PRAGMA output against the SQL file).
 _DDL = """\
@@ -320,7 +361,7 @@ CREATE TABLE IF NOT EXISTS voice_month_meter (
     alerted_at  TEXT,
     updated_at  TEXT NOT NULL
 );
-""" + _PR_PARENT_REPORTS_DDL
+""" + _PR_PARENT_REPORTS_DDL + _TEACHER_SCORE_AUDIT_DDL
 
 
 def _db_path() -> str:

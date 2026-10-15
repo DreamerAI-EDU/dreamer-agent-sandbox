@@ -177,6 +177,29 @@ def teacher_teaches_student(teacher_id: str, student_id: str) -> bool:
         conn.close()
 
 
+def student_in_class_confirmed(class_id: str, student_id: str) -> bool:
+    """True when the student is a confirmed member of exactly this class.
+
+    PR-2 scoring ownership (设计书 v1.1 §4.4): 逐生校验 — the API layer first
+    proves the class belongs to the session teacher, then this helper proves
+    the student is a CONFIRMED member of that class (pending invitations are
+    not yet scoreable students). A student who exists but sits in a different
+    class is not reachable here, so cross-class scoring collapses to 403.
+    """
+    db.ensure_schema()
+    conn = db.connect()
+    try:
+        cur = conn.execute(
+            "SELECT 1 FROM class_students "
+            "WHERE class_id = ? AND student_id = ? AND status = 'confirmed' "
+            "LIMIT 1",
+            (class_id, student_id),
+        )
+        return cur.fetchone() is not None
+    finally:
+        conn.close()
+
+
 def list_students_for_teacher(teacher_id: str) -> list[Any]:
     """Students in any class owned by the teacher (deduplicated)."""
     db.ensure_schema()

@@ -45,6 +45,7 @@ from . import db
 from . import payments as payments_mod
 from . import reports as reports_mod
 from . import safety as safety_mod
+from . import scores as scores_mod
 from . import student_auth as student_auth_mod
 from . import students as students_mod
 from . import voice_quota
@@ -154,7 +155,7 @@ async def _read_json(request: web.Request) -> Optional[dict[str, Any]]:
 
 @web.middleware
 async def csrf_guard(request: web.Request, handler):
-    if request.method == "POST":
+    if request.method in ("POST", "PUT"):
         path = request.path
         protected = (
             path.startswith("/api/auth/")
@@ -1819,6 +1820,115 @@ async def handle_teacher_student_progress(request: web.Request) -> web.Response:
 
 
 # ---------------------------------------------------------------------------
+# PR-2 teacher weekly scoring (设计书 v1.1 §4.4, boss work order 2026-10-15)
+# ---------------------------------------------------------------------------
+
+
+async def handle_teacher_score_put(request: web.Request) -> web.Response:
+    """PUT /api/teacher/scores — weekly teacher score write (PR-2, §4.4).
+
+    Teacher-only. Idempotent overwrite: re-scoring the same
+    (student_id, week_no, skill_code) updates the existing row — the old
+    value is appended to the append-only teacher_score_audit first, never
+    silently discarded (revoke via score_0_3=null clears the score the same
+    way). The student's age_band is read from the students table
+    server-side, never trusted from the client.
+
+    Boundary violations (week_no / skill_code / score_0_3 / evidence length)
+    are rejected at the API layer with 422 and write nothing — the DB CHECK
+    is the last line, not the first. Cross-class / unowned-class attempts
+    are the unified 403 and WARNING-logged (same discipline as class
+    pending). Responses carry only the 8-char student mask.
+    """
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+    if user["role"] != "teacher":
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    payload = await _read_json(request)
+    if payload is None:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    student_id = (payload.get("student_id") or "").strip()
+    class_id = (payload.get("class_id") or "").strip()
+    week_no = payload.get("week_no")
+    skill_code = (payload.get("skill_code") or "").strip().upper()
+    score = payload.get("score_0_3")
+    evidence = payload.get("evidence_text")
+
+    # ---- API-layer boundary gate (422; DB CHECK is the last line) ----
+    if not student_id or not class_id:
+        return web.json_response(_ERR_INVALID, status=422)
+    if isinstance(week_no, bool) or not isinstance(week_no, (int, float)):
+        return web.json_response(_ERR_INVALID, status=422)
+    if isinstance(week_no, float) and not week_no.is_integer():
+        return web.json_response(_ERR_INVALID, status=422)
+    week_no = int(week_no)
+    if week_no < scores_mod.WEEK_MIN or week_no > scores_mod.WEEK_MAX:
+        return web.json_response(_ERR_INVALID, status=422)
+    if skill_code not in scores_mod.SKILL_CODES:
+        return web.json_response(_ERR_INVALID, status=422)
+    if score is not None:
+        if isinstance(score, bool) or not isinstance(score, int):
+            return web.json_response(_ERR_INVALID, status=422)
+        if score < scores_mod.SCORE_MIN or score > scores_mod.SCORE_MAX:
+            return web.json_response(_ERR_INVALID, status=422)
+    if evidence is not None:
+        if not isinstance(evidence, str):
+            return web.json_response(_ERR_INVALID, status=422)
+        if len(evidence) > scores_mod.EVIDENCE_MAX_CHARS:
+            return web.json_response(_ERR_INVALID, status=422)
+    else:
+        evidence = ""
+
+    # ---- ownership: class owned by the teacher + student confirmed ----
+    cls = classes_mod.get_class_by_id(class_id)
+    if cls is None or cls["teacher_id"] != user["id"]:
+        _log_security_warning(
+            "teacher_score_cross_teacher",
+            user_id=user["id"],
+            target_id=class_id,
+            detail="attempted to score a class owned by another teacher",
+        )
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+    if not classes_mod.student_in_class_confirmed(class_id, student_id):
+        _log_security_warning(
+            "teacher_score_student_not_in_class",
+            user_id=user["id"],
+            target_id=student_id[:STUDENT_ID_MASK_LEN],
+            detail="attempted to score a student outside the confirmed roster",
+        )
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+    student = students_mod.get_student_by_id(student_id)
+    if student is None:
+        # unified 403 — a missing student id must not be distinguishable
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    result = scores_mod.upsert_teacher_score(
+        student_id=student_id,
+        class_id=class_id,
+        week_no=week_no,
+        skill_code=skill_code,
+        score=score,
+        evidence=evidence,
+        teacher_id=user["id"],
+        age_band=student["age_band"],
+        lang_code=student["lang_code"],
+    )
+    return web.json_response(
+        {
+            "ok": True,
+            "student_id": _mask_student_id(student_id),
+            "week_no": week_no,
+            "skill_code": skill_code,
+            "status": result["status"],
+            "assessment_log_id": result["id"],
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
 # W4 Portfolio API (PR-A) — kid view + parent view + single share_card
 # ---------------------------------------------------------------------------
 
@@ -2957,6 +3067,8 @@ def build_app() -> web.Application:
     app.router.add_get(
         "/api/teacher/student/{id}/progress", handle_teacher_student_progress
     )
+    # PR-2 — teacher weekly scoring write (设计书 v1.1 §4.4)
+    app.router.add_put("/api/teacher/scores", handle_teacher_score_put)
     # W4 PR-A — portfolio surfaces (kid view + parent view + single share_card)
     app.router.add_get("/api/student/portfolio", handle_student_portfolio)
     app.router.add_get(

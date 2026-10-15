@@ -339,8 +339,14 @@ class ParentReportAgent:
         snapshots: List[dict],
         start: Optional[str],
         lang_code: str,
+        age_band: str = "P4-P6",
     ) -> List[dict]:
-        """Per-topic aggregates from assessment_logs + progress_snapshots."""
+        """Per-topic aggregates from assessment_logs + progress_snapshots.
+
+        H-2 (PR-3): ``age_band`` is threaded from the caller so parent-facing
+        labels are softened for the student's real band instead of the frozen
+        "P4-P6" literal the three ``soften_label`` calls used to hard-code.
+        """
         # Latest snapshot per topic (journey-level current state)
         snap_by_topic: Dict[str, dict] = {}
         for s in snapshots:
@@ -399,7 +405,7 @@ class ParentReportAgent:
                 recent.append({
                     "date": (log.get("created_at") or "")[:10],
                     "label_parent": soften_label(
-                        internal, "P4-P6", lang_code, audience="parent_facing"
+                        internal, age_band, lang_code, audience="parent_facing"
                     ) if internal else "",
                     "evidence_text": _truncate(log.get("evidence_text") or ""),
                 })
@@ -415,7 +421,7 @@ class ParentReportAgent:
                 "attempt_count": int(snap.get("attempt_count") or len(t_logs)),
                 "last_label_internal": last_internal,
                 "last_label_parent": soften_label(
-                    last_internal, "P4-P6", lang_code, audience="parent_facing"
+                    last_internal, age_band, lang_code, audience="parent_facing"
                 ) if last_internal else "",
                 "streak": int(snap.get("streak") or 0),
                 "recent_evidence": recent,
@@ -444,8 +450,13 @@ class ParentReportAgent:
             for day in days
         ]
 
-    def _build_baseline(self, logs: List[dict], lang_code: str) -> Optional[dict]:
-        """First DIRECT assessment log → starting level (first_steps only)."""
+    def _build_baseline(
+        self, logs: List[dict], lang_code: str, age_band: str = "P4-P6"
+    ) -> Optional[dict]:
+        """First DIRECT assessment log → starting level (first_steps only).
+
+        H-2 (PR-3): the parent-facing label is softened for the real band.
+        """
         direct = [l for l in logs if (l.get("mode") or "").startswith("DIRECT")]
         if not direct:
             return None
@@ -456,7 +467,7 @@ class ParentReportAgent:
             "topic_id": first.get("topic_id") or "",
             "subject": _subject_of(first.get("topic_id") or ""),
             "label_parent": soften_label(
-                internal, "P4-P6", lang_code, audience="parent_facing"
+                internal, age_band, lang_code, audience="parent_facing"
             ) if internal else "",
             "confidence": float(first.get("confidence") or 0.0),
         }
@@ -697,7 +708,9 @@ class ParentReportAgent:
 
         if not logs_all and not sessions_all and not snapshots:
             # New student — welcome report, never an error
-            return self._empty_report(student_id, period, lang_code, use_llm_narrative)
+            return self._empty_report(
+                student_id, period, lang_code, use_llm_narrative, age_band
+            )
 
         first_activity = None
         candidates = [l.get("created_at") for l in logs_all if l.get("created_at")]
@@ -731,7 +744,7 @@ class ParentReportAgent:
         summary = self._aggregate_summary(
             sessions, logs, duration_seconds, topic_ids
         )
-        topics = self._build_topics(logs, snapshots, start, lang_code)
+        topics = self._build_topics(logs, snapshots, start, lang_code, age_band)
         timeline = self._build_timeline(sessions)
 
         # 3. variant — decided by JOURNEY totals (period-agnostic)
@@ -745,7 +758,7 @@ class ParentReportAgent:
         baseline = None
         roadmap = None
         if variant == "first_steps":
-            baseline = self._build_baseline(logs_all, lang_code)
+            baseline = self._build_baseline(logs_all, lang_code, age_band)
             snap_by_topic = {s.get("topic_id"): s for s in snapshots}
             roadmap = self._build_roadmap(topics, snap_by_topic, lang_code)
 
@@ -782,7 +795,7 @@ class ParentReportAgent:
             "content": narrative,
             "mode": "parent_report",
             "lang_code": lang_code,
-            "age_band": None,
+            "age_band": age_band,
             "kid_label": None,
             "citations": [],
             "cost_summary": (
@@ -794,7 +807,12 @@ class ParentReportAgent:
         }
 
     def _empty_report(
-        self, student_id: str, period: str, lang_code: str, use_llm_narrative: bool
+        self,
+        student_id: str,
+        period: str,
+        lang_code: str,
+        use_llm_narrative: bool,
+        age_band: str = "P4-P6",
     ) -> dict:
         start, end, days = self._period_window(period, None)
         narrative = {
@@ -806,7 +824,7 @@ class ParentReportAgent:
             "content": narrative,
             "mode": "parent_report",
             "lang_code": lang_code,
-            "age_band": None,
+            "age_band": age_band,
             "kid_label": None,
             "citations": [],
             "cost_summary": {"status": "no_data", "total_tokens": 0},
@@ -838,7 +856,12 @@ class ParentReportAgent:
         age_band: str = "P4-P6",
         include_safety: bool = False,
     ) -> dict:
-        """Sync report (template narrative; no LLM). Hermes-safe."""
+        """Sync report (template narrative; no LLM). Hermes-safe.
+
+        H-2 (PR-3): ``age_band`` is threaded into BOTH branches — the empty
+        report, the topic labels and the envelope. Before the fix the band was
+        dropped on the floor and the envelope always reported ``None``.
+        """
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -846,13 +869,14 @@ class ParentReportAgent:
         if loop is not None and loop.is_running():
             # Already inside an event loop → build sync path directly
             return self._generate_report_sync_core(
-                student_id, period, lang_code, include_safety
+                student_id, period, lang_code, include_safety, age_band
             )
         return asyncio.run(
             self.generate_report_async(
                 student_id,
                 period=period,
                 lang_code=lang_code,
+                age_band=age_band,
                 include_safety=include_safety,
                 use_llm_narrative=False,
             )
@@ -864,6 +888,7 @@ class ParentReportAgent:
         period: str,
         lang_code: str,
         include_safety: bool,
+        age_band: str = "P4-P6",
     ) -> dict:
         """Pure-sync core (no asyncio) used inside a running loop."""
         logs_all = self._query_assessment_logs(student_id, None, _now_iso())
@@ -871,7 +896,7 @@ class ParentReportAgent:
         snapshots = self._query_progress_snapshots(student_id)
 
         if not logs_all and not sessions_all and not snapshots:
-            return self._empty_report(student_id, period, lang_code, False)
+            return self._empty_report(student_id, period, lang_code, False, age_band)
 
         candidates = [l.get("created_at") for l in logs_all if l.get("created_at")]
         candidates += [s.get("created_at") for s in sessions_all if s.get("created_at")]
@@ -898,7 +923,7 @@ class ParentReportAgent:
         topic_ids = [t for t in topic_ids if t]
 
         summary = self._aggregate_summary(sessions, logs, duration_seconds, topic_ids)
-        topics = self._build_topics(logs, snapshots, start, lang_code)
+        topics = self._build_topics(logs, snapshots, start, lang_code, age_band)
         timeline = self._build_timeline(sessions)
 
         first_session_iso = min(
@@ -910,7 +935,7 @@ class ParentReportAgent:
         baseline = None
         roadmap = None
         if variant == "first_steps":
-            baseline = self._build_baseline(logs_all, lang_code)
+            baseline = self._build_baseline(logs_all, lang_code, age_band)
             snap_by_topic = {s.get("topic_id"): s for s in snapshots}
             roadmap = self._build_roadmap(topics, snap_by_topic, lang_code)
 
@@ -934,7 +959,7 @@ class ParentReportAgent:
             "content": narrative,
             "mode": "parent_report",
             "lang_code": lang_code,
-            "age_band": None,
+            "age_band": age_band,
             "kid_label": None,
             "citations": [],
             "cost_summary": (
@@ -966,6 +991,7 @@ class ParentReportAgent:
         capability = params.get("capability", "report_gen")
         period = params.get("period", "cycle")
         lang_code = params.get("lang_code", "zh-hk")
+        age_band = params.get("age_band") or "P4-P6"   # H-2: real band, not None
         include_safety = bool(params.get("include_safety", False))
 
         try:
@@ -975,7 +1001,7 @@ class ParentReportAgent:
             if capability == "progress_summary":
                 report = self.generate_report(
                     student_id, period=period, lang_code=lang_code,
-                    include_safety=include_safety,
+                    age_band=age_band, include_safety=include_safety,
                 )
                 report["report"] = report["report"]["summary"]
                 return {
@@ -987,7 +1013,7 @@ class ParentReportAgent:
             # report_gen
             report = self.generate_report(
                 student_id, period=period, lang_code=lang_code,
-                include_safety=include_safety,
+                age_band=age_band, include_safety=include_safety,
             )
             return {
                 "agent": self.AGENT_NAME,

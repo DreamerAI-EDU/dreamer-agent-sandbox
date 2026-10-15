@@ -141,15 +141,22 @@ def _seed_obs(conn, student_id, event_type, event_data, days_ago):
 # ── Envelope contract ──────────────────────────────────
 
 def test_envelope_contract(db_path):
-    """Seven-field envelope always present."""
+    """Seven-field envelope always present.
+
+    H-2 (PR-3) flipped the old ``age_band is None`` assertion: the envelope
+    now carries the REAL band threaded in by the caller (design book v1.1
+    §3.3 / F5), so the parent-facing copy can never be band-mismatched.
+    """
     agent = ParentReportAgent(db_path=db_path)
-    result = agent.generate_report("stu_empty", period="cycle", lang_code="zh-hk")
+    result = agent.generate_report(
+        "stu_empty", period="cycle", lang_code="zh-hk", age_band="P1-P3"
+    )
     for key in ["content", "mode", "lang_code", "age_band", "kid_label",
                 "citations", "cost_summary"]:
         assert key in result, f"missing envelope key: {key}"
     assert result["mode"] == "parent_report"
     assert result["lang_code"] == "zh-hk"
-    assert result["age_band"] is None
+    assert result["age_band"] == "P1-P3"
     assert result["kid_label"] is None
     assert isinstance(result["citations"], list)
     assert result["cost_summary"]["status"] in ("ok", "no_data")

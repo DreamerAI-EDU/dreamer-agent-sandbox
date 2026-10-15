@@ -157,28 +157,59 @@ def upsert_teacher_score(
             return {"status": "noop"}
 
         now = _now_iso()
-        cur = conn.execute(
-            """INSERT INTO assessment_logs
-               (student_id, session_id, topic_id, mode, lang_code,
-                internal_label, confidence, rubric_id, evidence_text,
-                agent_used, cost_tokens, created_at,
-                age_band, week_no, skill_code, score_0_3, scored_by, report_id)
-               VALUES (?, '', '', 'DIRECT', ?, ?, 0.0, '', ?, ?, 0, ?,
-                       ?, ?, ?, ?, ?, '')""",
-            (
-                student_id,
-                lang_code,
-                TEACHER_INTERNAL_LABEL,
-                evidence,
-                SCORED_BY_TEACHER,
-                now,
-                age_band,
-                week_no,
-                skill_code,
-                score,
-                SCORED_BY_TEACHER,
-            ),
-        )
+        try:
+            cur = conn.execute(
+                """INSERT INTO assessment_logs
+                   (student_id, session_id, topic_id, mode, lang_code,
+                    internal_label, confidence, rubric_id, evidence_text,
+                    agent_used, cost_tokens, created_at,
+                    age_band, week_no, skill_code, score_0_3, scored_by, report_id)
+                   VALUES (?, '', '', 'DIRECT', ?, ?, 0.0, '', ?, ?, 0, ?,
+                           ?, ?, ?, ?, ?, '')""",
+                (
+                    student_id,
+                    lang_code,
+                    TEACHER_INTERNAL_LABEL,
+                    evidence,
+                    SCORED_BY_TEACHER,
+                    now,
+                    age_band,
+                    week_no,
+                    skill_code,
+                    score,
+                    SCORED_BY_TEACHER,
+                ),
+            )
+        except sqlite3.IntegrityError:
+            # PR-3 ① TOCTOU hard gate (uq_assessment_teacher_score): a
+            # concurrent PUT won the read-then-write race and the partial
+            # unique index rejected this INSERT. The gate is the point — we
+            # must NOT retry the insert. Fall back to the overwrite path so a
+            # lost race degrades into the documented "updated" semantics
+            # (old value archived first) instead of a 500 for the teacher.
+            raced = find_teacher_score(
+                conn, student_id=student_id, week_no=week_no, skill_code=skill_code
+            )
+            if raced is None:
+                raise
+            _audit_old_value(
+                conn,
+                student_id=student_id,
+                week_no=week_no,
+                skill_code=skill_code,
+                old_score=raced["score_0_3"],
+                old_evidence=raced["evidence_text"] or "",
+                assessment_id=raced["id"],
+                replaced_by=teacher_id,
+            )
+            conn.execute(
+                """UPDATE assessment_logs
+                   SET score_0_3 = ?, evidence_text = ?
+                   WHERE id = ?""",
+                (score, evidence, raced["id"]),
+            )
+            conn.commit()
+            return {"status": "updated", "id": raced["id"], "raced": True}
         conn.commit()
         return {"status": "inserted", "id": cur.lastrowid}
     finally:

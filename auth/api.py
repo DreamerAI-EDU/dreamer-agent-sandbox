@@ -43,6 +43,7 @@ from . import consent
 from . import curriculum as curriculum_mod
 from . import db
 from . import payments as payments_mod
+from . import report_store as report_store_mod
 from . import reports as reports_mod
 from . import safety as safety_mod
 from . import scores as scores_mod
@@ -1929,6 +1930,373 @@ async def handle_teacher_score_put(request: web.Request) -> web.Response:
 
 
 # ---------------------------------------------------------------------------
+# PR-3 report persistence API (design book v1.1 §4.1 / §4.4)
+#
+#   POST /api/teacher/reports/generate          draft  (one-pending -> 409+link)
+#   GET  /api/teacher/reports                   list   (status filter)
+#   PUT  /api/teacher/reports/{report_id}       edit   (pending_review only)
+#   POST /api/teacher/reports/{report_id}/approve|reject   state transitions
+#   GET  /api/parent/reports                    approved-only, ownership gated
+#
+# The state machine lives in auth/report_store.py; the DB is the last line
+# (one-pending partial unique index + no-DELETE + append-only teacher_edits
+# triggers, migrations/phase8i). This layer owns the HTTP semantics: 422 for
+# shape violations, 403 for ownership, 404 for unknown ids, 409 for the
+# one-pending gate and for illegal transitions (T-7).
+# ---------------------------------------------------------------------------
+
+_ERR_REPORT_NOT_FOUND = {"error": "報告唔存在"}
+_ERR_REPORT_STATE = {"error": "報告狀態唔允許呢個操作"}
+_ERR_REPORT_ALREADY_PENDING = {"error": "已有待審報告，請先處理"}
+
+
+def _report_draft_url(report_id: str) -> str:
+    """Front-end draft route returned with the 409 (§4.4 409＋草稿链接)."""
+    return f"/teacher/reports/{report_id}"
+
+
+def _report_conflict(exc: "report_store_mod.ReportConflict") -> web.Response:
+    """409 for the one-pending gate (carries the blocking draft) and for
+    illegal state transitions (carries the current status only)."""
+    existing = exc.existing
+    if existing is None:
+        return web.json_response(dict(_ERR_REPORT_STATE), status=409)
+    body: dict[str, Any] = dict(_ERR_REPORT_ALREADY_PENDING)
+    body["report_id"] = existing["report_id"]
+    body["version"] = existing["version"]
+    body["status"] = existing["status"]
+    body["draft_url"] = _report_draft_url(existing["report_id"])
+    return web.json_response(body, status=409)
+
+
+def _report_week_window(payload: dict[str, Any]) -> Optional[tuple[int, int]]:
+    """Validate week_from/week_to (audit window) or None when malformed."""
+    out: list[int] = []
+    for key, default in (("week_from", 1), ("week_to", 8)):
+        value = payload.get(key, default)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        if isinstance(value, float) and not value.is_integer():
+            return None
+        value = int(value)
+        if value < report_store_mod.WEEK_MIN or value > report_store_mod.WEEK_MAX:
+            return None
+        out.append(value)
+    if out[0] > out[1]:
+        return None
+    return out[0], out[1]
+
+
+def _teacher_report_view(row: dict[str, Any]) -> dict[str, Any]:
+    view = dict(row)
+    view["draft_url"] = _report_draft_url(row["report_id"])
+    return view
+
+
+def _mask_report_payload(payload: Any) -> Any:
+    """Parent-facing copy of a stored envelope: student id masked, any
+    internal-label key stripped (belt-and-braces — the stored copy already
+    went through reports.parent_report_for_student)."""
+    import copy
+
+    out = copy.deepcopy(payload)
+    if isinstance(out, dict):
+        inner = out.get("report")
+        if isinstance(inner, dict) and isinstance(inner.get("student_id"), str):
+            inner["student_id"] = _mask_student_id(inner["student_id"])
+    reports_mod._strip_internal(out)
+    return out
+
+
+def _parent_report_view(
+    row: dict[str, Any], student_id: str, *, include_payload: bool = True
+) -> dict[str, Any]:
+    """Parent-visible projection: no teacher_edits / review / cost / internal
+    labels, and the student is only ever the 8-char mask (§4.3 masking)."""
+    view: dict[str, Any] = {
+        "report_id": row["report_id"],
+        "version": row["version"],
+        "student_id": _mask_student_id(student_id),
+        "week_from": row["week_from"],
+        "week_to": row["week_to"],
+        "status": row["status"],
+        "lang_code": row["lang_code"],
+        "age_band": row["age_band"],
+        "published_at": row["published_at"],
+    }
+    if include_payload:
+        view["payload"] = _mask_report_payload(row.get("payload") or {})
+    return view
+
+
+async def handle_teacher_report_generate(request: web.Request) -> web.Response:
+    """POST /api/teacher/reports/generate — draft into pending_review (§4.4).
+
+    Teacher-only, 逐生校验 class 归属 (same gate as the PR-2 score write).
+    The envelope comes from the canonical agent path; ``age_band`` is read
+    from the students table server-side (H-2 真值, never None and never
+    trusted from the client). A second draft for the same (student, class)
+    hits the one-pending gate -> 409 carrying the existing draft + link.
+    """
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+    if user["role"] != "teacher":
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    payload = await _read_json(request)
+    if payload is None:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    student_id = (payload.get("student_id") or "").strip()
+    class_id = (payload.get("class_id") or "").strip()
+    if not student_id or not class_id:
+        return web.json_response(_ERR_INVALID, status=422)
+    window = _report_week_window(payload)
+    if window is None:
+        return web.json_response(_ERR_INVALID, status=422)
+    week_from, week_to = window
+
+    cls = classes_mod.get_class_by_id(class_id)
+    if cls is None or cls["teacher_id"] != user["id"]:
+        _log_security_warning(
+            "report_generate_cross_teacher",
+            user_id=user["id"],
+            target_id=class_id,
+            detail="attempted to draft a report for another teacher's class",
+        )
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+    if not classes_mod.student_in_class_confirmed(class_id, student_id):
+        _log_security_warning(
+            "report_generate_student_not_in_class",
+            user_id=user["id"],
+            target_id=student_id[:STUDENT_ID_MASK_LEN],
+            detail="attempted to draft a report outside the confirmed roster",
+        )
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+    student = students_mod.get_student_by_id(student_id)
+    if student is None:
+        # unified 403 — a missing student id must not be distinguishable
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    period = "weekly" if week_to - week_from + 1 == 1 else "cycle"
+    envelope = reports_mod.parent_report_for_student(
+        student, period, include_safety=True, mask_student_id=False
+    )
+    scores = report_store_mod.build_dimension_scores(student_id, week_from, week_to)
+    try:
+        row = report_store_mod.create_pending_report(
+            student_id=student_id,
+            class_id=class_id,
+            lang_code=student["lang_code"],
+            age_band=student["age_band"],
+            week_from=week_from,
+            week_to=week_to,
+            scores=scores,
+            payload=envelope,
+            generated_by=user["id"],
+        )
+    except report_store_mod.ReportConflict as exc:
+        return _report_conflict(exc)
+    return web.json_response({"ok": True, **_teacher_report_view(row)}, status=201)
+
+
+async def handle_teacher_reports_list(request: web.Request) -> web.Response:
+    """GET /api/teacher/reports?status=&class_id=&student_id= — teacher list.
+
+    Scoped to the classes this teacher owns by SQL join; an unknown or
+    invalid status filter is a 422, a foreign class simply returns nothing.
+    """
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+    if user["role"] != "teacher":
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    query = request.query
+    status = (query.get("status") or "").strip()
+    if status and status not in report_store_mod.REPORT_STATUSES:
+        return web.json_response(_ERR_INVALID, status=422)
+    class_id = (query.get("class_id") or "").strip() or None
+    student_id = (query.get("student_id") or "").strip() or None
+
+    reports = report_store_mod.list_reports_for_teacher(
+        user["id"],
+        status=status or None,
+        class_id=class_id,
+        student_id=student_id,
+    )
+    return web.json_response(
+        {
+            "reports": [_teacher_report_view(r) for r in reports],
+            "count": len(reports),
+            "counts": report_store_mod.applied_status_counts(user["id"]),
+        }
+    )
+
+
+def _report_owner_gate(request: web.Request, report_id: str):
+    """(user, None) | (None, Response) — 401/404/403 gate for id-scoped routes.
+
+    A report owned by another teacher is the unified 403 + WARNING (same
+    discipline as the class-progress surface); an unknown id is a 404.
+    """
+    user = _session_user(request)
+    if user is None:
+        return None, web.json_response(_ERR_AUTH, status=401)
+    if user["role"] != "teacher":
+        return None, web.json_response(_ERR_FORBIDDEN, status=403)
+    if report_store_mod.get_report(report_id) is None:
+        return None, web.json_response(_ERR_REPORT_NOT_FOUND, status=404)
+    if report_store_mod.get_report_for_teacher(report_id, user["id"]) is None:
+        _log_security_warning(
+            "report_cross_teacher",
+            user_id=user["id"],
+            target_id=report_id,
+            detail="attempted to reach a report of another teacher's class",
+        )
+        return None, web.json_response(_ERR_FORBIDDEN, status=403)
+    return user, None
+
+
+async def handle_teacher_report_update(request: web.Request) -> web.Response:
+    """PUT /api/teacher/reports/{report_id} — edit a pending_review draft.
+
+    Only ``pending_review`` rows are editable (anything else -> 409); each
+    edit is appended to ``teacher_edits`` as a field-level diff (§4.2) and the
+    DB trigger rejects any rewrite or shrink of that array.
+    """
+    report_id = request.match_info.get("report_id", "")
+    user, denied = _report_owner_gate(request, report_id)
+    if denied is not None:
+        return denied
+
+    payload = await _read_json(request)
+    if payload is None:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    edits = payload.get("edits", [])
+    if not isinstance(edits, list):
+        return web.json_response(_ERR_INVALID, status=422)
+    if len(edits) > report_store_mod.EDIT_BATCH_MAX:
+        return web.json_response(_ERR_INVALID, status=422)
+    for item in edits:
+        if not isinstance(item, dict):
+            return web.json_response(_ERR_INVALID, status=422)
+        field = item.get("field")
+        if not isinstance(field, str) or not field.strip():
+            return web.json_response(_ERR_INVALID, status=422)
+    patch = payload.get("payload_patch")
+    if patch is not None and not isinstance(patch, dict):
+        return web.json_response(_ERR_INVALID, status=422)
+
+    try:
+        row = report_store_mod.record_teacher_edits(
+            report_id=report_id,
+            teacher_id=user["id"],
+            edits=edits,
+            payload_patch=patch,
+        )
+    except report_store_mod.ReportNotFound:
+        return web.json_response(_ERR_REPORT_NOT_FOUND, status=404)
+    except report_store_mod.ReportConflict as exc:
+        return _report_conflict(exc)
+    return web.json_response({"ok": True, **_teacher_report_view(row)})
+
+
+async def _teacher_report_decide(request: web.Request, decision: str) -> web.Response:
+    """Shared approve/reject body (§4.1 state machine)."""
+    report_id = request.match_info.get("report_id", "")
+    user, denied = _report_owner_gate(request, report_id)
+    if denied is not None:
+        return denied
+
+    payload = await _read_json(request)
+    note = ""
+    if payload is not None:
+        raw_note = payload.get("note")
+        if raw_note is not None:
+            if not isinstance(raw_note, str):
+                return web.json_response(_ERR_INVALID, status=422)
+            note = raw_note
+
+    try:
+        row = report_store_mod.decide_report(
+            report_id=report_id,
+            decision=decision,
+            teacher_id=user["id"],
+            note=note,
+        )
+    except report_store_mod.ReportNotFound:
+        return web.json_response(_ERR_REPORT_NOT_FOUND, status=404)
+    except report_store_mod.ReportConflict as exc:
+        return _report_conflict(exc)
+    return web.json_response({"ok": True, **_teacher_report_view(row)})
+
+
+async def handle_teacher_report_approve(request: web.Request) -> web.Response:
+    """POST /api/teacher/reports/{report_id}/approve — 批准即发布.
+
+    Sets status=approved with approved_at == published_at, and flips the
+    previous approved version of the same window to ``superseded``.
+    """
+    return await _teacher_report_decide(request, report_store_mod.DECISION_APPROVE)
+
+
+async def handle_teacher_report_reject(request: web.Request) -> web.Response:
+    """POST /api/teacher/reports/{report_id}/reject — 驳回 (releases the gate)."""
+    return await _teacher_report_decide(request, report_store_mod.DECISION_REJECT)
+
+
+async def handle_parent_reports(request: web.Request) -> web.Response:
+    """GET /api/parent/reports?student_id=<mask|full>[&report_id=] — §4.3.
+
+    Parent-only, ownership gate resolved inside the parent's reachable set
+    (8-char mask or full id). Without ``report_id`` it lists the child's
+    published reports (summaries); with one it returns that single published
+    body. ``status='approved'`` is enforced in SQL — pending / rejected /
+    superseded rows are unreachable here, and internal-label keys plus the
+    full student id never leave the server.
+    """
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+    if user["role"] != "parent":
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    query = request.query
+    identifier = (query.get("student_id") or "").strip()
+    if not identifier:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    student, ambiguous = students_mod.resolve_student_identifier(identifier, user)
+    if ambiguous:
+        return web.json_response(_ERR_INVALID, status=400)
+    if student is None or not students_mod.can_access_student(user, student):
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    report_id = (query.get("report_id") or "").strip()
+    if report_id:
+        row = report_store_mod.get_approved_for_student(report_id, student["id"])
+        if row is None:
+            return web.json_response(_ERR_REPORT_NOT_FOUND, status=404)
+        return web.json_response(
+            {"report": _parent_report_view(row, student["id"])}
+        )
+
+    rows = report_store_mod.list_approved_for_student(student["id"])
+    return web.json_response(
+        {
+            "reports": [
+                _parent_report_view(r, student["id"], include_payload=False)
+                for r in rows
+            ],
+            "count": len(rows),
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
 # W4 Portfolio API (PR-A) — kid view + parent view + single share_card
 # ---------------------------------------------------------------------------
 
@@ -3069,6 +3437,21 @@ def build_app() -> web.Application:
     )
     # PR-2 — teacher weekly scoring write (设计书 v1.1 §4.4)
     app.router.add_put("/api/teacher/scores", handle_teacher_score_put)
+    # PR-3 — report persistence + state machine + parent read (设计书 §4.1/§4.4)
+    app.router.add_post(
+        "/api/teacher/reports/generate", handle_teacher_report_generate
+    )
+    app.router.add_get("/api/teacher/reports", handle_teacher_reports_list)
+    app.router.add_put(
+        "/api/teacher/reports/{report_id}", handle_teacher_report_update
+    )
+    app.router.add_post(
+        "/api/teacher/reports/{report_id}/approve", handle_teacher_report_approve
+    )
+    app.router.add_post(
+        "/api/teacher/reports/{report_id}/reject", handle_teacher_report_reject
+    )
+    app.router.add_get("/api/parent/reports", handle_parent_reports)
     # W4 PR-A — portfolio surfaces (kid view + parent view + single share_card)
     app.router.add_get("/api/student/portfolio", handle_student_portfolio)
     app.router.add_get(

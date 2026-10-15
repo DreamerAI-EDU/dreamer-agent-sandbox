@@ -106,6 +106,49 @@ END;
 """
 
 
+# PR-3 report state-machine guards (design book v1.1 §3.2 / §4.1, boss work
+# order 2026-10-15). Canonical DDL lives in
+# migrations/phase8i_pr3_report_state_machine.sql (②③); mirrored here so a
+# fresh DB created by ensure_schema() carries exactly the same guards as an
+# upgraded DB. Both triggers hang off parent_reports only, so they are safe to
+# append to the tail of _DDL (table-first, trigger-last).
+_PR3_PARENT_REPORTS_GUARDS_DDL = """\
+-- ② 报告行永不 DELETE（§3.2：只 UPDATE status／版本 supersede）
+CREATE TRIGGER IF NOT EXISTS parent_reports_no_delete
+BEFORE DELETE ON parent_reports
+BEGIN
+    SELECT RAISE(ABORT, 'parent_reports is append-only (no DELETE, design book v1.1 §3.2)');
+END;
+
+-- ③ teacher_edits 只增不减、不可重写（§4.2：字段级 diff 审计链不可抹除）
+CREATE TRIGGER IF NOT EXISTS parent_reports_teacher_edits_append_only
+BEFORE UPDATE OF teacher_edits ON parent_reports
+FOR EACH ROW
+WHEN json_valid(OLD.teacher_edits) AND json_valid(NEW.teacher_edits)
+     AND (
+          json_array_length(NEW.teacher_edits) < json_array_length(OLD.teacher_edits)
+          OR NEW.teacher_edits NOT LIKE
+             substr(OLD.teacher_edits, 1, length(OLD.teacher_edits) - 1) || '%'
+     )
+BEGIN
+    SELECT RAISE(ABORT, 'parent_reports.teacher_edits is append-only (no rewrite, no shrink)');
+END;
+"""
+
+
+# PR-3 ① TOCTOU hard gate (PR-2 follow-up, boss red line). NOT part of _DDL:
+# the index lives on assessment_logs, which auth/db.py does not own (the agent
+# layer creates it), so it cannot be created by a fresh-DB executescript.
+# apply_phase8i_pr3_migration() probes for the table first and is also called
+# at the tail of apply_phase8_parent_reports_migration() (post-migration 补钉),
+# so every path that has assessment_logs ends up with the gate.
+_PR3_TEACHER_SCORE_UNIQUE_DDL = """\
+CREATE UNIQUE INDEX IF NOT EXISTS uq_assessment_teacher_score
+    ON assessment_logs(student_id, week_no, skill_code)
+    WHERE scored_by = 'teacher';
+"""
+
+
 # Mirrors migrations/phase8_auth.sql (must be kept in sync; the schema-pairing
 # test asserts the live PRAGMA output against the SQL file).
 _DDL = """\
@@ -361,7 +404,7 @@ CREATE TABLE IF NOT EXISTS voice_month_meter (
     alerted_at  TEXT,
     updated_at  TEXT NOT NULL
 );
-""" + _PR_PARENT_REPORTS_DDL + _TEACHER_SCORE_AUDIT_DDL
+""" + _PR_PARENT_REPORTS_DDL + _TEACHER_SCORE_AUDIT_DDL + _PR3_PARENT_REPORTS_GUARDS_DDL
 
 
 def _db_path() -> str:
@@ -479,6 +522,43 @@ def apply_phase8_parent_reports_migration() -> None:
             if col not in existing:
                 conn.execute(f"ALTER TABLE assessment_logs ADD COLUMN {col} {decl}")
         conn.executescript(_PR_PARENT_REPORTS_DDL)
+        conn.commit()
+    finally:
+        conn.close()
+    # Post-migration 补钉 (PR-3 ①): every path that just prepared assessment_logs
+    # for parent reports also gets the TOCTOU hard gate, so an existing VPS DB
+    # can never end up with the teacher-score columns but without the index.
+    apply_phase8i_pr3_migration()
+
+
+def apply_phase8i_pr3_migration() -> None:
+    """Idempotently apply migrations/phase8i_pr3_report_state_machine.sql.
+
+    Two independent, additive pieces:
+
+    * ① the teacher-score TOCTOU hard gate — a partial unique index on
+      assessment_logs(student_id, week_no, skill_code) WHERE scored_by='teacher'
+      (PR-2's only low-severity finding, folded into PR-3 by the boss). Skipped
+      when assessment_logs is absent (fresh DB before the agent layer runs).
+    * ②③ the parent_reports append-only guards — already carried by _DDL for
+      fresh DBs, re-applied here so upgraded DBs match byte-for-byte.
+
+    Safe to re-run: IF NOT EXISTS everywhere, no ALTER, no data movement.
+    """
+    conn = connect()
+    try:
+        has_assessment_logs = conn.execute(
+            "SELECT 1 FROM sqlite_master"
+            " WHERE type='table' AND name='assessment_logs'"
+        ).fetchone()
+        if has_assessment_logs:
+            conn.executescript(_PR3_TEACHER_SCORE_UNIQUE_DDL)
+        has_parent_reports = conn.execute(
+            "SELECT 1 FROM sqlite_master"
+            " WHERE type='table' AND name='parent_reports'"
+        ).fetchone()
+        if has_parent_reports:
+            conn.executescript(_PR3_PARENT_REPORTS_GUARDS_DDL)
         conn.commit()
     finally:
         conn.close()

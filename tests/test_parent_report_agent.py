@@ -21,6 +21,15 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from agents.parent_report_agent import ParentReportAgent
+from agents.parent_report_agent import (
+    CYCLE_DAYS,
+    EVIDENCE_MAX_CHARS,
+    FIRST_STEPS_MIN_DAYS,
+    FIRST_STEPS_MIN_SESSIONS,
+    MASTERY_STRONG,
+    MAX_TOPICS_IN_REPORT,
+    PERIOD_DAYS,
+)
 
 
 # ── DB seed helpers ────────────────────────────────────
@@ -604,3 +613,77 @@ def test_round_half_up_quarter(db_path):
     result = agent.generate_report("stu_rhu", period="cycle", lang_code="zh-hk")
     topics = {t["topic_id"]: t for t in result["report"]["topics"]}
     assert topics["t_maths"]["mastery_pct"] == 0.3
+
+
+# ---------------------------------------------------------------------------
+# PR-1 (design book v1.1 §8.1/§8.3): T-1 constant regression + T-2 variant OR
+# semantics. Constants frozen by design book C1–C7; OR semantics by C8/F1.
+# ---------------------------------------------------------------------------
+
+
+def test_constants_regression_v1_1():
+    """T-1（设计书 §8.1）：冻结常量 C1–C7 值不变（56／5／14／60.0／8／200），防漂移。"""
+    assert CYCLE_DAYS == 56
+    assert PERIOD_DAYS["weekly"] == 7
+    assert PERIOD_DAYS["cycle"] == 56
+    assert FIRST_STEPS_MIN_SESSIONS == 5
+    assert FIRST_STEPS_MIN_DAYS == 14
+    assert MASTERY_STRONG == 60.0
+    assert MAX_TOPICS_IN_REPORT == 8
+    assert EVIDENCE_MAX_CHARS == 200
+
+
+def test_variant_or_six_sessions_short_span_first_steps(db_path):
+    """T-2①（设计书 §8.1 F1，OR 语义）：6 sessions 但首节仅 10 天前（<14）→ first_steps。
+    数量已达标，但时长不足——验证两个 early return 相互独立（OR 而非 AND）。"""
+    conn = sqlite3.connect(db_path)
+    for i, days_ago in enumerate([10, 8, 5, 3, 1, 0]):
+        _seed_log(conn, "stu_or1", "t_maths", "achieved", days_ago, session_id=f"s{i}")
+        _seed_session(conn, "stu_or1", days_ago, session_id=f"s{i}")
+    _seed_snapshot(conn, "stu_or1", "t_maths", 0.75, "achieved", 0, attempts=6)
+    conn.commit()
+    conn.close()
+
+    agent = ParentReportAgent(db_path=db_path)
+    report = agent.generate_report("stu_or1", period="journey", lang_code="zh-hk")["report"]
+    assert report["summary"]["session_count"] == 6
+    assert report["variant"] == "first_steps"
+    assert report["baseline"] is not None
+    assert report["roadmap"] is not None
+
+
+def test_variant_or_few_sessions_long_span_first_steps(db_path):
+    """T-2②：3 sessions 但首节 20 天前（≥14）→ first_steps。
+    时长达标但数量不足——数量检查独立触发，与时长无关。"""
+    conn = sqlite3.connect(db_path)
+    for i, days_ago in enumerate([20, 10, 0]):
+        _seed_log(conn, "stu_or2", "t_maths", "achieved", days_ago, session_id=f"s{i}")
+        _seed_session(conn, "stu_or2", days_ago, session_id=f"s{i}")
+    _seed_snapshot(conn, "stu_or2", "t_maths", 0.75, "achieved", 0, attempts=3)
+    conn.commit()
+    conn.close()
+
+    agent = ParentReportAgent(db_path=db_path)
+    report = agent.generate_report("stu_or2", period="journey", lang_code="zh-hk")["report"]
+    assert report["summary"]["session_count"] == 3
+    assert report["variant"] == "first_steps"
+    assert report["baseline"] is not None
+
+
+def test_variant_or_enough_sessions_long_span_standard(db_path):
+    """T-2③：6 sessions 且首节 20 天前（≥14）→ 非 first_steps（standard）。
+    两条件同时满足——OR 两分支均不触发，回落 standard。"""
+    conn = sqlite3.connect(db_path)
+    for i, days_ago in enumerate([20, 15, 10, 5, 2, 0]):
+        _seed_log(conn, "stu_or3", "t_maths", "achieved", days_ago, session_id=f"s{i}")
+        _seed_session(conn, "stu_or3", days_ago, session_id=f"s{i}")
+    _seed_snapshot(conn, "stu_or3", "t_maths", 0.75, "achieved", 0, attempts=6)
+    conn.commit()
+    conn.close()
+
+    agent = ParentReportAgent(db_path=db_path)
+    report = agent.generate_report("stu_or3", period="journey", lang_code="zh-hk")["report"]
+    assert report["summary"]["session_count"] == 6
+    assert report["variant"] == "standard"
+    assert report["baseline"] is None
+    assert report["roadmap"] is None

@@ -20,6 +20,51 @@ from typing import Any, Optional
 
 _SCHEMA_SQL_PATH = Path(__file__).resolve().parent.parent / "migrations" / "phase8_auth.sql"
 
+# PR-1 parent reports (design book v1.1 §3, boss sign-off 2026-10-15). Canonical
+# DDL lives in migrations/phase8_parent_reports.sql; mirrored here (pairing-test
+# convention) so ensure_schema() creates parent_reports on any DB, old or fresh.
+# The assessment_logs ALTERs are NOT carried by _DDL — an existing DB applies
+# them via apply_phase8_parent_reports_migration() (startup auto-migration is
+# still backlog, same convention as class_curriculum / W3-C columns).
+_PR_PARENT_REPORTS_DDL = """\
+-- §3.2 报告主表 parent_reports（借 plan_proposals 样板）
+CREATE TABLE IF NOT EXISTS parent_reports (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    report_id     TEXT NOT NULL UNIQUE,
+    version       INTEGER NOT NULL DEFAULT 1,
+    student_id    TEXT NOT NULL,
+    class_id      TEXT NOT NULL,                 -- 课程锚点（见 §3.4）
+    week_from     INTEGER NOT NULL DEFAULT 1,
+    week_to       INTEGER NOT NULL DEFAULT 8,
+    status        TEXT NOT NULL DEFAULT 'pending_review',
+    lang_code     TEXT NOT NULL DEFAULT 'zh-hk',
+    age_band      TEXT NOT NULL DEFAULT '',      -- H-2 修复后恒为真实 band
+    scores        TEXT NOT NULL DEFAULT '{}',    -- {"DREAM":3,"DISCOVER":2,...}
+    payload       TEXT NOT NULL DEFAULT '{}',    -- 完整报告内容（按 lang_code 单语生成）
+    teacher_edits TEXT NOT NULL DEFAULT '[]',    -- 老师修改审计，append-only
+    review        TEXT NOT NULL DEFAULT '{}',
+    cost_summary  TEXT NOT NULL DEFAULT '{}',
+    generated_by  TEXT NOT NULL DEFAULT 'auto',
+    pdf_path      TEXT NOT NULL DEFAULT '',
+    pdf_sha256    TEXT NOT NULL DEFAULT '',
+    created_at    TEXT NOT NULL DEFAULT '',
+    updated_at    TEXT NOT NULL DEFAULT '',
+    approved_at   TEXT NOT NULL DEFAULT '',
+    approved_by   TEXT NOT NULL DEFAULT '',
+    published_at  TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_parent_reports_student
+    ON parent_reports(student_id, status, version);
+CREATE INDEX IF NOT EXISTS idx_parent_reports_class
+    ON parent_reports(class_id, status);
+
+-- 幂等硬闸（借 uq_plan_proposals_one_pending 样板）：
+-- 同一学生同一课程同时最多一份待审
+CREATE UNIQUE INDEX IF NOT EXISTS uq_parent_reports_one_pending
+    ON parent_reports(student_id, class_id) WHERE status = 'pending_review';
+"""
+
 # Mirrors migrations/phase8_auth.sql (must be kept in sync; the schema-pairing
 # test asserts the live PRAGMA output against the SQL file).
 _DDL = """\
@@ -275,7 +320,7 @@ CREATE TABLE IF NOT EXISTS voice_month_meter (
     alerted_at  TEXT,
     updated_at  TEXT NOT NULL
 );
-"""
+""" + _PR_PARENT_REPORTS_DDL
 
 
 def _db_path() -> str:
@@ -356,6 +401,43 @@ def apply_class_curriculum_migration() -> None:
         for col, decl in _CC_CLASS_COLUMNS.items():
             if col not in existing:
                 conn.execute(f"ALTER TABLE classes ADD COLUMN {col} {decl}")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+# PR-1 parent reports (design book v1.1 §3, boss sign-off 2026-10-15).
+# Existing-DB half of migrations/phase8_parent_reports.sql: the assessment_logs
+# ALTERs (probe-first, safe to re-run) plus the parent_reports table/indexes.
+# Fresh DBs get the same table from ensure_schema()'s _DDL mirror.
+_PR_ASSESSMENT_COLUMNS = {
+    "age_band": "TEXT NOT NULL DEFAULT ''",
+    "week_no": "INTEGER NOT NULL DEFAULT 0",
+    "skill_code": "TEXT NOT NULL DEFAULT ''",
+    "score_0_3": "INTEGER DEFAULT NULL CHECK (score_0_3 IS NULL OR (score_0_3 BETWEEN 0 AND 3))",
+    "scored_by": "TEXT NOT NULL DEFAULT 'auto'",
+    "report_id": "TEXT NOT NULL DEFAULT ''",
+}
+
+
+def apply_phase8_parent_reports_migration() -> None:
+    """Idempotently apply migrations/phase8_parent_reports.sql to an existing DB.
+
+    Mirrors apply_class_curriculum_migration: ALTERs probe PRAGMA table_info
+    before every ADD COLUMN (safe to re-run); the parent_reports table + indexes
+    are (re)created via IF NOT EXISTS. The _DDL mirror in ensure_schema() keeps
+    fresh DBs identical (pairing-test convention).
+    """
+    conn = connect()
+    try:
+        existing = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(assessment_logs)")
+        }
+        for col, decl in _PR_ASSESSMENT_COLUMNS.items():
+            if col not in existing:
+                conn.execute(f"ALTER TABLE assessment_logs ADD COLUMN {col} {decl}")
+        conn.executescript(_PR_PARENT_REPORTS_DDL)
         conn.commit()
     finally:
         conn.close()

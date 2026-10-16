@@ -13,6 +13,7 @@ Covers (checklist §1.4):
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sqlite3
@@ -35,6 +36,15 @@ from agents.parent_report_agent import (
 # ── DB seed helpers ────────────────────────────────────
 
 SCHEMA = """
+CREATE TABLE students (
+    id             TEXT PRIMARY KEY,
+    parent_id      TEXT,
+    teacher_id     TEXT,
+    first_name     TEXT NOT NULL,
+    age_band       TEXT NOT NULL,
+    lang_code      TEXT NOT NULL,
+    created_at     TEXT NOT NULL
+);
 CREATE TABLE assessment_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     student_id TEXT NOT NULL,
@@ -89,11 +99,38 @@ def _iso(days_ago: int) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# H-2 (PR-3a, design book v1.1 §3.3): generate_report() no longer defaults
+# age_band to a preset — it resolves the band from the students row. Every
+# student used by the legacy suite is therefore pre-registered here. The band
+# is deliberately a non-"P4-P6" value so a silent preset fallback can never
+# masquerade as "DB truth". `stu_nope` and the PR-3a error-test students are
+# intentionally ABSENT to exercise the loud-error path.
+SEEDED_STUDENT_BAND = "S1-S3"
+SEEDED_STUDENTS = [
+    "stu_b5", "stu_b5s", "stu_c", "stu_c0", "stu_c1", "stu_d", "stu_d3",
+    "stu_d7", "stu_d7m", "stu_dlt", "stu_empty", "stu_est", "stu_ghost",
+    "stu_j", "stu_new", "stu_or1", "stu_or2", "stu_or3", "stu_p", "stu_pct",
+    "stu_rhu", "stu_s", "stu_t", "stu_w", "stu_x",
+]
+
+
+def _seed_student(conn, student_id, age_band=SEEDED_STUDENT_BAND):
+    conn.execute(
+        """INSERT INTO students
+           (id, parent_id, teacher_id, first_name, age_band, lang_code, created_at)
+           VALUES (?,?,?,?,?,?,?)""",
+        (student_id, "par_1", "tch_1", "Kid", age_band, "zh-hk", _iso(365)),
+    )
+
+
 @pytest.fixture
 def db_path(tmp_path):
     path = str(tmp_path / "parent_report_test.db")
     conn = sqlite3.connect(path)
     conn.executescript(SCHEMA)
+    for sid in SEEDED_STUDENTS:
+        _seed_student(conn, sid)
+    conn.commit()
     conn.close()
     return path
 
@@ -165,10 +202,15 @@ def test_envelope_contract(db_path):
 # ── Empty data ─────────────────────────────────────────
 
 def test_empty_data_graceful(db_path):
-    """No records → empty report, welcome narrative, no crash."""
+    """No records → empty report, welcome narrative, no crash.
+
+    H-2 (PR-3a): the empty-report path is NOT exempt from band resolution —
+    the band still comes from the students row, never from a preset.
+    """
     agent = ParentReportAgent(db_path=db_path)
     result = agent.generate_report("stu_ghost", period="cycle", lang_code="zh-hk")
     report = result["report"]
+    assert result["age_band"] == SEEDED_STUDENT_BAND
     assert report["student_id"] == "stu_ghost"
     assert report["variant"] == "first_steps"
     assert report["summary"]["session_count"] == 0
@@ -549,16 +591,21 @@ def test_execute_wrapper(db_path):
 
 
 def test_execute_missing_student(db_path):
-    """execute() with unknown student → graceful empty report."""
+    """execute() with an unknown student → LOUD error (H-2 PR-3a).
+
+    The band can no longer be defaulted, so an unknown student is a hard
+    failure — never a graceful "P4-P6" empty report.
+    """
     agent = ParentReportAgent(db_path=db_path)
     result = agent.execute("task_xyz", {
         "student_id": "stu_nope",
         "period": "cycle",
         "lang_code": "en",
     })
-    assert result["status"] == "ok"
-    assert result["result"]["report"]["variant"] == "first_steps"
-    assert result["result"]["report"]["summary"]["session_count"] == 0
+    assert result["status"] == "error"
+    assert "stu_nope" in result["error"]
+    assert "P4-P6" not in result["error"]
+    assert "result" not in result or "report" not in result.get("result", {})
 
 
 # ── Narrative numeric fixes (Day 27) ───────────────────
@@ -694,3 +741,115 @@ def test_variant_or_enough_sessions_long_span_standard(db_path):
     assert report["variant"] == "standard"
     assert report["baseline"] is None
     assert report["roadmap"] is None
+
+
+# ── H-2 age_band resolution (PR-3a, design book v1.1 §3.3) ─────────────
+
+def test_age_band_explicit_caller_unchanged(db_path):
+    """An explicitly passed band is used verbatim (auth/reports.py path).
+
+    `stu_nope` has NO students row: the call must still succeed, proving the
+    explicit-band path never consults the new resolution logic — the existing
+    caller's behaviour is unchanged.
+    """
+    agent = ParentReportAgent(db_path=db_path)
+    result = agent.generate_report(
+        "stu_nope", period="cycle", lang_code="zh-hk", age_band="P1-P3"
+    )
+    assert result["age_band"] == "P1-P3"
+    assert result["report"]["variant"] == "first_steps"
+
+
+def test_age_band_resolved_from_students_row(db_path, monkeypatch):
+    """No band passed → resolved from the students row and threaded into the
+    envelope AND every soften_label() call (never a preset literal)."""
+    conn = sqlite3.connect(db_path)
+    _seed_student(conn, "stu_band", age_band="P1-P3")
+    _seed_log(conn, "stu_band", "t_maths", "developing", 1)
+    _seed_session(conn, "stu_band", 1)
+    _seed_snapshot(conn, "stu_band", "t_maths", 0.5, "developing", 1)
+    conn.commit()
+    conn.close()
+
+    import agents.parent_report_agent as pra
+
+    seen = []
+    real = pra.soften_label
+
+    def _spy(internal_label, age_band, lang_code, audience="kid_facing"):
+        seen.append(age_band)
+        return real(internal_label, age_band, lang_code, audience=audience)
+
+    monkeypatch.setattr(pra, "soften_label", _spy)
+
+    agent = ParentReportAgent(db_path=db_path)
+    resolved = agent.generate_report("stu_band", period="cycle", lang_code="zh-hk")
+    assert resolved["age_band"] == "P1-P3"
+    assert seen, "soften_label must be reached for the topic label"
+    assert set(seen) == {"P1-P3"}, seen
+
+    # Resolved band == explicitly pinned band, field for field.
+    pinned = agent.generate_report(
+        "stu_band", period="cycle", lang_code="zh-hk", age_band="P1-P3"
+    )
+    assert resolved == pinned
+
+    # The async entry point resolves identically.
+    async_resolved = asyncio.run(
+        agent.generate_report_async(
+            "stu_band", period="cycle", lang_code="zh-hk", use_llm_narrative=False
+        )
+    )
+    assert async_resolved["age_band"] == "P1-P3"
+    assert set(seen) == {"P1-P3"}, seen
+
+
+def test_age_band_missing_student_loud_error(db_path):
+    """No band + no students row → loud error, masked id, no preset report."""
+    agent = ParentReportAgent(db_path=db_path)
+    missing = "stu_long_missing_id"
+
+    with pytest.raises(ValueError) as ei:
+        agent.generate_report(missing, period="cycle", lang_code="zh-hk")
+    msg = str(ei.value)
+    assert missing[:8] in msg, msg
+    assert missing not in msg, f"full student id leaked: {msg}"
+    assert "P4-P6" not in msg, msg
+
+    with pytest.raises(ValueError):
+        asyncio.run(
+            agent.generate_report_async(missing, use_llm_narrative=False)
+        )
+
+    # Hermes wrapper: same failure, surfaced as status="error" (not a report).
+    wrapped = agent.execute("task_nb", {"student_id": missing})
+    assert wrapped["status"] == "error"
+    assert missing[:8] in wrapped["error"]
+    assert "P4-P6" not in wrapped["error"]
+
+    # progress_summary rides the same path — it must not slip a preset band in.
+    wrapped_ps = agent.execute("task_nb2", {
+        "student_id": missing, "capability": "progress_summary",
+    })
+    assert wrapped_ps["status"] == "error"
+
+
+def test_empty_report_requires_resolvable_band(db_path):
+    """Empty-report path: resolvable band → empty report with DB truth;
+    unresolvable band → raise (no preset empty report)."""
+    conn = sqlite3.connect(db_path)
+    _seed_student(conn, "stu_blank", age_band="P4-P6")
+    conn.commit()
+    conn.close()
+
+    agent = ParentReportAgent(db_path=db_path)
+    result = agent.generate_report("stu_blank", period="cycle", lang_code="zh-hk")
+    assert result["report"]["variant"] == "first_steps"
+    assert result["report"]["summary"]["session_count"] == 0
+    # Comes from the students row (this row says P4-P6) — not from a default.
+    assert result["age_band"] == "P4-P6"
+
+    with pytest.raises(ValueError):
+        agent.generate_report(
+            "stu_blank_unregistered", period="cycle", lang_code="zh-hk"
+        )

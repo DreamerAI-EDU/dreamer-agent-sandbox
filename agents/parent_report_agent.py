@@ -40,7 +40,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional, Tuple
 
-from .kid_safe.label_soften import soften_label, get_mastery_pct
+from .kid_safe.label_soften import soften_label, get_mastery_pct, ALL_AGE_BANDS
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +127,42 @@ class ParentReportAgent:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         return conn
+
+    def _resolve_age_band(self, student_id: str) -> str:
+        """Resolve the student's age band from the ``students`` row.
+
+        H-2 (PR-3a, design book v1.1 §3.3): the band is read from the DB
+        student row — the same source the voice band gate uses
+        (``auth.ws_chat._band_for_student``) — never from a caller default and
+        never from a preset fallback. Missing row / empty / unknown band →
+        raise (loud error, masked student id), so no parent-facing copy can be
+        rendered for the wrong band.
+        """
+        mask = str(student_id)[:8]
+        try:
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT age_band FROM students WHERE id = ?", (student_id,)
+                ).fetchone()
+            finally:
+                conn.close()
+        except sqlite3.Error as exc:
+            raise ValueError(
+                f"parent_report: age_band lookup failed for student {mask} "
+                f"({type(exc).__name__}) — refusing to fall back to a preset band"
+            ) from exc
+
+        raw = (row["age_band"] if row is not None else "") or ""
+        key = str(raw).strip().lower().replace("\u2013", "-")
+        for known in ALL_AGE_BANDS:
+            if known.lower() == key:
+                return known
+        raise ValueError(
+            f"parent_report: no age_band for student {mask} "
+            "(missing students row, or empty/unknown band) — "
+            "refusing to fall back to a preset band"
+        )
 
     # ── Parameterized queries ─────────────────────────
 
@@ -696,11 +732,20 @@ class ParentReportAgent:
         student_id: str,
         period: str = "cycle",
         lang_code: str = "zh-hk",
-        age_band: str = "P4-P6",
+        age_band: Optional[str] = None,
         include_safety: bool = False,
         use_llm_narrative: bool = True,
     ) -> dict:
-        """Build full parent report (async path, LLM narrative)."""
+        """Build full parent report (async path, LLM narrative).
+
+        H-2 (PR-3a, design book v1.1 §3.3): ``age_band`` is optional. When the
+        caller does not pin a band it is resolved from the ``students`` row
+        (same source as the voice band gate); an unresolvable band raises
+        instead of silently falling back to a preset band. Callers that pass
+        an explicit band (``auth/reports.py``) behave exactly as before.
+        """
+        if age_band is None:
+            age_band = self._resolve_age_band(student_id)
         # 1. raw queries
         logs_all = self._query_assessment_logs(student_id, None, _now_iso())
         sessions_all = self._query_session_logs(student_id, None, _now_iso())
@@ -853,15 +898,19 @@ class ParentReportAgent:
         student_id: str,
         period: str = "cycle",
         lang_code: str = "zh-hk",
-        age_band: str = "P4-P6",
+        age_band: Optional[str] = None,
         include_safety: bool = False,
     ) -> dict:
         """Sync report (template narrative; no LLM). Hermes-safe.
 
-        H-2 (PR-3): ``age_band`` is threaded into BOTH branches — the empty
-        report, the topic labels and the envelope. Before the fix the band was
-        dropped on the floor and the envelope always reported ``None``.
+        H-2 (PR-3a, design book v1.1 §3.3): ``age_band`` is threaded into BOTH
+        branches — the empty report, the topic labels and the envelope — and is
+        now optional. When the caller does not pin a band it is resolved from
+        the ``students`` row (same source as the voice band gate); an
+        unresolvable band raises. No preset-band fallback remains.
         """
+        if age_band is None:
+            age_band = self._resolve_age_band(student_id)
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -991,7 +1040,11 @@ class ParentReportAgent:
         capability = params.get("capability", "report_gen")
         period = params.get("period", "cycle")
         lang_code = params.get("lang_code", "zh-hk")
-        age_band = params.get("age_band") or "P4-P6"   # H-2: real band, not None
+        # H-2 (PR-3a, design book v1.1 §3.3): the band is NOT defaulted here.
+        # None is handed to generate_report(), which resolves it from the
+        # students row and raises when unresolvable — the raise is caught below
+        # and returned as status="error" (loud), never a silent preset report.
+        age_band = params.get("age_band")
         include_safety = bool(params.get("include_safety", False))
 
         try:

@@ -151,21 +151,21 @@
     "level": 0,
     "band": "P1-P3",
     "lang": "en",
-    "text": "Not yet — fact-checking has not been assessed."
+    "text": "Not yet — believed everything without checking."
   },
   {
     "dimension": "DISCOVER",
     "level": 0,
     "band": "P4-P6",
     "lang": "en",
-    "text": "Not yet — checking of answers has not been assessed."
+    "text": "Not yet — accepts AI answers without checking."
   },
   {
     "dimension": "DISCOVER",
     "level": 0,
     "band": "S1-S3",
     "lang": "en",
-    "text": "Not yet — critical source review has not been assessed."
+    "text": "Not yet — accepts generated content uncritically."
   },
   {
     "dimension": "DESIGN",
@@ -487,21 +487,21 @@
     "level": 0,
     "band": "P1-P3",
     "lang": "zh-hk",
-    "text": "尚未——查證能力尚未評核。"
+    "text": "尚未——未學懂查證便照單全收。"
   },
   {
     "dimension": "DISCOVER",
     "level": 0,
     "band": "P4-P6",
     "lang": "zh-hk",
-    "text": "尚未——核實答案的能力尚未評核。"
+    "text": "尚未——未查證便接受 AI 答案。"
   },
   {
     "dimension": "DISCOVER",
     "level": 0,
     "band": "S1-S3",
     "lang": "zh-hk",
-    "text": "尚未——批判性審視來源的能力尚未評核。"
+    "text": "尚未——照單全收 AI 生成內容。"
   },
   {
     "dimension": "DESIGN",
@@ -823,21 +823,21 @@
     "level": 0,
     "band": "P1-P3",
     "lang": "zh-cn",
-    "text": "尚未——查证能力尚未评核。"
+    "text": "尚未——未学会查证便照单全收。"
   },
   {
     "dimension": "DISCOVER",
     "level": 0,
     "band": "P4-P6",
     "lang": "zh-cn",
-    "text": "尚未——核实答案的能力尚未评核。"
+    "text": "尚未——未查证就接受 AI 答案。"
   },
   {
     "dimension": "DISCOVER",
     "level": 0,
     "band": "S1-S3",
     "lang": "zh-cn",
-    "text": "尚未——批判性审视来源的能力尚未评核。"
+    "text": "尚未——全盘接受 AI 生成内容。"
   },
   {
     "dimension": "DESIGN",

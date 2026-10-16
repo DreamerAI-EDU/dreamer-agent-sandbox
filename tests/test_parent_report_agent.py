@@ -773,6 +773,23 @@ def test_age_band_resolved_from_students_row(db_path, monkeypatch):
 
     import agents.parent_report_agent as pra
 
+    # PR-4b: freeze the clock. Both generate_report() calls below must observe the
+    # very same instant — the period window is (start = now - N days, end = now),
+    # so a real clock straddling a second/minute boundary between the two calls
+    # made the field-for-field equality assertion below flaky (PR-3a regression,
+    # seen as 1 failed on the PR-4 first CI run). Production code is untouched:
+    # only the two module-level clock helpers are monkeypatched for this test.
+    frozen = datetime.now(timezone.utc).replace(microsecond=0)
+
+    def _frozen_now_iso() -> str:
+        return frozen.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def _frozen_days_ago_iso(days: int) -> str:
+        return (frozen - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    monkeypatch.setattr(pra, "_now_iso", _frozen_now_iso)
+    monkeypatch.setattr(pra, "_days_ago_iso", _frozen_days_ago_iso)
+
     seen = []
     real = pra.soften_label
 

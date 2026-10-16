@@ -41,6 +41,7 @@ os.environ.setdefault("PYTHONPATH", REPO_ROOT)
 
 from auth import db as auth_db  # noqa: E402
 from auth import report_store  # noqa: E402
+from auth import report_descriptors as rd  # noqa: E402
 from auth.api import build_app  # noqa: E402
 
 HEADERS = {"X-Requested-With": "XMLHttpRequest"}
@@ -978,3 +979,318 @@ def test_t7_legal_transition_table_shape():
     assert report_store.REPORT_STATUSES == (
         "pending_review", "approved", "rejected", "superseded",
     )
+
+
+# ---------------------------------------------------------------------------
+# PR-4 (design book v1.1 §5 + §8.3): descriptor sentences ride the draft
+# ---------------------------------------------------------------------------
+
+
+async def _score(client, user_id, *, student_id=SID_A, class_id="class-0001",
+                 week_no=3, skill_code="DREAM", score_0_3=2):
+    """Seed one teacher score through the PR-2 endpoint (no hand-written SQL)."""
+    return await client.put(
+        "/api/teacher/scores",
+        json={
+            "student_id": student_id,
+            "class_id": class_id,
+            "week_no": week_no,
+            "skill_code": skill_code,
+            "score_0_3": score_0_3,
+            "evidence_text": "PR-4 打分",
+        },
+        headers=_cookie_header(user_id),
+    )
+
+
+@pytest.mark.asyncio
+async def test_t4_draft_carries_one_descriptor_per_scored_dimension(client, world):
+    """Graded dims get the (dim, score, real band, lang) sentence; NULL gets none."""
+    for code, value in (("DREAM", 0), ("DISCOVER", 2), ("DESIGN", 3)):
+        resp = await _score(client, T1, skill_code=code, score_0_3=value)
+        assert resp.status in (200, 201), await resp.text()
+
+    draft = await (await _generate(client, T1)).json()
+    row = _report_rows(world["db_path"], SID_A)[0]
+    picked = _payload_of(row)["report"]["dimension_descriptors"]
+
+    assert row["age_band"] == "P4-P6" and row["lang_code"] == "zh-hk"
+    assert set(picked) == {"DREAM", "DISCOVER", "DESIGN"}
+    assert picked["DREAM"] == rd.descriptor("DREAM", 0, "P4-P6", "zh-hk")
+    assert picked["DISCOVER"] == rd.descriptor("DISCOVER", 2, "P4-P6", "zh-hk")
+    assert picked["DESIGN"] == rd.descriptor("DESIGN", 3, "P4-P6", "zh-hk")
+    # 0 is a real score: it reads as "Not yet", the book's Level 0 opening
+    assert picked["DREAM"].startswith("尚未——")
+    # the ungraded dimension is absent — never pitched as a Not Yet judgement
+    assert "DELIVER" not in picked
+    assert rd.descriptor("DELIVER", 0, "P4-P6", "zh-hk") not in json.dumps(
+        _payload_of(row), ensure_ascii=False
+    )
+
+    # the same sentences are what the teacher draft and the parent later read
+    assert draft["payload"]["report"]["dimension_descriptors"] == picked
+    rid = draft["report_id"]
+    assert (await _decide(client, T1, rid, "approve")).status == 200
+    detail = await client.get(
+        f"/api/parent/reports?student_id={SID_A}&report_id={rid}",
+        headers=_cookie_header(P1),
+    )
+    served = (await detail.json())["report"]
+    assert served["age_band"] == "P4-P6"
+    assert served["payload"]["report"]["dimension_descriptors"] == picked
+
+
+@pytest.mark.asyncio
+async def test_t4_out_of_book_band_borrows_no_descriptor_at_all(client, world):
+    """SID_E carries the seeded band "P2-P3" — outside the book's closed set.
+
+    Scored, but the descriptor must not be borrowed from another band: the
+    pre-PR-4 report is served instead of a sentence written for the wrong band
+    (the H-2 discipline). Asserted on the stored payload, teacher draft and the
+    parent projection.
+    """
+    conn = sqlite3.connect(world["db_path"])
+    conn.execute(
+        "INSERT INTO class_students (class_id,student_id,status,created_at) "
+        "VALUES ('class-0002',?,'confirmed',?)",
+        (SID_E, _ago_iso(days=30)),
+    )
+    conn.commit()
+    conn.close()
+
+    resp = await _score(
+        client, T2, student_id=SID_E, class_id="class-0002",
+        skill_code="DREAM", score_0_3=0,
+    )
+    assert resp.status in (200, 201), await resp.text()
+    # premise: the dimension really is graded in the window
+    assert _rows(
+        world["db_path"],
+        "SELECT score_0_3 FROM assessment_logs WHERE student_id = ?"
+        " AND scored_by = 'teacher' AND skill_code = 'DREAM' AND week_no = 3",
+        (SID_E,),
+    )[0]["score_0_3"] == 0
+
+    draft = await _generate(client, T2, student_id=SID_E, class_id="class-0002")
+    assert draft.status == 201, await draft.text()
+    body = await draft.json()
+    assert body["age_band"] == "P2-P3"
+
+    row = _report_rows(world["db_path"], SID_E)[0]
+    payload = _payload_of(row)
+    assert payload["age_band"] == "P2-P3"
+    block = payload["report"].get("dimension_descriptors")
+    assert block in (None, {}), "an out-of-book band must not borrow a descriptor"
+
+    blob = json.dumps(payload, ensure_ascii=False)
+    for band in ("P1-P3", "P4-P6", "S1-S3"):
+        for level in range(4):
+            assert rd.descriptor("DREAM", level, band, "en") not in blob
+
+    rid = body["report_id"]
+    assert (await _decide(client, T2, rid, "approve")).status == 200
+    detail = await client.get(
+        f"/api/parent/reports?student_id={SID_E}&report_id={rid}",
+        headers=_cookie_header(P2),
+    )
+    served = (await detail.json())["report"]
+    assert served["age_band"] == "P2-P3"
+    assert served["payload"]["report"].get("dimension_descriptors") in (None, {})
+
+
+# ---------------------------------------------------------------------------
+# PR-4 尾项: phase8j — the LIKE→substr fix for the teacher_edits guard
+# ---------------------------------------------------------------------------
+
+
+def _norm_sql(text: str) -> str:
+    """Compare SQL statements only: drop ``--`` comments and collapse ws."""
+    lines = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("--"):
+            continue
+        lines.append(stripped)
+    return " ".join(" ".join(lines).split()).replace(" ;", ";")
+
+
+@pytest.mark.asyncio
+async def test_t4_phase8j_canonical_matches_db_mirror(client, world):
+    """phase8j 规范档 == db.py 镜像，且新库 / 升级库都拿到 substr 版触发器。"""
+    import inspect
+
+    path = os.path.join(
+        REPO_ROOT, "migrations", "phase8j_teacher_edits_trigger_fix.sql"
+    )
+    with open(path, encoding="utf-8") as fh:
+        canonical = fh.read()
+
+    for needle in (
+        "DROP TRIGGER IF EXISTS parent_reports_teacher_edits_append_only",
+        "substr(NEW.teacher_edits, 1, length(OLD.teacher_edits) - 1)",
+        "json_array_length(NEW.teacher_edits) < json_array_length(OLD.teacher_edits)",
+    ):
+        assert needle in canonical, f"canonical is missing: {needle}"
+    assert _norm_sql(auth_db._PR4_TEACHER_EDITS_TRIGGER_FIX_DDL) in _norm_sql(canonical)
+    # phase8i is frozen: its LIKE guard is still carried verbatim (not rewritten)
+    assert "|| '%'" in auth_db._PR3_PARENT_REPORTS_GUARDS_DDL
+    # the fix rides the fresh-DB path: the composed _DDL ends with guards + fix …
+    module_src = inspect.getsource(auth_db)
+    assert (
+        "_PR3_PARENT_REPORTS_GUARDS_DDL + _PR4_TEACHER_EDITS_TRIGGER_FIX_DDL"
+        in module_src
+    )
+    assert "DROP TRIGGER IF EXISTS parent_reports_teacher_edits_append_only" in auth_db._DDL
+    assert "substr(NEW.teacher_edits, 1, length(OLD.teacher_edits) - 1)" in auth_db._DDL
+    # … and the post-migration 补钉 for upgraded DBs (phase8i → phase8j)
+    assert "_PR4_TEACHER_EDITS_TRIGGER_FIX_DDL" in inspect.getsource(
+        auth_db.apply_phase8j_teacher_edits_trigger_fix
+    )
+    assert "apply_phase8j_teacher_edits_trigger_fix" in inspect.getsource(
+        auth_db.apply_phase8i_pr3_migration
+    )
+
+    live = _rows(
+        world["db_path"],
+        "SELECT sql FROM sqlite_master WHERE name='parent_reports_teacher_edits_append_only'",
+    )[0]["sql"]
+    assert "substr" in live and "LIKE" not in live.upper()
+
+
+def test_t4_phase8j_substr_blocks_the_wildcard_rewrite(tmp_path):
+    """The finding itself, replayed on a scratch DB: LIKE passes, substr blocks.
+
+    The stored value contains SQL wildcards ('%', '_'), which is exactly what a
+    teacher edit carrying a percentage figure looks like. A same-length rewrite
+    that only mangles those positions matched the frozen LIKE prefix and wiped
+    the diff audit trail silently; the substr comparison must reject it.
+    """
+    age8i = auth_db._PR3_PARENT_REPORTS_GUARDS_DDL
+    frozen = "-- ③" + age8i.split("-- ③", 1)[1]  # the ③ guard only
+
+    old = json.dumps(
+        [{"field": "report.summary", "after": "100%_完成"}], ensure_ascii=False
+    )
+    append = json.dumps(
+        [
+            {"field": "report.summary", "after": "100%_完成"},
+            {"field": "report.roadmap", "after": "第二步"},
+        ],
+        ensure_ascii=False,
+    )
+    mangled = old.replace("%", "@").replace("_", "@")
+    assert len(mangled) == len(old) and mangled != old
+
+    probe = sqlite3.connect(str(tmp_path / "trigger_probe.db"))
+    try:
+        probe.execute("CREATE TABLE parent_reports (report_id TEXT, teacher_edits TEXT)")
+        probe.execute("INSERT INTO parent_reports VALUES ('r1', ?)", (old,))
+        probe.execute("INSERT INTO parent_reports VALUES ('r2', ?)", (old,))
+        probe.commit()
+
+        # frozen phase8i ③ (LIKE): the same-length wildcard rewrite slips through
+        probe.executescript(frozen)
+        probe.execute(
+            "UPDATE parent_reports SET teacher_edits = ? WHERE report_id = 'r1'",
+            (mangled,),
+        )
+        probe.commit()
+        assert probe.execute(
+            "SELECT teacher_edits FROM parent_reports WHERE report_id = 'r1'"
+        ).fetchone()[0] == mangled
+
+        # phase8j (substr): append allowed …
+        probe.executescript(auth_db._PR4_TEACHER_EDITS_TRIGGER_FIX_DDL)
+        probe.execute(
+            "UPDATE parent_reports SET teacher_edits = ? WHERE report_id = 'r2'",
+            (append,),
+        )
+        probe.commit()
+        assert json.loads(
+            probe.execute(
+                "SELECT teacher_edits FROM parent_reports WHERE report_id = 'r2'"
+            ).fetchone()[0]
+        ) == json.loads(append)
+
+        # … shrink blocked …
+        with pytest.raises(sqlite3.IntegrityError):
+            probe.execute(
+                "UPDATE parent_reports SET teacher_edits = '[]' WHERE report_id = 'r2'"
+            )
+        probe.rollback()
+        assert json.loads(
+            probe.execute(
+                "SELECT teacher_edits FROM parent_reports WHERE report_id = 'r2'"
+            ).fetchone()[0]
+        ) == json.loads(append)
+
+        # … and both the same-length wildcard rewrite and the trailing tweak blocked
+        for bad in (mangled, append.replace("第二步", "第三步")):
+            with pytest.raises(sqlite3.IntegrityError):
+                probe.execute(
+                    "UPDATE parent_reports SET teacher_edits = ? WHERE report_id = 'r2'",
+                    (bad,),
+                )
+            probe.rollback()
+        assert json.loads(
+            probe.execute(
+                "SELECT teacher_edits FROM parent_reports WHERE report_id = 'r2'"
+            ).fetchone()[0]
+        ) == json.loads(append)
+    finally:
+        probe.close()
+
+
+@pytest.mark.asyncio
+async def test_t4_phase8j_live_guard_blocks_wildcard_rewrite_via_http(client, world):
+    """Same three cases against the live DB the API writes to."""
+    draft = await (await _generate(client, T1)).json()
+    rid = draft["report_id"]
+    written = await client.put(
+        f"/api/teacher/reports/{rid}",
+        json={"edits": [{"field": "report.summary", "after": "100%_完成"}]},
+        headers=_cookie_header(T1),
+    )
+    assert written.status == 200, await written.text()
+
+    def _current() -> str:
+        return _rows(
+            world["db_path"],
+            "SELECT teacher_edits FROM parent_reports WHERE report_id = ?",
+            (rid,),
+        )[0]["teacher_edits"]
+
+    old = _current()
+    assert "%" in old and "_" in old
+    conn = sqlite3.connect(world["db_path"])
+    try:
+        # ① append: allowed
+        conn.execute(
+            "UPDATE parent_reports SET teacher_edits = ? WHERE report_id = ?",
+            (old[:-1] + ', {"field": "report.roadmap", "after": "第二步"}]', rid),
+        )
+        conn.commit()
+        assert len(json.loads(_current())) == 2
+
+        # ② shrink: blocked
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "UPDATE parent_reports SET teacher_edits = '[]' WHERE report_id = ?",
+                (rid,),
+            )
+        conn.rollback()
+
+        # ③ same-length rewrite mangling the '%' / '_' chars: blocked
+        mangled = old.replace("%", "@").replace("_", "@")
+        assert len(json.loads(mangled)) == len(json.loads(old))
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "UPDATE parent_reports SET teacher_edits = ? WHERE report_id = ?",
+                (mangled, rid),
+            )
+        conn.rollback()
+    finally:
+        conn.close()
+
+    assert _current() != mangled
+    assert len(json.loads(_current())) == 2

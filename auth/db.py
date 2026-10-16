@@ -149,6 +149,32 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_assessment_teacher_score
 """
 
 
+# PR-4 fix for PR-3 finding B (boss work order 2026-10-16). Canonical DDL lives
+# in migrations/phase8j_teacher_edits_trigger_fix.sql; mirrored here verbatim.
+# The phase8i ③ guard above is frozen (already committed, must not be rewritten)
+# and used LIKE for the prefix collision — a rewrite that only mangles a '%'/'_'
+# position inside the old value matched the wildcard and slipped through. This
+# block DROPs that trigger and recreates it with a substr, character-by-character
+# prefix check. Wired at the tail of _DDL (after _PR3_PARENT_REPORTS_GUARDS_DDL)
+# so a fresh DB from ensure_schema() ends up with the fixed trigger, exactly like
+# an upgraded DB that ran apply_phase8j_teacher_edits_trigger_fix().
+_PR4_TEACHER_EDITS_TRIGGER_FIX_DDL = """\
+DROP TRIGGER IF EXISTS parent_reports_teacher_edits_append_only;
+CREATE TRIGGER parent_reports_teacher_edits_append_only
+BEFORE UPDATE OF teacher_edits ON parent_reports
+FOR EACH ROW
+WHEN json_valid(OLD.teacher_edits) AND json_valid(NEW.teacher_edits)
+     AND (
+          json_array_length(NEW.teacher_edits) < json_array_length(OLD.teacher_edits)
+          OR substr(NEW.teacher_edits, 1, length(OLD.teacher_edits) - 1)
+             != substr(OLD.teacher_edits, 1, length(OLD.teacher_edits) - 1)
+     )
+BEGIN
+    SELECT RAISE(ABORT, 'parent_reports.teacher_edits is append-only (no rewrite, no shrink)');
+END;
+"""
+
+
 # Mirrors migrations/phase8_auth.sql (must be kept in sync; the schema-pairing
 # test asserts the live PRAGMA output against the SQL file).
 _DDL = """\
@@ -404,7 +430,7 @@ CREATE TABLE IF NOT EXISTS voice_month_meter (
     alerted_at  TEXT,
     updated_at  TEXT NOT NULL
 );
-""" + _PR_PARENT_REPORTS_DDL + _TEACHER_SCORE_AUDIT_DDL + _PR3_PARENT_REPORTS_GUARDS_DDL
+""" + _PR_PARENT_REPORTS_DDL + _TEACHER_SCORE_AUDIT_DDL + _PR3_PARENT_REPORTS_GUARDS_DDL + _PR4_TEACHER_EDITS_TRIGGER_FIX_DDL
 
 
 def _db_path() -> str:
@@ -559,6 +585,37 @@ def apply_phase8i_pr3_migration() -> None:
         ).fetchone()
         if has_parent_reports:
             conn.executescript(_PR3_PARENT_REPORTS_GUARDS_DDL)
+        conn.commit()
+    finally:
+        conn.close()
+    # Post-migration 补钉 (PR-4): the phase8i ③ guard above is carried verbatim
+    # for upgraded DBs too, so the LIKE→substr fix has to be applied right after
+    # it here — otherwise a VPS DB would keep the wildcard-bypassable trigger.
+    apply_phase8j_teacher_edits_trigger_fix()
+
+
+def apply_phase8j_teacher_edits_trigger_fix() -> None:
+    """Idempotently apply migrations/phase8j_teacher_edits_trigger_fix.sql.
+
+    PR-3 finding B: the phase8i ③ append-only guard compared prefixes with
+    ``LIKE``, so a value containing SQL wildcards ('%' / '_') could be rewritten
+    at the same length without tripping the trigger. This DROPs the trigger and
+    recreates it with a ``substr`` character-by-character comparison; semantics
+    are otherwise unchanged (no shrink, no rewrite, append-only).
+
+    phase8i itself is frozen (already committed) — the fix is delivered as a
+    separate, superseding migration. Skipped when parent_reports is absent.
+
+    Safe to re-run: DROP IF EXISTS + CREATE, no ALTER, no data movement.
+    """
+    conn = connect()
+    try:
+        has_parent_reports = conn.execute(
+            "SELECT 1 FROM sqlite_master"
+            " WHERE type='table' AND name='parent_reports'"
+        ).fetchone()
+        if has_parent_reports:
+            conn.executescript(_PR4_TEACHER_EDITS_TRIGGER_FIX_DDL)
         conn.commit()
     finally:
         conn.close()

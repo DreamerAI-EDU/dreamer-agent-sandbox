@@ -43,6 +43,7 @@ from . import consent
 from . import curriculum as curriculum_mod
 from . import db
 from . import payments as payments_mod
+from . import report_descriptors as report_descriptors_mod
 from . import report_store as report_store_mod
 from . import reports as reports_mod
 from . import safety as safety_mod
@@ -2084,6 +2085,19 @@ async def handle_teacher_report_generate(request: web.Request) -> web.Response:
         student, period, include_safety=True, mask_student_id=False
     )
     scores = report_store_mod.build_dimension_scores(student_id, week_from, week_to)
+    # PR-4: grade -> descriptor sentence (design book v1.1 §5). Same band/lang the
+    # row stores, so descriptor and band can never disagree; an ungraded dimension
+    # (None) yields no sentence instead of a bogus "Not Yet". Descriptor bands are
+    # the book's closed set (P1-P3 / P4-P6 / S1-S3 — auth.students.AGE_BANDS); a
+    # legacy row whose band sits outside it (e.g. the seeded "P2-P3") keeps the
+    # pre-PR-4 report: no sentence at all, never one written for another band (H-2).
+    if student["age_band"] in report_descriptors_mod.BANDS:
+        report_descriptors_mod.attach_dimension_descriptors(
+            envelope,
+            scores=scores,
+            age_band=student["age_band"],
+            lang_code=student["lang_code"],
+        )
     try:
         row = report_store_mod.create_pending_report(
             student_id=student_id,

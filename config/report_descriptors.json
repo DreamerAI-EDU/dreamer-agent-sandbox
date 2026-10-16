@@ -1,0 +1,1010 @@
+[
+  {
+    "dimension": "DREAM",
+    "level": 3,
+    "band": "P1-P3",
+    "lang": "en",
+    "text": "Full of own ideas — thinks of many different ones and picks the most special, making something nobody else has."
+  },
+  {
+    "dimension": "DREAM",
+    "level": 3,
+    "band": "P4-P6",
+    "lang": "en",
+    "text": "Creativity with original design — imagines widely, explores more than one possibility, and creates work that is uniquely their own."
+  },
+  {
+    "dimension": "DREAM",
+    "level": 3,
+    "band": "S1-S3",
+    "lang": "en",
+    "text": "Original, wide-ranging creativity — generates diverse ideas, subverts conventions, and produces work with a distinctive voice."
+  },
+  {
+    "dimension": "DREAM",
+    "level": 2,
+    "band": "P1-P3",
+    "lang": "en",
+    "text": "Shares own ideas with a little help and makes them into something new."
+  },
+  {
+    "dimension": "DREAM",
+    "level": 2,
+    "band": "P4-P6",
+    "lang": "en",
+    "text": "Comes up with own ideas and, with AI help, picks the one that feels most original to finish."
+  },
+  {
+    "dimension": "DREAM",
+    "level": 2,
+    "band": "S1-S3",
+    "lang": "en",
+    "text": "Produces complete creative work from own ideas, using AI selectively and crediting it."
+  },
+  {
+    "dimension": "DREAM",
+    "level": 1,
+    "band": "P1-P3",
+    "lang": "en",
+    "text": "Needs help to think of own ideas; mostly uses the AI's first idea."
+  },
+  {
+    "dimension": "DREAM",
+    "level": 1,
+    "band": "P4-P6",
+    "lang": "en",
+    "text": "Starting to imagine — ideas so far follow AI's first answer; original twists still emerging."
+  },
+  {
+    "dimension": "DREAM",
+    "level": 1,
+    "band": "S1-S3",
+    "lang": "en",
+    "text": "Ideas closely follow AI suggestions; limited range or personal variation."
+  },
+  {
+    "dimension": "DREAM",
+    "level": 0,
+    "band": "P1-P3",
+    "lang": "en",
+    "text": "Not yet — no own ideas shared."
+  },
+  {
+    "dimension": "DREAM",
+    "level": 0,
+    "band": "P4-P6",
+    "lang": "en",
+    "text": "Not yet — no original ideas shared this period."
+  },
+  {
+    "dimension": "DREAM",
+    "level": 0,
+    "band": "S1-S3",
+    "lang": "en",
+    "text": "Not yet — no original work submitted."
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 3,
+    "band": "P1-P3",
+    "lang": "en",
+    "text": "Spots when something is wrong and says how they knew — checks before believing."
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 3,
+    "band": "P4-P6",
+    "lang": "en",
+    "text": "Checks before believing — independently spots errors, verifies facts with reliable sources, and explains why."
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 3,
+    "band": "S1-S3",
+    "lang": "en",
+    "text": "Evaluates sources critically — verifies claims through cross-checking and articulates the reasoning chain."
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 2,
+    "band": "P1-P3",
+    "lang": "en",
+    "text": "Found most mistakes with a little help."
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 2,
+    "band": "P4-P6",
+    "lang": "en",
+    "text": "Checks with some help — compares answers and can name what made one better."
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 2,
+    "band": "S1-S3",
+    "lang": "en",
+    "text": "Verifies key claims with occasional prompting."
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 1,
+    "band": "P1-P3",
+    "lang": "en",
+    "text": "Felt something was strange but needed help to check."
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 1,
+    "band": "P4-P6",
+    "lang": "en",
+    "text": "Beginning to question — notices something is off but needs help to verify."
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 1,
+    "band": "S1-S3",
+    "lang": "en",
+    "text": "Detects inconsistencies but cannot yet substantiate them."
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 0,
+    "band": "P1-P3",
+    "lang": "en",
+    "text": "Not yet — fact-checking has not been assessed."
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 0,
+    "band": "P4-P6",
+    "lang": "en",
+    "text": "Not yet — checking of answers has not been assessed."
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 0,
+    "band": "S1-S3",
+    "lang": "en",
+    "text": "Not yet — critical source review has not been assessed."
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 3,
+    "band": "P1-P3",
+    "lang": "en",
+    "text": "Plans first, then builds, tests, and fixes — almost all by themselves."
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 3,
+    "band": "P4-P6",
+    "lang": "en",
+    "text": "Designs and improves — plans before building, tests the work, and fixes problems independently."
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 3,
+    "band": "S1-S3",
+    "lang": "en",
+    "text": "Iterates deliberately — plans, prototypes, tests, and documents design decisions."
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 2,
+    "band": "P1-P3",
+    "lang": "en",
+    "text": "Built the work with some help and fixed one thing."
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 2,
+    "band": "P4-P6",
+    "lang": "en",
+    "text": "Builds complete work — follows through with a plan and makes at least one improvement."
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 2,
+    "band": "S1-S3",
+    "lang": "en",
+    "text": "Completes planned builds and applies feedback at least once."
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 1,
+    "band": "P1-P3",
+    "lang": "en",
+    "text": "Started without a plan; needed help to fix."
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 1,
+    "band": "P4-P6",
+    "lang": "en",
+    "text": "Builds with support — work is unfinished or closely copied; fixes need guidance."
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 1,
+    "band": "S1-S3",
+    "lang": "en",
+    "text": "Builds ad hoc; revisions require scaffolding."
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 0,
+    "band": "P1-P3",
+    "lang": "en",
+    "text": "Not yet — nothing built yet."
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 0,
+    "band": "P4-P6",
+    "lang": "en",
+    "text": "Not yet — no artifact produced."
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 0,
+    "band": "S1-S3",
+    "lang": "en",
+    "text": "Not yet — no prototype produced."
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 3,
+    "band": "P1-P3",
+    "lang": "en",
+    "text": "Speaks loudly and proudly — tells the whole story of the work."
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 3,
+    "band": "P4-P6",
+    "lang": "en",
+    "text": "Presents with confidence — clear voice, structured story, proud of own work, with bilingual elements."
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 3,
+    "band": "S1-S3",
+    "lang": "en",
+    "text": "Communicates with structure and poise — adapts to the audience and handles questions."
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 2,
+    "band": "P1-P3",
+    "lang": "en",
+    "text": "Finished the sharing with a little help."
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 2,
+    "band": "P4-P6",
+    "lang": "en",
+    "text": "Presents complete work — shares a full presentation with some support."
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 2,
+    "band": "S1-S3",
+    "lang": "en",
+    "text": "Delivers a complete presentation meeting the brief."
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 1,
+    "band": "P1-P3",
+    "lang": "en",
+    "text": "Sharing was very short or very quiet."
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 1,
+    "band": "P4-P6",
+    "lang": "en",
+    "text": "Sharing is emerging — very short or hesitant presentation."
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 1,
+    "band": "S1-S3",
+    "lang": "en",
+    "text": "Delivery is minimal or read from script."
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 0,
+    "band": "P1-P3",
+    "lang": "en",
+    "text": "Not yet — no sharing yet."
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 0,
+    "band": "P4-P6",
+    "lang": "en",
+    "text": "Not yet — no presentation attempted."
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 0,
+    "band": "S1-S3",
+    "lang": "en",
+    "text": "Not yet — no presentation delivered."
+  },
+  {
+    "dimension": "DREAM",
+    "level": 3,
+    "band": "P1-P3",
+    "lang": "zh-hk",
+    "text": "想法豐富——能想出多個不同點子，並挑選最特別的實踐出來，作品充滿個人風格。"
+  },
+  {
+    "dimension": "DREAM",
+    "level": 3,
+    "band": "P4-P6",
+    "lang": "zh-hk",
+    "text": "創意兼原創設計——想像力廣，能探索多於一個可能，作品獨一無二、充滿個人風格。"
+  },
+  {
+    "dimension": "DREAM",
+    "level": 3,
+    "band": "S1-S3",
+    "lang": "zh-hk",
+    "text": "創意原創且多元——能產出多樣想法、打破常規，作品風格鮮明獨特。"
+  },
+  {
+    "dimension": "DREAM",
+    "level": 2,
+    "band": "P1-P3",
+    "lang": "zh-hk",
+    "text": "在少許協助下說出自己的想法，並製成新作品。"
+  },
+  {
+    "dimension": "DREAM",
+    "level": 2,
+    "band": "P4-P6",
+    "lang": "zh-hk",
+    "text": "能提出自己的想法，借助 AI 挑選最具原創性的一個完成作品。"
+  },
+  {
+    "dimension": "DREAM",
+    "level": 2,
+    "band": "S1-S3",
+    "lang": "zh-hk",
+    "text": "能以自己的想法完成創作，有選擇地引用 AI 並註明出處。"
+  },
+  {
+    "dimension": "DREAM",
+    "level": 1,
+    "band": "P1-P3",
+    "lang": "zh-hk",
+    "text": "需要協助才能想到自己的點子，多數採用 AI 第一個答案。"
+  },
+  {
+    "dimension": "DREAM",
+    "level": 1,
+    "band": "P4-P6",
+    "lang": "zh-hk",
+    "text": "開始發揮想像，惟點子多跟隨 AI 首個答案，原創元素仍在萌芽。"
+  },
+  {
+    "dimension": "DREAM",
+    "level": 1,
+    "band": "S1-S3",
+    "lang": "zh-hk",
+    "text": "想法緊貼 AI 建議，多元度與個人變化有限。"
+  },
+  {
+    "dimension": "DREAM",
+    "level": 0,
+    "band": "P1-P3",
+    "lang": "zh-hk",
+    "text": "尚未——未開始分享自己的想法。"
+  },
+  {
+    "dimension": "DREAM",
+    "level": 0,
+    "band": "P4-P6",
+    "lang": "zh-hk",
+    "text": "尚未——本期未見原創想法。"
+  },
+  {
+    "dimension": "DREAM",
+    "level": 0,
+    "band": "S1-S3",
+    "lang": "zh-hk",
+    "text": "尚未——未提交原創作品。"
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 3,
+    "band": "P1-P3",
+    "lang": "zh-hk",
+    "text": "能察覺不妥之處並說出原因，懂得先查證再相信。"
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 3,
+    "band": "P4-P6",
+    "lang": "zh-hk",
+    "text": "抱持「先查證、後相信」——能獨立發現錯處，以可靠來源查證，並說明理由。"
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 3,
+    "band": "S1-S3",
+    "lang": "zh-hk",
+    "text": "能批判地評估來源，透過交叉查證核實資訊，並清楚說明推理過程。"
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 2,
+    "band": "P1-P3",
+    "lang": "zh-hk",
+    "text": "在少許協助下能找出大部分錯處。"
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 2,
+    "band": "P4-P6",
+    "lang": "zh-hk",
+    "text": "能在少許協助下核對答案，並指出好壞分別。"
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 2,
+    "band": "S1-S3",
+    "lang": "zh-hk",
+    "text": "能在少量提示下核實重點資訊。"
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 1,
+    "band": "P1-P3",
+    "lang": "zh-hk",
+    "text": "能感到奇怪，但需協助查證。"
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 1,
+    "band": "P4-P6",
+    "lang": "zh-hk",
+    "text": "開始存疑，惟需要協助才能完成查證。"
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 1,
+    "band": "S1-S3",
+    "lang": "zh-hk",
+    "text": "能察覺矛盾，惟未能提出佐證。"
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 0,
+    "band": "P1-P3",
+    "lang": "zh-hk",
+    "text": "尚未——查證能力尚未評核。"
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 0,
+    "band": "P4-P6",
+    "lang": "zh-hk",
+    "text": "尚未——核實答案的能力尚未評核。"
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 0,
+    "band": "S1-S3",
+    "lang": "zh-hk",
+    "text": "尚未——批判性審視來源的能力尚未評核。"
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 3,
+    "band": "P1-P3",
+    "lang": "zh-hk",
+    "text": "懂得先計劃後製作，能自行試玩並修正。"
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 3,
+    "band": "P4-P6",
+    "lang": "zh-hk",
+    "text": "有計劃地製作——先規劃、後動手，能自行測試並修正問題。"
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 3,
+    "band": "S1-S3",
+    "lang": "zh-hk",
+    "text": "迭代有意識——能規劃、試作、測試，並記錄設計取捨。"
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 2,
+    "band": "P1-P3",
+    "lang": "zh-hk",
+    "text": "在協助下完成作品，並修正了一處。"
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 2,
+    "band": "P4-P6",
+    "lang": "zh-hk",
+    "text": "能按計劃完成作品，並作出最少一次改良。"
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 2,
+    "band": "S1-S3",
+    "lang": "zh-hk",
+    "text": "能完成計劃中的製作，並至少應用一次回饋。"
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 1,
+    "band": "P1-P3",
+    "lang": "zh-hk",
+    "text": "未有計劃便動手，修正需協助。"
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 1,
+    "band": "P4-P6",
+    "lang": "zh-hk",
+    "text": "作品未完成或近乎照搬，修正需引導。"
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 1,
+    "band": "S1-S3",
+    "lang": "zh-hk",
+    "text": "製作欠規劃，修改需搭建鷹架。"
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 0,
+    "band": "P1-P3",
+    "lang": "zh-hk",
+    "text": "尚未——未動手製作。"
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 0,
+    "band": "P4-P6",
+    "lang": "zh-hk",
+    "text": "尚未——未完成任何作品。"
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 0,
+    "band": "S1-S3",
+    "lang": "zh-hk",
+    "text": "尚未——未有任何試作品。"
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 3,
+    "band": "P1-P3",
+    "lang": "zh-hk",
+    "text": "能大聲而自豪地介紹自己的作品。"
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 3,
+    "band": "P4-P6",
+    "lang": "zh-hk",
+    "text": "自信滙報——聲線清晰、結構完整，以作品為傲，兼備雙語元素。"
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 3,
+    "band": "S1-S3",
+    "lang": "zh-hk",
+    "text": "表達有結構、有自信——能因應聽眾調整，並應對提問。"
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 2,
+    "band": "P1-P3",
+    "lang": "zh-hk",
+    "text": "在少量提示下完成分享。"
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 2,
+    "band": "P4-P6",
+    "lang": "zh-hk",
+    "text": "能完成整個滙報，僅需少許支援。"
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 2,
+    "band": "S1-S3",
+    "lang": "zh-hk",
+    "text": "能完成符合要求的滙報。"
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 1,
+    "band": "P1-P3",
+    "lang": "zh-hk",
+    "text": "分享很短或很細聲。"
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 1,
+    "band": "P4-P6",
+    "lang": "zh-hk",
+    "text": "滙報甚短或聲線微弱。"
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 1,
+    "band": "S1-S3",
+    "lang": "zh-hk",
+    "text": "滙報簡短或照稿讀出。"
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 0,
+    "band": "P1-P3",
+    "lang": "zh-hk",
+    "text": "尚未——未嘗試分享。"
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 0,
+    "band": "P4-P6",
+    "lang": "zh-hk",
+    "text": "尚未——未嘗試滙報。"
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 0,
+    "band": "S1-S3",
+    "lang": "zh-hk",
+    "text": "尚未——未作滙報。"
+  },
+  {
+    "dimension": "DREAM",
+    "level": 3,
+    "band": "P1-P3",
+    "lang": "zh-cn",
+    "text": "想法丰富——能想出多个不同点子，并挑出最特别的做出来，作品很有自己的风格。"
+  },
+  {
+    "dimension": "DREAM",
+    "level": 3,
+    "band": "P4-P6",
+    "lang": "zh-cn",
+    "text": "创意兼原创设计——想象力广，能探索不止一个可能，作品独一无二、充满个人风格。"
+  },
+  {
+    "dimension": "DREAM",
+    "level": 3,
+    "band": "S1-S3",
+    "lang": "zh-cn",
+    "text": "创意原创且多元——能产出多样想法、打破常规，作品风格鲜明独特。"
+  },
+  {
+    "dimension": "DREAM",
+    "level": 2,
+    "band": "P1-P3",
+    "lang": "zh-cn",
+    "text": "在少许帮助下说出自己的想法，并做成新作品。"
+  },
+  {
+    "dimension": "DREAM",
+    "level": 2,
+    "band": "P4-P6",
+    "lang": "zh-cn",
+    "text": "能提出自己的想法，借助 AI 选出最具原创性的一个完成作品。"
+  },
+  {
+    "dimension": "DREAM",
+    "level": 2,
+    "band": "S1-S3",
+    "lang": "zh-cn",
+    "text": "能以自己的想法完成创作，有选择地引用 AI 并注明出处。"
+  },
+  {
+    "dimension": "DREAM",
+    "level": 1,
+    "band": "P1-P3",
+    "lang": "zh-cn",
+    "text": "需要帮助才能想到自己的点子，多数采用 AI 的第一个答案。"
+  },
+  {
+    "dimension": "DREAM",
+    "level": 1,
+    "band": "P4-P6",
+    "lang": "zh-cn",
+    "text": "开始发挥想象，但点子多跟随 AI 的第一个答案，原创元素仍在萌芽。"
+  },
+  {
+    "dimension": "DREAM",
+    "level": 1,
+    "band": "S1-S3",
+    "lang": "zh-cn",
+    "text": "想法紧贴 AI 建议，多元度和个人变化有限。"
+  },
+  {
+    "dimension": "DREAM",
+    "level": 0,
+    "band": "P1-P3",
+    "lang": "zh-cn",
+    "text": "尚未——还未开始分享自己的想法。"
+  },
+  {
+    "dimension": "DREAM",
+    "level": 0,
+    "band": "P4-P6",
+    "lang": "zh-cn",
+    "text": "尚未——本期未见原创想法。"
+  },
+  {
+    "dimension": "DREAM",
+    "level": 0,
+    "band": "S1-S3",
+    "lang": "zh-cn",
+    "text": "尚未——未提交原创作品。"
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 3,
+    "band": "P1-P3",
+    "lang": "zh-cn",
+    "text": "能察觉不妥之处并说出原因，懂得先查证再相信。"
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 3,
+    "band": "P4-P6",
+    "lang": "zh-cn",
+    "text": "坚持「先查证、再相信」——能独立发现错误，用可靠来源核实，并说明理由。"
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 3,
+    "band": "S1-S3",
+    "lang": "zh-cn",
+    "text": "能批判地评估来源，通过交叉查证核实信息，并清楚说明推理过程。"
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 2,
+    "band": "P1-P3",
+    "lang": "zh-cn",
+    "text": "在少许帮助下能找出大部分错误。"
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 2,
+    "band": "P4-P6",
+    "lang": "zh-cn",
+    "text": "能在少许帮助下核对答案，并说出好坏差别。"
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 2,
+    "band": "S1-S3",
+    "lang": "zh-cn",
+    "text": "能在少量提示下核实重点信息。"
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 1,
+    "band": "P1-P3",
+    "lang": "zh-cn",
+    "text": "能感觉奇怪，但需协助查证。"
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 1,
+    "band": "P4-P6",
+    "lang": "zh-cn",
+    "text": "开始存疑，但需协助才能完成查证。"
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 1,
+    "band": "S1-S3",
+    "lang": "zh-cn",
+    "text": "能察觉矛盾，但未能提出佐证。"
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 0,
+    "band": "P1-P3",
+    "lang": "zh-cn",
+    "text": "尚未——查证能力尚未评核。"
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 0,
+    "band": "P4-P6",
+    "lang": "zh-cn",
+    "text": "尚未——核实答案的能力尚未评核。"
+  },
+  {
+    "dimension": "DISCOVER",
+    "level": 0,
+    "band": "S1-S3",
+    "lang": "zh-cn",
+    "text": "尚未——批判性审视来源的能力尚未评核。"
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 3,
+    "band": "P1-P3",
+    "lang": "zh-cn",
+    "text": "懂得先计划再制作，能自己试玩并修正。"
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 3,
+    "band": "P4-P6",
+    "lang": "zh-cn",
+    "text": "有计划地制作——先规划、后动手，能自行测试并修正问题。"
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 3,
+    "band": "S1-S3",
+    "lang": "zh-cn",
+    "text": "迭代有意识——能规划、试做、测试，并记录设计取舍。"
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 2,
+    "band": "P1-P3",
+    "lang": "zh-cn",
+    "text": "在帮助下完成作品，并修正了一处。"
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 2,
+    "band": "P4-P6",
+    "lang": "zh-cn",
+    "text": "能按计划完成作品，并做出至少一次改进。"
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 2,
+    "band": "S1-S3",
+    "lang": "zh-cn",
+    "text": "能完成计划中的制作，并至少应用一次反馈。"
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 1,
+    "band": "P1-P3",
+    "lang": "zh-cn",
+    "text": "没有计划就动手，修正需帮助。"
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 1,
+    "band": "P4-P6",
+    "lang": "zh-cn",
+    "text": "作品未完成或近乎照搬，修正需要引导。"
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 1,
+    "band": "S1-S3",
+    "lang": "zh-cn",
+    "text": "制作缺规划，修改需要搭建支架。"
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 0,
+    "band": "P1-P3",
+    "lang": "zh-cn",
+    "text": "尚未——未动手制作。"
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 0,
+    "band": "P4-P6",
+    "lang": "zh-cn",
+    "text": "尚未——未完成任何作品。"
+  },
+  {
+    "dimension": "DESIGN",
+    "level": 0,
+    "band": "S1-S3",
+    "lang": "zh-cn",
+    "text": "尚未——未有任何试做品。"
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 3,
+    "band": "P1-P3",
+    "lang": "zh-cn",
+    "text": "能大声而自豪地介绍自己的作品。"
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 3,
+    "band": "P4-P6",
+    "lang": "zh-cn",
+    "text": "自信汇报——声音清晰、结构完整，以作品为荣，兼备双语元素。"
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 3,
+    "band": "S1-S3",
+    "lang": "zh-cn",
+    "text": "表达有结构、有自信——能根据听众调整，并应对提问。"
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 2,
+    "band": "P1-P3",
+    "lang": "zh-cn",
+    "text": "在少量提示下完成分享。"
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 2,
+    "band": "P4-P6",
+    "lang": "zh-cn",
+    "text": "能完成整个汇报，仅需少许支持。"
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 2,
+    "band": "S1-S3",
+    "lang": "zh-cn",
+    "text": "能完成符合要求的汇报。"
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 1,
+    "band": "P1-P3",
+    "lang": "zh-cn",
+    "text": "分享很短或很小声。"
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 1,
+    "band": "P4-P6",
+    "lang": "zh-cn",
+    "text": "汇报很短或声音很弱。"
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 1,
+    "band": "S1-S3",
+    "lang": "zh-cn",
+    "text": "汇报简短或照稿念。"
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 0,
+    "band": "P1-P3",
+    "lang": "zh-cn",
+    "text": "尚未——未尝试分享。"
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 0,
+    "band": "P4-P6",
+    "lang": "zh-cn",
+    "text": "尚未——未尝试汇报。"
+  },
+  {
+    "dimension": "DELIVER",
+    "level": 0,
+    "band": "S1-S3",
+    "lang": "zh-cn",
+    "text": "尚未——未做汇报。"
+  }
+]

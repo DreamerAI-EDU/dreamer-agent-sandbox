@@ -16,11 +16,13 @@
 
 用法::
 
-    python scripts/extract_report_descriptors.py                  # 抽取 + 双向校验 + 写 JSON
-    python scripts/extract_report_descriptors.py --check          # 只做双向校验，不写文件
-    python scripts/extract_report_descriptors.py --book <path>    # 指定设计书（默认见下）
+    python scripts/extract_report_descriptors.py --check --book <path>   # 双向校验，不写文件
+    python scripts/extract_report_descriptors.py --book <path>           # 抽取 + 校验 + 写 JSON
 
-设计书路径优先序：``--book`` > 环境变量 ``REPORT_DESIGN_BOOK`` > DEFAULT_BOOK。
+设计书路径**必须显式给出**：``--book <path>`` 或环境变量 ``REPORT_DESIGN_BOOK``。
+本脚本刻意不设默认值：2026-10-15 的签批版副本在同一日内被改写过（DISCOVER Level 0
+九格措辞由「照单全收」系改成「尚未評核」系），脚本不替任何副本背书 —— 跑之前请自行
+确认手头这份是不是老板签批的那一版。
 设计书为历史 dated 文件，本脚本**只读**，永不改写。
 """
 from __future__ import annotations
@@ -33,16 +35,8 @@ import re
 import sys
 from pathlib import Path
 
-# 设计书签批版默认位置（会话交付目录；可用 --book / REPORT_DESIGN_BOOK 覆盖）
-DEFAULT_BOOK = Path(
-    os.environ.get(
-        "REPORT_DESIGN_BOOK",
-        r"C:\Users\user1\AppData\Roaming\Tencent\Marvis\User"
-        r"\oAN1i2XPgc8VZ8q4ZUucBejayo_A\workspace"
-        r"\conv_c509520e2ac04506ada5d704cb73b250\output"
-        r"\家长评估报告_设计书_v1.1_签批版_2026-10-15.md",
-    )
-)
+# 设计书路径只从 --book / 环境变量取，没有默认值（见 module docstring 的说明）
+ENV_BOOK = "REPORT_DESIGN_BOOK"
 REPO = Path(__file__).resolve().parents[1]
 OUT = REPO / "config" / "report_descriptors.json"
 
@@ -167,7 +161,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     ap = argparse.ArgumentParser(
         description="抽取设计书 v1.1 §5.1-5.3 的 144 条 descriptor，并做双向逐 cell 对碰"
     )
-    ap.add_argument("--book", default=None, help="设计书 markdown 路径（默认取 REPORT_DESIGN_BOOK）")
+    ap.add_argument("--book", default=None, help="设计书 markdown 路径（必填；或用 REPORT_DESIGN_BOOK）")
     ap.add_argument("--json", default=None, help="JSON 输出路径（默认 config/report_descriptors.json）")
     ap.add_argument("--check", action="store_true", help="只做双向校验，不写 JSON")
     ap.add_argument("--evidence", default=None, help="把逐 cell 对碰 raw 写到该路径（默认仅 stdout）")
@@ -176,7 +170,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
-    book = Path(args.book) if args.book else DEFAULT_BOOK
+    book_arg = args.book or os.environ.get(ENV_BOOK)
+    if not book_arg:
+        print(
+            "ERROR: design book path required.\n"
+            f"  pass --book <path> or set {ENV_BOOK}.\n"
+            "  No implicit default: the 2026-10-15 签批版 copy was edited in place\n"
+            "  (DISCOVER L0 x9 wording) after it was produced, so this script refuses\n"
+            "  to assume which copy is the signed one.",
+            file=sys.stderr,
+        )
+        return 2
+    book = Path(book_arg)
     json_path = Path(args.json) if args.json else OUT
 
     assert book.is_file(), f"design book not found: {book}"

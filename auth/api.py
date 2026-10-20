@@ -1994,13 +1994,52 @@ def _teacher_report_view(row: dict[str, Any]) -> dict[str, Any]:
     return view
 
 
+# PR-5 §B4 / T-5 — slots that must not exist in ANY parent-facing payload.
+# The agent envelope carries these for internal callers; the parent copy is
+# scrubbed at the projection boundary so the gate is "key absent" rather than
+# "key present but null" (a null still proves the internal slot leaked).
+_PARENT_FORBIDDEN_KEYS = frozenset(
+    {
+        "kid_label",
+        "citations",
+        "cost",
+        "cost_summary",
+        "teacher_edits",
+        "review",
+        "internal_label",
+        "last_label_internal",
+    }
+)
+
+
+def _scrub_parent_keys(node: Any) -> Any:
+    """Recursively drop the banned envelope slots (§B4 / T-5)."""
+    if isinstance(node, dict):
+        return {
+            key: _scrub_parent_keys(value)
+            for key, value in node.items()
+            if key not in _PARENT_FORBIDDEN_KEYS
+        }
+    if isinstance(node, list):
+        return [_scrub_parent_keys(item) for item in node]
+    return node
+
+
 def _mask_report_payload(payload: Any) -> Any:
-    """Parent-facing copy of a stored envelope: student id masked, any
-    internal-label key stripped (belt-and-braces — the stored copy already
-    went through reports.parent_report_for_student)."""
+    """Parent-facing copy of a stored envelope (PR-5 §4.3 / §B4 / T-5).
+
+    student id masked, banned internal slots removed outright (kid_label /
+    citations / cost* / teacher_edits / review), and any internal label key
+    stripped (belt-and-braces — the stored copy already went through
+    reports.parent_report_for_student).
+
+    ``age_band`` deliberately survives: T-3 evidence requires the stored band
+    to round-trip to the parent route, and it is a machine field the parent
+    console never renders (the UI maps it to the frozen §三 friendly name).
+    """
     import copy
 
-    out = copy.deepcopy(payload)
+    out = _scrub_parent_keys(copy.deepcopy(payload))
     if isinstance(out, dict):
         inner = out.get("report")
         if isinstance(inner, dict) and isinstance(inner.get("student_id"), str):
@@ -2147,6 +2186,24 @@ async def handle_teacher_reports_list(request: web.Request) -> web.Response:
             "counts": report_store_mod.applied_status_counts(user["id"]),
         }
     )
+
+
+async def handle_teacher_report_detail(request: web.Request) -> web.Response:
+    """GET /api/teacher/reports/{report_id} — one full report body (review view).
+
+    §4.2 审阅 needs the stored envelope (narrative + topics +
+    ``dimension_descriptors``) to render a field-level editor, while the list
+    endpoint deliberately stays payload-free. Additive read only: identical
+    ownership gate to the edit/decide routes, no state transition, no write.
+    """
+    report_id = request.match_info.get("report_id", "")
+    user, denied = _report_owner_gate(request, report_id)
+    if denied is not None:
+        return denied
+    row = report_store_mod.get_report_for_teacher(report_id, user["id"])
+    if row is None:  # pragma: no cover — the gate above already proved ownership
+        return web.json_response(_ERR_REPORT_NOT_FOUND, status=404)
+    return web.json_response({"ok": True, **_teacher_report_view(row)})
 
 
 def _report_owner_gate(request: web.Request, report_id: str):
@@ -3456,6 +3513,11 @@ def build_app() -> web.Application:
         "/api/teacher/reports/generate", handle_teacher_report_generate
     )
     app.router.add_get("/api/teacher/reports", handle_teacher_reports_list)
+    # PR-5 A4 — additive read for the review view (no contract change to the
+    # list / edit / decide routes above).
+    app.router.add_get(
+        "/api/teacher/reports/{report_id}", handle_teacher_report_detail
+    )
     app.router.add_put(
         "/api/teacher/reports/{report_id}", handle_teacher_report_update
     )

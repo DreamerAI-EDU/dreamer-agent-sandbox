@@ -250,3 +250,7 @@ temp_probe.py
 # a trial DB (it holds password hashes and a full audit trail).
 .trial_*/
 *.bak-*
+
+# PR-5 local trilingual harness: throwaway SQLite + generated report payloads
+# (scripts/pr5_seed_local.py writes here; never commit the demo data)
+.pr5_harness/

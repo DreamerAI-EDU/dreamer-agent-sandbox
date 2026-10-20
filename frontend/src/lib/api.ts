@@ -43,6 +43,14 @@ import type {
 } from './types';
 import type { ParentPeriod, ParentReportEnvelope } from './parentTypes';
 import type {
+  ParentReportDetailResponse,
+  ParentReportsResponse,
+  ReportDetailResponse,
+  ReportStatus,
+  ScoreWriteResponse,
+  TeacherReportsResponse,
+} from './reportTypes';
+import type {
   TeacherClassProgressResponse,
   TeacherStudentProgressResponse,
 } from './teacherTypes';
@@ -54,15 +62,19 @@ import type {
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** Parsed response body (PR-5: the 409 one-pending gate carries the existing
+   *  draft's id / version / draft_url here — read it, never re-derive it). */
+  body: unknown;
+  constructor(status: number, message: string, body?: unknown) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    this.body = body;
   }
 }
 
 interface RequestOptions {
-  method?: 'GET' | 'POST';
+  method?: 'GET' | 'POST' | 'PUT';
   body?: unknown;
   csrf?: boolean; // default true for POST; invite confirm passes false
   csrfOnGet?: boolean; // W3-B: parent report GET must carry X-Requested-With too
@@ -76,7 +88,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     headers['Content-Type'] = 'application/json';
     body = JSON.stringify(options.body);
   }
-  if (method === 'POST' && (options.csrf ?? true)) {
+  if ((method === 'POST' || method === 'PUT') && (options.csrf ?? true)) {
     headers['X-Requested-With'] = 'XMLHttpRequest';
   }
   if (method === 'GET' && options.csrfOnGet) {
@@ -107,7 +119,11 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
       data && typeof data === 'object' && 'error' in data
         ? String((data as { error: unknown }).error)
         : '';
-    throw new ApiError(resp.status, serverError || `請求失敗 (${resp.status})`);
+    throw new ApiError(
+      resp.status,
+      serverError || `請求失敗 (${resp.status})`,
+      data,
+    );
   }
   return data as T;
 }
@@ -306,5 +322,85 @@ export const api = {
     request<AdminPaymentMarkResponse>(
       `/api/admin/payments/${encodeURIComponent(studentId)}/mark-pending`,
       { body: {} },
+    ),
+  // ---- PR-5 A1–A5: teacher report console (contracts frozen, §一) ----
+  // A1 — weekly score write, one call per (student, week, dimension). The
+  // server owns the 0–3 / ≤200 chars gates; the form pre-checks the same
+  // bounds so the teacher sees the limit before the request leaves.
+  teacherPutScore: (payload: {
+    class_id: string;
+    student_id: string;
+    week_no: number;
+    skill_code: string;
+    score_0_3: number | null;
+    evidence_text: string;
+  }) =>
+    request<ScoreWriteResponse>('/api/teacher/scores', {
+      method: 'PUT',
+      body: payload,
+    }),
+  // A3 — list, optionally filtered by status (default: all four, server paged).
+  teacherReports: (status?: ReportStatus) =>
+    request<TeacherReportsResponse>(
+      `/api/teacher/reports${status ? `?status=${encodeURIComponent(status)}` : ''}`,
+      { csrfOnGet: true },
+    ),
+  // A4 — one report with its stored envelope (incl. dimension_descriptors).
+  teacherReportDetail: (reportId: string) =>
+    request<ReportDetailResponse>(
+      `/api/teacher/reports/${encodeURIComponent(reportId)}`,
+      { csrfOnGet: true },
+    ),
+  // A4 — field-level edit; the server appends to teacher_edits (append-only
+  // trigger). `before` is for the audit trail only — the UI sends what it saw.
+  teacherReportUpdate: (
+    reportId: string,
+    payload: {
+      edits: { field: string; before: string; after: string }[];
+      payload_patch?: Record<string, unknown>;
+    },
+  ) =>
+    request<ReportDetailResponse>(
+      `/api/teacher/reports/${encodeURIComponent(reportId)}`,
+      { method: 'PUT', body: payload },
+    ),
+  // A5 — approve / reject. An illegal transition answers 409 with a readable
+  // `error`, shown verbatim.
+  teacherReportApprove: (reportId: string, note?: string) =>
+    request<ReportDetailResponse>(
+      `/api/teacher/reports/${encodeURIComponent(reportId)}/approve`,
+      { body: note ? { note } : {} },
+    ),
+  teacherReportReject: (reportId: string, note?: string) =>
+    request<ReportDetailResponse>(
+      `/api/teacher/reports/${encodeURIComponent(reportId)}/reject`,
+      { body: note ? { note } : {} },
+    ),
+  // A2 — generate a draft; a 409 means a draft is already pending for this
+  // window — the ApiError body carries its draft_url for the entry link.
+  // No lang_code in the body: the server reads the report language from the
+  // student row (§4.4 H-2 — the client must not pick it).
+  teacherReportGenerate: (payload: {
+    class_id: string;
+    student_id: string;
+    week_from: number;
+    week_to: number;
+  }) =>
+    request<ReportDetailResponse>('/api/teacher/reports/generate', {
+      body: payload,
+    }),
+
+  // ---- PR-5 B1–B2: parent read-only views (no write calls by design) ----
+  // Distinct names from the W3-B `parentReport(studentId, period)` above — the
+  // two share an endpoint prefix but not a contract.
+  parentReportList: (studentId: string) =>
+    request<ParentReportsResponse>(
+      `/api/parent/reports?student_id=${encodeURIComponent(studentId)}`,
+      { csrfOnGet: true },
+    ),
+  parentReportDetail: (studentId: string, reportId: string) =>
+    request<ParentReportDetailResponse>(
+      `/api/parent/reports?student_id=${encodeURIComponent(studentId)}&report_id=${encodeURIComponent(reportId)}`,
+      { csrfOnGet: true },
     ),
 };

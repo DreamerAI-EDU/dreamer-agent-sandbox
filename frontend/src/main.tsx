@@ -14,6 +14,13 @@ import { ParentDashboard } from './pages/ParentDashboard'
 import { SafetyPage } from './pages/SafetyPage'
 import { TeacherDashboard } from './pages/TeacherDashboard'
 import { TeacherRegisterPage } from './pages/TeacherRegisterPage'
+import { TeacherScoresPage } from './pages/teacher/TeacherScoresPage'
+import { TeacherGeneratePage } from './pages/teacher/TeacherGeneratePage'
+import { TeacherReportsPage } from './pages/teacher/TeacherReportsPage'
+import { TeacherReportReviewPage } from './pages/teacher/TeacherReportReviewPage'
+import { TeacherCrosswalkPage } from './pages/teacher/TeacherCrosswalkPage'
+import { ParentReportsPage } from './pages/parent/ParentReportsPage'
+import { ParentReportDetailPage } from './pages/parent/ParentReportDetailPage'
 import ChatPage from './pages/ChatPage'
 import KidPortfolioPage from './pages/KidPortfolioPage'
 import { StudentLoginPage } from './pages/StudentLoginPage'
@@ -34,6 +41,15 @@ createRoot(document.getElementById('root')!).render(
           <Route path="/safety" element={<SafetyPage />} />
           <Route path="/teacher" element={<TeacherDashboard />} />
           <Route path="/teacher/register" element={<TeacherRegisterPage />} />
+          {/* PR-5 A1-A6 — teacher report console */}
+          <Route path="/teacher/scores" element={<TeacherScoresPage />} />
+          <Route path="/teacher/generate" element={<TeacherGeneratePage />} />
+          <Route path="/teacher/reports" element={<TeacherReportsPage />} />
+          <Route path="/teacher/reports/:reportId" element={<TeacherReportReviewPage />} />
+          <Route path="/teacher/crosswalk" element={<TeacherCrosswalkPage />} />
+          {/* PR-5 B1-B5 — parent read-only report views */}
+          <Route path="/parent/reports" element={<ParentReportsPage />} />
+          <Route path="/parent/reports/:reportId" element={<ParentReportDetailPage />} />
           <Route path="/chat" element={<ChatPage />} />
           <Route path="/portfolio" element={<KidPortfolioPage />} />
           {/* Bridge-3d — student self-login (join code + PIN) */}

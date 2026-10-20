@@ -1,0 +1,128 @@
+{
+  "_note": "PR-5 frozen copy — machine extraction of 施工令 §三 (band grid, level names, banned terms) and design book v1.1 §6 (teacher crosswalk). Regenerate with scripts/extract_pr5_frozen_copy.py; never hand-edit.",
+  "sources": {
+    "brief": {
+      "name": "施工令_PR5_教師台UI+家長端視圖_2026-10-20 (1).md",
+      "sha256": "C7BBF6EEA478C3C13647E24AF5F4D442FF231C047F26A2AB094A44B9F6F736D5",
+      "sections": [
+        "三、冻结文案"
+      ]
+    },
+    "book": {
+      "name": "家长评估报告_设计书_v1_2026-10-15 (1).md",
+      "sha256": "753A691FF158977521DBA3218025A17BBF2388905EE867C63DFD04BE17737429",
+      "sections": [
+        "第 6 章　老师 crosswalk 一页纸"
+      ]
+    }
+  },
+  "bandLabels": {
+    "P1-P3": {
+      "en": "Lower Primary (P1–P3)",
+      "zh-hk": "小學低年級組（P1–P3）",
+      "zh-cn": "小学低年级组（P1–P3）"
+    },
+    "P4-P6": {
+      "en": "Upper Primary (P4–P6)",
+      "zh-hk": "小學高年級組（P4–P6）",
+      "zh-cn": "小学高年级组（P4–P6）"
+    },
+    "S1-S3": {
+      "en": "Secondary (S1–S3)",
+      "zh-hk": "中學組（S1–S3）",
+      "zh-cn": "中学组（S1–S3）"
+    }
+  },
+  "levelNames": {
+    "en": [
+      "Exemplary",
+      "Achieved",
+      "Developing",
+      "Not Yet"
+    ],
+    "zh-hk": [
+      "出色",
+      "達標",
+      "進展中",
+      "尚未開始"
+    ],
+    "zh-cn": [
+      "出色",
+      "达标",
+      "进展中",
+      "尚未开始"
+    ]
+  },
+  "forbiddenTerms": [
+    "IB",
+    "ATL",
+    "Inquirer",
+    "Learner Profile",
+    "Proficient",
+    "Excellent",
+    "kid_label",
+    "citations",
+    "cost",
+    "P1-P3",
+    "P4-P6",
+    "S1-S3"
+  ],
+  "crosswalk": {
+    "sectionHeading": "## 第 6 章　老师 crosswalk 一页纸（内部专用，永不出家长版）",
+    "title": "第 6 章　老师 crosswalk 一页纸（内部专用，永不出家长版）",
+    "purpose": "用途：老师口头向家长解释评分依据的统一口径；印一张过胶贴住工位即可。",
+    "columns": {
+      "parentSees": "家长版见到",
+      "internal": "内部对应（IB ATL）",
+      "oralBridge": "口头桥示例（广东话）"
+    },
+    "rows": [
+      {
+        "parentSees": "Dream（想象）",
+        "internal": "Thinking Skills — Creative Thinking",
+        "oralBridge": "「即係國際課程講嘅創意思維——我哋睇佢作品有幾原創。」"
+      },
+      {
+        "parentSees": "Discover（探究）",
+        "internal": "Research ＋ Critical Thinking",
+        "oralBridge": "「即係資訊素養同事實查核——佢識唔識『先查證再信』。」"
+      },
+      {
+        "parentSees": "Design（创造）",
+        "internal": "Communication — Literacy ＋ 執行力",
+        "oralBridge": "「即係將諗法變成成品嘅能力，仲要識改到更好。」"
+      },
+      {
+        "parentSees": "Deliver（分享）",
+        "internal": "Communication — Exchanging Information",
+        "oralBridge": "「即係口頭表達同台上自信。」"
+      },
+      {
+        "parentSees": "等级 3 Exemplary",
+        "internal": "超出年级期望",
+        "oralBridge": "「佢做嘅嘢已經超越呢個年級嘅要求。」"
+      },
+      {
+        "parentSees": "等级 2 Achieved",
+        "internal": "达到年级期望",
+        "oralBridge": "「佢穩穩陣陣達到咗要求。」"
+      },
+      {
+        "parentSees": "等级 1 Developing",
+        "internal": "发展中，需要支架",
+        "oralBridge": "「佢喺路上，仲需要多啲扶一扶。」"
+      },
+      {
+        "parentSees": "等级 0 Not Yet",
+        "internal": "尚未展现（非批评）",
+        "oralBridge": "「唔係佢差，係呢項未開始評——下階段先係重頭。」"
+      },
+      {
+        "parentSees": "Learner Profile 亮点",
+        "internal": "IB Learner Profile",
+        "oralBridge": "「國際課程會叫呢啲做學習者特質，我哋報告用返自己嘅小朋友语言。」"
+      }
+    ],
+    "standardAnswer": "若家长直接问「系咪 IB 嗰套？」标准答案：「我哋把尺同國際課程嘅能力框架對齊，但用 Dreamer 自己嘅语言同作品证据嚟呈现，等家长唔使读教育学都睇得明。」"
+  }
+}

@@ -11,6 +11,13 @@
 //
 // Red lines: no edit controls, no approve/reject, no PDF button (§B5 — PR-6),
 // and the raw band code is never rendered (§B3).
+//
+// P1 walkthrough fix (2026-10-20, commit on top of 8c1dd46): the "at a glance"
+// grid used to print `payload.mode` (value `parent_report`) in a parent-visible
+// tile — an internal envelope enum leaking onto the parent surface. That tile is
+// gone; `copy.narrative` (frozen §三 chrome word) now heads the narrative
+// paragraph instead, which is the only place that sentence belongs. Nothing in
+// this file may render `payload.mode` / `report.variant` / any internal key.
 
 import { useCallback, useEffect, useState } from 'react';
 import { Link, Navigate, useParams, useSearchParams } from 'react-router';
@@ -110,15 +117,18 @@ export function ParentReportDetailPage() {
                 {detail.published_at.slice(0, 10)}
               </p>
               {detail.payload?.content && (
-                <p className="mt-4 whitespace-pre-line text-sm leading-relaxed text-black/70">
-                  {detail.payload.content}
-                </p>
+                <div className="mt-4" data-testid="parent-narrative">
+                  <h2 className="text-sm font-bold text-[#00023D]">{copy.narrative}</h2>
+                  <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-black/70">
+                    {detail.payload.content}
+                  </p>
+                </div>
               )}
             </div>
 
             <div className="rounded-2xl border border-black/5 bg-white p-5 shadow-sm">
               <h2 className="text-sm font-bold text-[#00023D]">{copy.summary}</h2>
-              <dl className="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+              <dl className="mt-3 grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
                 <div>
                   <dt className="text-[11px] text-black/40">{copy.sessions}</dt>
                   <dd className="font-bold text-[#00023D]">{inner.summary.session_count}</dd>
@@ -132,10 +142,6 @@ export function ParentReportDetailPage() {
                 <div>
                   <dt className="text-[11px] text-black/40">{copy.topics}</dt>
                   <dd className="font-bold text-[#00023D]">{inner.summary.topics_touched}</dd>
-                </div>
-                <div>
-                  <dt className="text-[11px] text-black/40">{copy.narrative}</dt>
-                  <dd className="font-bold text-[#00023D]">{detail.payload?.mode ?? '—'}</dd>
                 </div>
               </dl>
             </div>

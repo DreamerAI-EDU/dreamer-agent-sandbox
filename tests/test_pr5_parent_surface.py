@@ -685,3 +685,77 @@ def test_parent_pages_never_import_the_teacher_crosswalk():
     )
     assert "teacherCrosswalk" not in guard and "CROSSWALK_ROWS" not in guard
     assert offenders == [], f"parent module(s) importing the crosswalk: {offenders}"
+
+# ---------------------------------------------------------------------------
+# P1 走查修复（2026-10-20，8c1dd46 之上的增量 commit）— 家长面渲染层
+# ---------------------------------------------------------------------------
+#
+# 走查发现: `ParentReportDetailPage.tsx` 的「學習概覽 / At a glance」四格把
+# `payload.mode`（值 `parent_report`）直接印在家长可见的「我哋觀察到」一格里，
+# 三语 B2 截图均可见。内部信封枚举漏到家长面 = 违反「内部 label 不外露」。
+#
+# 修法: 该格整格移除（`copy.narrative` 冻结词改为承载叙述段落的小标题，不新增
+# 任何措辞），并把本档的判定从“payload 键不存在”延伸到“渲染层不出现”。以下
+# 两条断言扫的是**去掉注释后的 JSX 源码**，因此注释里写 `payload.mode` 作为
+# 修复记录不会误判。
+
+PARENT_PAGES_DIR = os.path.join(REPO_ROOT, "frontend", "src", "pages", "parent")
+
+#: 渲染层禁出现: 内部枚举值 + 内部槽名（T-5 已在 payload 层判定过一遍）。
+P1_FORBIDDEN_RENDER_TOKENS = (
+    "mode",
+    "parent_report",
+    "variant",
+    "teacher_edits",
+    "review",
+    "internal_label",
+    "last_label_internal",
+    "kid_label",
+    "citations",
+    "cost_summary",
+)
+
+
+def _render_source(filename: str) -> str:
+    """Page source minus comments — what React would actually show a parent."""
+    import re
+
+    text = _read_text_utf8(os.path.join(PARENT_PAGES_DIR, filename))
+    text = re.sub(r"\{?/\*.*?\*/\}?", "", text, flags=re.S)  # {/* … */} + /* … */
+    kept = [ln for ln in text.splitlines() if not ln.lstrip().startswith("//")]
+    return "\n".join(kept)
+
+
+def test_p1_parent_pages_never_render_internal_enum_or_internal_slot():
+    """B1/B2 的 JSX 里不得出现 mode / parent_report / 内部槽名（注释除外）。"""
+    import re
+
+    offenders = {}
+    for name in ("ParentReportDetailPage.tsx", "ParentReportsPage.tsx"):
+        source = _render_source(name)
+        hits = [
+            token
+            for token in P1_FORBIDDEN_RENDER_TOKENS
+            if re.search(rf"\b{re.escape(token)}\b", source)
+        ]
+        if hits:
+            offenders[name] = hits
+    assert offenders == {}, (
+        "internal enum / slot rendered on the parent surface: "
+        f"{offenders}"
+    )
+
+
+def test_p1_detail_summary_grid_drops_the_mode_tile():
+    """占位格整格移除；`copy.narrative` 冻结词只用来给叙述段落做标题。"""
+    source = _render_source("ParentReportDetailPage.tsx")
+
+    # 被修掉的原表达式（含破折号兜底）不得回潮
+    assert "payload?.mode" not in source
+    assert "payload.mode" not in source
+    # 四格 -> 三格（节数 / 分钟 / 主题数）
+    assert "sm:grid-cols-4" not in source
+    assert "sm:grid-cols-3" in source
+    # 冻结词仍然在用，且用在叙述段落上（不新增措辞、不留空壳标签）
+    assert "{copy.narrative}" in source
+    assert 'data-testid="parent-narrative"' in source

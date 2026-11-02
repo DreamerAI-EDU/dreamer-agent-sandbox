@@ -3,6 +3,11 @@ import react from "@vitejs/plugin-react"
 import { defineConfig } from "vite"
 import { inspectAttr } from 'kimi-plugin-inspect-react'
 
+// Backend the dev server proxies /api and /legal to. Defaults to the PR-5 local
+// harness backend on 8001; override with VITE_PROXY_TARGET when that port is
+// taken (e.g. by the dreamer-deeptutor container) and the harness runs on 8002.
+const proxyTarget = process.env.VITE_PROXY_TARGET || "http://localhost:8001"
+
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => ({
   base: '/', // runbook §6 鐵律 1：絕對路徑 assets，深層路由（/teacher）先唔會白屏
@@ -14,8 +19,8 @@ export default defineConfig(({ mode }) => ({
     proxy: {
       // Phase 7 W3-A — /api/ws/chat is a WS upgrade; http-proxy needs ws:true
       // or dev-mode sockets get a 400 on the upgrade request.
-      '/api': { target: 'http://localhost:8001', ws: true, changeOrigin: true },
-      '/legal': 'http://localhost:8001',
+      '/api': { target: proxyTarget, ws: true, changeOrigin: true },
+      '/legal': proxyTarget,
     },
   },
   resolve: {

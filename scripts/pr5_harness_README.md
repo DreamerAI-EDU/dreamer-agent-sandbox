@@ -15,6 +15,38 @@ powershell -ExecutionPolicy Bypass -File scripts/pr5_start_local.ps1 -Frontend
 
 不带参数运行 `scripts/pr5_start_local.ps1` 等于同时起后端与前端，但**不会**重跑种子（沿用现有 DB）。
 
+## 8001 被 deeptutor 容器占用时
+
+`dreamer-deeptutor` 容器常驻并映射 `127.0.0.1:8000-8001`，此时 PR-5 后端无法占用 8001。
+后端端口由 `scripts/pr5_start_local.ps1` 的 `-Port` 控制（优先级：`-Port` > `$env:PR5_PORT` > `8001`），
+前端代理目标由 `frontend/vite.config.ts` 读 `VITE_PROXY_TARGET`（默认仍是 `http://localhost:8001`，
+不设该变量时行为与以往完全一致）。两边都要改，缺一边代理就会打到容器上去：
+
+```powershell
+# ① 后端换到 8002（沿用现有 DB，不加 -Seed 就不会重跑种子）
+powershell -ExecutionPolicy Bypass -File scripts\pr5_start_local.ps1 -Backend -Port 8002
+
+# ② 另开窗口：先把代理指到 8002，再起前端
+$env:VITE_PROXY_TARGET = 'http://127.0.0.1:8002'
+powershell -ExecutionPolicy Bypass -File scripts\pr5_start_local.ps1 -Frontend
+```
+
+验证代理确实打到 PR-5 后端而不是容器：未登入时经 3000 端口访问受保护接口应得 401，
+若拿到容器的响应就说明 `VITE_PROXY_TARGET` 没生效（Vite 只在启动时读一次该变量，改完必须重启 dev server）。
+
+```powershell
+Invoke-WebRequest http://localhost:3000/api/teacher/reports -SkipHttpErrorCheck |
+    Select-Object StatusCode
+```
+
+也可以一次性把两端都起在同一窗口（前端为前台阻塞，`Ctrl+C` 结束）：
+
+```powershell
+$env:VITE_PROXY_TARGET = 'http://127.0.0.1:8002'
+powershell -ExecutionPolicy Bypass -File scripts\pr5_start_local.ps1 -Port 8002
+```
+
+
 ## 种子里有什么
 
 | 项 | 值 |

@@ -9,6 +9,11 @@ What it creates
 * 1 class (P4-P6) owned by that teacher
 * 1 student, confirmed on that class roster, owned by that parent
 * three weeks of teacher scores (4 dimensions x 3 weeks, 0-3 + one evidence line)
+* seven learning sessions spread over 21 days, plus the obs_events (cost) and
+  progress_snapshots rows the parent-report agent aggregates. Without them
+  ``ParentReportAgent`` sees an empty student, keeps ``variant=first_steps``
+  (FIRST_STEPS_MIN_SESSIONS=5 / FIRST_STEPS_MIN_DAYS=14) and every report body
+  is the welcome-only template.
 * three APPROVED weekly parent reports for that student, one per language:
       week 1 -> en        week 2 -> zh-hk        week 3 -> zh-cn
 
@@ -28,6 +33,14 @@ Usage::
 
     .venv\Scripts\python.exe scripts/pr5_seed_local.py
     .venv\Scripts\python.exe scripts/pr5_seed_local.py --db .pr5_harness/pr5_harness.db
+
+Incremental modes (against an existing harness DB, never rebuilding it)::
+
+    # learning activity only (sessions / obs_events / progress_snapshots)
+    .venv\Scripts\python.exe scripts/pr5_seed_local.py --learning-only
+
+    # re-draft + approve the three per-language reports (supersedes by window)
+    .venv\Scripts\python.exe scripts/pr5_seed_local.py --reissue-reports
 
 Output: a JSON summary on stdout (also written to <out>/seed_summary.json).
 """
@@ -90,6 +103,37 @@ SCORE_PLAN: dict[int, dict[str, tuple[int, str]]] = {
     },
 }
 
+#: Learning activity: (days_ago, mode, duration_seconds, cost_tokens, topic_ids).
+#: 8 sessions over 21 days. Two constraints at once: the whole set spans
+#: >= FIRST_STEPS_MIN_DAYS (14) with >= FIRST_STEPS_MIN_SESSIONS (5) so the agent
+#: leaves variant="first_steps", AND five of them sit inside the last 7 days so
+#: the three weekly (period=weekly, 7-day window) reports carry real activity
+#: instead of a near-empty window.
+SESSION_PLAN: tuple[tuple[int, str, int, int, tuple[str, ...]], ...] = (
+    (21, "DIRECT", 1500, 8200, ("computing-scratch-basics-01",)),
+    (17, "CONTEXTUAL", 1800, 9400,
+     ("computing-scratch-basics-01", "design-storyboard-02")),
+    (13, "HYBRID", 2100, 11200, ("design-storyboard-02",)),
+    (6, "DIRECT", 1650, 7600, ("computing-scratch-basics-01",)),
+    (5, "CONTEXTUAL", 2400, 12800,
+     ("computing-scratch-basics-01", "design-storyboard-02")),
+    (3, "HYBRID", 1950, 10100, ("design-storyboard-02",)),
+    (2, "DIRECT", 2050, 11600, ("computing-scratch-basics-01",)),
+    (0, "HYBRID", 2200, 12200,
+     ("computing-scratch-basics-01", "design-storyboard-02")),
+)
+
+#: progress_snapshots rows: (topic_id, mastery_pct, attempts, last_label, streak).
+#: topic_id drives the parent-facing "subject" label (the prefix before the first
+#: dash), so these read as computing / design instead of a raw id.
+TOPIC_PLAN: tuple[tuple[str, float, int, str, int], ...] = (
+    ("computing-scratch-basics-01", 68.0, 7, "achieved", 3),
+    ("design-storyboard-02", 52.0, 5, "developing", 2),
+)
+
+#: Prefix on every seeded session id — the tag the incremental re-run deletes by.
+SEED_SESSION_PREFIX = "pr5-seed-"
+
 AGENT_DDL = """
 CREATE TABLE IF NOT EXISTS assessment_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -133,6 +177,179 @@ def _fail(message: str) -> None:
     raise SystemExit(1)
 
 
+def _counts(db_path: str) -> dict[str, int]:
+    """Raw row counts for the three tables the report agent aggregates."""
+    conn = sqlite3.connect(db_path)
+    try:
+        return {
+            table: conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+            for table in ("session_logs", "obs_events", "progress_snapshots")
+        }
+    finally:
+        conn.close()
+
+
+def _seed_learning_activity(db_path: str) -> dict[str, int]:
+    """Write the demo learning activity the parent-report agent reads.
+
+    Three things decide what a parent report says: ``session_logs`` (variant +
+    session count + time spent + timeline), ``obs_events`` event_type='cost'
+    (cost_summary) and ``progress_snapshots`` (per-topic mastery). Rows are
+    tagged with ``SEED_SESSION_PREFIX`` and deleted before re-inserting, so the
+    call is idempotent — run it twice and the counts stay put. Only the three
+    tables above are touched; assessment_logs / scores / reports are left alone.
+    """
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "DELETE FROM session_logs WHERE session_id LIKE ?",
+            (f"{SEED_SESSION_PREFIX}%",),
+        )
+        conn.execute(
+            "DELETE FROM obs_events WHERE session_id LIKE ?",
+            (f"{SEED_SESSION_PREFIX}%",),
+        )
+        for index, (days_ago, mode, duration, tokens, topic_ids) in enumerate(
+            SESSION_PLAN, start=1
+        ):
+            session_id = f"{SEED_SESSION_PREFIX}sess-{index:02d}"
+            created_at = _iso(days=days_ago)
+            conn.execute(
+                "INSERT INTO session_logs (session_id, student_id, mode,"
+                " lang_code, age_band, agent_list, topic_ids, cost_summary,"
+                " duration_seconds, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    session_id,
+                    STUDENT_ID,
+                    mode,
+                    STUDENT_LANG,
+                    AGE_BAND,
+                    json.dumps(["assessment", "portfolio"], ensure_ascii=False),
+                    json.dumps(list(topic_ids), ensure_ascii=False),
+                    json.dumps(
+                        {"status": "ok", "total_tokens": tokens}, ensure_ascii=False
+                    ),
+                    duration,
+                    created_at,
+                ),
+            )
+            conn.execute(
+                "INSERT INTO obs_events (student_id, session_id, event_type,"
+                " event_data, created_at) VALUES (?, ?, ?, ?, ?)",
+                (
+                    STUDENT_ID,
+                    session_id,
+                    "cost",
+                    json.dumps(
+                        {"total_tokens": tokens, "model": "pr5-harness-demo"},
+                        ensure_ascii=False,
+                    ),
+                    created_at,
+                ),
+            )
+        for topic_id, mastery, attempts, label, streak in TOPIC_PLAN:
+            conn.execute(
+                "INSERT OR REPLACE INTO progress_snapshots (student_id, topic_id,"
+                " mastery_pct, attempt_count, last_label, streak, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    STUDENT_ID,
+                    topic_id,
+                    mastery,
+                    attempts,
+                    label,
+                    streak,
+                    _iso(days=1),
+                ),
+            )
+        conn.commit()
+        return _counts_conn(conn)
+    finally:
+        conn.close()
+
+
+def _counts_conn(conn: sqlite3.Connection) -> dict[str, int]:
+    return {
+        table: conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+        for table in ("session_logs", "obs_events", "progress_snapshots")
+    }
+
+
+def _reissue_reports(db_path: str, out_dir: str) -> list[dict[str, Any]]:
+    """Draft + approve one report per language, each on its own week window.
+
+    Same code path the teacher console uses (``POST /api/teacher/reports/generate``
+    -> ``create_pending_report`` -> ``decide_report(approve)``), with one
+    difference: the language comes from ``REPORT_PLAN`` instead of the student
+    row. The API always drafts in ``students.lang_code``, so a trilingual harness
+    cannot be rebuilt through the teacher endpoint alone.
+
+    Re-running supersedes the previously approved report of the same
+    (student, class, week_from, week_to) — design book §4.1, not data loss:
+    distinct weeks per language keep all three readable side by side.
+    """
+    from agents.parent_report_agent import ParentReportAgent  # noqa: E402
+    from auth import report_descriptors as desc_mod       # noqa: E402
+    from auth import report_store as store_mod            # noqa: E402
+    from auth.reports import _strip_internal              # noqa: E402
+
+    out_dir = os.path.abspath(out_dir)
+    os.makedirs(out_dir, exist_ok=True)
+    reports: list[dict[str, Any]] = []
+    for week, lang in REPORT_PLAN:
+        envelope = ParentReportAgent(db_path=db_path).generate_report(
+            student_id=STUDENT_ID,
+            period="weekly",
+            lang_code=lang,
+            age_band=AGE_BAND,
+            include_safety=True,
+        )
+        _strip_internal(envelope)  # parent/teacher surfaces never see P-series
+        scores = store_mod.build_dimension_scores(STUDENT_ID, week, week)
+        desc_mod.attach_dimension_descriptors(
+            envelope, scores=scores, age_band=AGE_BAND, lang_code=lang
+        )
+        row = store_mod.create_pending_report(
+            student_id=STUDENT_ID,
+            class_id=CLASS_ID,
+            lang_code=lang,
+            age_band=AGE_BAND,
+            week_from=week,
+            week_to=week,
+            scores=scores,
+            payload=envelope,
+            generated_by="pr5_seed_local.py",
+        )
+        approved = store_mod.decide_report(
+            report_id=row["report_id"],
+            decision="approve",
+            teacher_id=TEACHER_ID,
+            note=f"PR-5 harness auto-approve ({lang})",
+        )
+        payload_path = os.path.join(out_dir, f"report_week{week}_{lang}.json")
+        with open(payload_path, "w", encoding="utf-8", newline="\n") as fh:
+            json.dump(approved, fh, ensure_ascii=False, indent=2)
+            fh.write("\n")
+        reports.append(
+            {
+                "report_id": approved["report_id"],
+                "lang_code": lang,
+                "week_from": week,
+                "week_to": week,
+                "version": approved["version"],
+                "status": approved["status"],
+                "variant": (approved.get("payload") or {}).get("meta", {}).get(
+                    "variant"
+                ),
+                "teacher_url": f"/teacher/reports/{approved['report_id']}",
+                "parent_url": f"/parent/reports/{approved['report_id']}",
+                "payload_file": payload_path,
+            }
+        )
+    return reports
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", default=DEFAULT_DB, help="harness SQLite path")
@@ -146,12 +363,39 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="move an existing harness DB aside (<db>.bak-<timestamp>) and rebuild",
     )
+    parser.add_argument(
+        "--learning-only",
+        action="store_true",
+        help="seed learning activity into an EXISTING harness DB (idempotent)",
+    )
+    parser.add_argument(
+        "--reissue-reports",
+        action="store_true",
+        help="re-draft + approve the three per-language reports in an EXISTING DB",
+    )
     args = parser.parse_args(argv)
 
     db_path = os.path.abspath(args.db)
     out_dir = os.path.abspath(args.out)
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
     os.makedirs(out_dir, exist_ok=True)
+
+    if args.learning_only or args.reissue_reports:
+        # Incremental path: never rebuilds, never renames — the harness DB keeps
+        # its accounts, class and already-approved reports.
+        if not os.path.exists(db_path):
+            _fail(f"{db_path} does not exist — run the full seed first")
+        if args.learning_only and args.reissue_reports:
+            _fail("pass one of --learning-only / --reissue-reports, not both")
+        os.environ["DREAMER_DB_PATH"] = db_path
+        result: dict[str, Any] = {"db": db_path, "counts_before": _counts(db_path)}
+        if args.learning_only:
+            result["counts_after"] = _seed_learning_activity(db_path)
+        if args.reissue_reports:
+            result["reports"] = _reissue_reports(db_path, out_dir)
+        result["counts_final"] = _counts(db_path)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
 
     if os.path.exists(db_path):
         if not args.reset:
@@ -167,16 +411,15 @@ def main(argv: list[str] | None = None) -> int:
 
     os.environ["DREAMER_DB_PATH"] = db_path
 
-    # Imports below MUST stay after DREAMER_DB_PATH is set.
+    # Imports below MUST stay after DREAMER_DB_PATH is set. The report drafting
+    # imports live inside _reissue_reports for the same reason — they are only
+    # needed once the env var points at this harness DB.
     from auth import classes as classes_mod          # noqa: E402
     from auth import db as auth_db                   # noqa: E402
-    from auth import report_descriptors as desc_mod  # noqa: E402
     from auth import report_store as store_mod       # noqa: E402
     from auth import scores as scores_mod            # noqa: E402
     from auth import students as students_mod        # noqa: E402
-    from auth.reports import _strip_internal         # noqa: E402
     from auth.security import hash_password          # noqa: E402
-    from agents.parent_report_agent import ParentReportAgent  # noqa: E402
 
     # 1. schema: auth tables, the agent-layer tables, then the phase8 reports
     #    migration (it ALTERs assessment_logs, so the agent DDL must run first).
@@ -260,59 +503,17 @@ def main(argv: list[str] | None = None) -> int:
                 }
             )
 
-    # 5. three approved reports, one language each (distinct week windows)
+    # 5. learning activity: sessions / cost events / mastery snapshots. Runs
+    #    BEFORE the reports so the agent drafts real content instead of the
+    #    first_steps welcome template (>=5 sessions over >=14 days).
+    learning_counts = _seed_learning_activity(db_path)
+
+    # 6. three approved reports, one language each (distinct week windows)
     student = students_mod.get_student_by_id(STUDENT_ID)
     if student is None:
         _fail("student row vanished right after creation")
 
-    reports: list[dict[str, Any]] = []
-    for week, lang in REPORT_PLAN:
-        envelope = ParentReportAgent(db_path=db_path).generate_report(
-            student_id=STUDENT_ID,
-            period="weekly",
-            lang_code=lang,
-            age_band=AGE_BAND,
-            include_safety=True,
-        )
-        _strip_internal(envelope)  # parent/teacher surfaces never see P-series
-        scores = store_mod.build_dimension_scores(STUDENT_ID, week, week)
-        desc_mod.attach_dimension_descriptors(
-            envelope, scores=scores, age_band=AGE_BAND, lang_code=lang
-        )
-        row = store_mod.create_pending_report(
-            student_id=STUDENT_ID,
-            class_id=CLASS_ID,
-            lang_code=lang,
-            age_band=AGE_BAND,
-            week_from=week,
-            week_to=week,
-            scores=scores,
-            payload=envelope,
-            generated_by="auto",
-        )
-        approved = store_mod.decide_report(
-            report_id=row["report_id"],
-            decision="approve",
-            teacher_id=TEACHER_ID,
-            note=f"PR-5 harness auto-approve ({lang})",
-        )
-        payload_path = os.path.join(out_dir, f"report_week{week}_{lang}.json")
-        with open(payload_path, "w", encoding="utf-8", newline="\n") as fh:
-            json.dump(approved, fh, ensure_ascii=False, indent=2)
-            fh.write("\n")
-        reports.append(
-            {
-                "report_id": approved["report_id"],
-                "lang_code": lang,
-                "week_from": week,
-                "week_to": week,
-                "version": approved["version"],
-                "status": approved["status"],
-                "teacher_url": f"/teacher/reports/{approved['report_id']}",
-                "parent_url": f"/parent/reports/{approved['report_id']}",
-                "payload_file": payload_path,
-            }
-        )
+    reports = _reissue_reports(db_path, out_dir)
 
     visible = store_mod.list_approved_for_student(STUDENT_ID)
     if len(visible) != len(REPORT_PLAN):
@@ -338,6 +539,7 @@ def main(argv: list[str] | None = None) -> int:
             "student_lang": STUDENT_LANG,
         },
         "scores": score_rows,
+        "learning_activity": learning_counts,
         "reports": reports,
         "parent_visible_reports": len(visible),
     }

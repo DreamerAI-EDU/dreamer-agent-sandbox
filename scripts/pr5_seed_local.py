@@ -126,9 +126,13 @@ SESSION_PLAN: tuple[tuple[int, str, int, int, tuple[str, ...]], ...] = (
 #: progress_snapshots rows: (topic_id, mastery_pct, attempts, last_label, streak).
 #: topic_id drives the parent-facing "subject" label (the prefix before the first
 #: dash), so these read as computing / design instead of a raw id.
+#: NOTE mastery_pct is a 0..1 fraction (agents/assessment_agent.py upserts the
+#: rolling average on that scale; config/dreamer_progress_levels.json maps
+#: achieved -> 0.75, developing -> 0.50). Seeding 68.0 here made every parent
+#: surface render "6800%", so the values stay on the 0..1 scale.
 TOPIC_PLAN: tuple[tuple[str, float, int, str, int], ...] = (
-    ("computing-scratch-basics-01", 68.0, 7, "achieved", 3),
-    ("design-storyboard-02", 52.0, 5, "developing", 2),
+    ("computing-scratch-basics-01", 0.68, 7, "achieved", 3),
+    ("design-storyboard-02", 0.52, 5, "developing", 2),
 )
 
 #: Prefix on every seeded session id — the tag the incremental re-run deletes by.

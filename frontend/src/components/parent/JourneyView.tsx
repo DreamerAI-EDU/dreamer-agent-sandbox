@@ -9,6 +9,7 @@ import type {
   ParentReportTopic,
   ParentTimelineEntry,
 } from '../../lib/parentTypes';
+import { masteryLabel } from '../../lib/parentTypes';
 import { MasteryBar } from './MasteryBar';
 import { DeltaBadge } from './DeltaBadge';
 
@@ -67,7 +68,7 @@ export function JourneyView({ period, timeline, topics }: JourneyViewProps) {
                 </div>
                 <MasteryBar
                   mastery={topic.mastery_pct}
-                  label={`${Math.round(topic.mastery_pct * 100)}%`}
+                  label={masteryLabel(topic.mastery_pct)}
                 />
               </li>
             ))}

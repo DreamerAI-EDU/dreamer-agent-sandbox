@@ -1,10 +1,13 @@
 // W3-B — Reusable mastery progress bar.
 //
-// Backend mastery_pct is stored 0..1 (rolling average). Pass the raw value;
-// the bar multiplies by 100 internally. Brand color #00023D.
+// mastery_pct is a 0..1 rolling average, but legacy/imported rows may carry it
+// pre-scaled to 0..100. masteryToPercent normalises both and clamps at 100 —
+// the 8-week programme tops out at 100. Brand color #00023D.
+
+import { masteryToPercent } from '../../lib/parentTypes';
 
 interface MasteryBarProps {
-  /** Raw mastery 0..1 (backend scale). */
+  /** Raw mastery — 0..1 (backend scale) or 0..100 (legacy scale). */
   mastery: number | null | undefined;
   /** Optional label shown at the right of the bar (e.g. "已達標"). */
   label?: string;
@@ -14,10 +17,7 @@ interface MasteryBarProps {
 }
 
 export function MasteryBar({ mastery, label, title, className = '' }: MasteryBarProps) {
-  const pct =
-    mastery === null || mastery === undefined
-      ? null
-      : Math.min(100, Math.max(0, Math.round(mastery * 100)));
+  const pct = masteryToPercent(mastery);
 
   return (
     <div className={`w-full ${className}`}>

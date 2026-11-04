@@ -10,6 +10,7 @@ import type {
   ParentReportTopic,
 } from '../../lib/parentTypes';
 import { DurationDisplay } from './DurationDisplay';
+import { masteryLabel } from '../../lib/parentTypes';
 import { MasteryBar } from './MasteryBar';
 import { DeltaBadge } from './DeltaBadge';
 
@@ -68,7 +69,7 @@ export function WeeklyDigest({ digest, period, summary, topics }: WeeklyDigestPr
                     <span className="text-xs text-black/60">{topic.last_label_parent}</span>
                   </div>
                 </div>
-                <MasteryBar mastery={topic.mastery_pct} label={`${Math.round(topic.mastery_pct * 100)}%`} />
+                <MasteryBar mastery={topic.mastery_pct} label={masteryLabel(topic.mastery_pct)} />
               </li>
             ))}
           </ul>

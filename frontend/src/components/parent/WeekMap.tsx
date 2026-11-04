@@ -20,6 +20,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError } from '../../lib/api';
 import { useLang } from '../../lib/i18n';
 import type { ParentCurriculumResponse, ParentWeekStatus } from '../../lib/types';
+import { masteryLabel } from '../../lib/parentTypes';
 import { MasteryBar } from './MasteryBar';
 
 const STATUS_CELL: Record<ParentWeekStatus, string> = {
@@ -180,7 +181,7 @@ export function WeekMap({ studentId }: { studentId: string }) {
               ) : (
                 <MasteryBar
                   mastery={selectedWeek.mastery_pct}
-                  label={`${Math.round(selectedWeek.mastery_pct * 100)}%`}
+                  label={masteryLabel(selectedWeek.mastery_pct)}
                   title={copy.weekMapMastery}
                   className="mt-2"
                 />

@@ -171,7 +171,7 @@ export function ParentReportDetailPage() {
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <p className="text-sm font-bold text-[#00023D]">{topic.subject}</p>
                           <span className="rounded-full bg-[#00023D]/10 px-2 py-0.5 text-[11px] font-bold text-[#00023D]">
-                            {copy.mastery} {pct === null ? '—' : `${pct}%`}
+                            {copy.mastery} {pct === null ? '—' : `${pct} / 100`}
                           </span>
                         </div>
                         {topic.last_label_parent && (

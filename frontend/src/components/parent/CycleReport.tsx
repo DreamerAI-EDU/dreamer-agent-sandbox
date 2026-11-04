@@ -6,6 +6,7 @@
 
 import type { ParentReportEnvelope } from '../../lib/parentTypes';
 import { DurationDisplay } from './DurationDisplay';
+import { masteryLabel } from '../../lib/parentTypes';
 import { MasteryBar } from './MasteryBar';
 import { DeltaBadge } from './DeltaBadge';
 
@@ -66,7 +67,7 @@ export function CycleReport({ envelope }: CycleReportProps) {
                 </div>
                 <MasteryBar
                   mastery={topic.mastery_pct}
-                  label={`${Math.round(topic.mastery_pct * 100)}%`}
+                  label={masteryLabel(topic.mastery_pct)}
                   title={`${topic.attempt_count} 次嘗試`}
                 />
                 {topic.recent_evidence.length > 0 && (

@@ -7,6 +7,7 @@
 // are forced on a student with fewer than ~5 sessions.
 
 import type { ParentBaseline, ParentReportTopic, ParentRoadmapStep } from '../../lib/parentTypes';
+import { masteryLabel } from '../../lib/parentTypes';
 import { MasteryBar } from './MasteryBar';
 
 interface FirstStepsViewProps {
@@ -66,7 +67,7 @@ export function FirstStepsView({ digest, baseline, roadmap, topics }: FirstSteps
                   <span className="font-medium text-black/80">{topic.subject}</span>
                   <span className="text-xs text-black/60">{topic.last_label_parent}</span>
                 </div>
-                <MasteryBar mastery={topic.mastery_pct} label={`${Math.round(topic.mastery_pct * 100)}%`} />
+                <MasteryBar mastery={topic.mastery_pct} label={masteryLabel(topic.mastery_pct)} />
               </li>
             ))}
           </ul>

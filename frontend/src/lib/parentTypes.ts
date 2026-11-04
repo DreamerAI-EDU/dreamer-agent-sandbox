@@ -131,10 +131,26 @@ export interface ParentReportEnvelope {
   report: ParentReportInner;
 }
 
-/** Mastery helpers — backend stores 0..1; UI wants 0..100. */
+/**
+ * Mastery helpers — the backend column is a 0..1 float, but older/imported
+ * rows carry the value already scaled to 0..100 (68.0 instead of 0.68). Both
+ * are normalised here so a stale row can never render as "6800%".
+ *
+ * The programme is an 8-week course, so the parent-facing ceiling is 100
+ * points out of 100 — anything above that is clamped, never extrapolated.
+ */
+const MASTERY_PERCENT_TOLERANCE = 1.5;
+
 export function masteryToPercent(mastery: number | null | undefined): number | null {
   if (mastery === null || mastery === undefined) return null;
-  return Math.round(mastery * 100);
+  const scaled = mastery > MASTERY_PERCENT_TOLERANCE ? mastery : mastery * 100;
+  return Math.min(100, Math.max(0, Math.round(scaled)));
+}
+
+/** "68 / 100" — the 8-week mastery scale, 100 = the ceiling. */
+export function masteryLabel(mastery: number | null | undefined): string {
+  const pct = masteryToPercent(mastery);
+  return pct === null ? '—' : `${pct} / 100`;
 }
 
 export function deltaToPoints(delta: number | null | undefined): number | null {

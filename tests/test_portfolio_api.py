@@ -325,6 +325,11 @@ async def test_parent_surface_own_child_200_shape(world, client):
     assert SID_A not in text  # full id never leaves the server
     assert "internal_label" not in body and "confidence" not in body
     assert "rubric_id" not in body
+    # PR-5a (2B, boss ruling 2026-11-05): the kid-facing label is an internal
+    # slot on the parent projection — key ABSENT, not null (same discipline as
+    # _PARENT_FORBIDDEN_KEYS on the report surfaces).
+    for it in items:
+        assert "kid_label" not in it
 
 
 @pytest.mark.asyncio
@@ -357,6 +362,7 @@ async def test_parent_surface_whitelist_exact_and_negative_scan(world, client):
     # positive check: the sanctioned timestamp field is present and rendered
     for it in body["items"]:
         assert "achieved_at" in it
+        assert "kid_label" not in it  # PR-5a (2B) parent item projection
 
 
 @pytest.mark.asyncio

@@ -2455,6 +2455,16 @@ async def handle_parent_portfolio(request: web.Request) -> web.Response:
         return web.json_response(_ERR_FORBIDDEN, status=403)
 
     payload = reports_mod.parent_portfolio_for_student(student)
+    # PR-5a ②B (boss ruling 2026-11-05: leak) — the item view carries the
+    # kid-facing `kid_label`, which belongs to the internal slot list; the
+    # parent copy drops it outright (key absent, not null). The kid surface
+    # (portfolio_items_for_student) keeps rendering it.
+    # share_cards are deliberately NOT scrubbed: their 8-field whitelist is a
+    # frozen contract (docs/phase6-schemas.md §2, R3) and any change there
+    # needs a design-book revision, not this patch.
+    payload["items"] = [
+        _scrub_parent_keys(item) for item in payload.get("items") or []
+    ]
     return web.json_response(payload)
 
 

@@ -122,12 +122,16 @@ export interface ParentReportInner {
 export interface ParentReportEnvelope {
   /** Narrative digest paragraph (parent-facing tone). */
   content: string;
-  mode: 'parent_report';
+  /** PR-5a: machine slots the parent projection never carries any more —
+   *  ``mode`` / ``kid_label`` / ``citations`` / ``cost_summary`` are stripped
+   *  server-side (key absent, not null). The teacher drill report still ships
+   *  them, so they stay declared as optional rather than deleted. */
+  mode?: 'parent_report';
   lang_code: string;
   age_band: string | null;
-  kid_label: string | null;
-  citations: unknown[];
-  cost_summary: ParentCostSummary;
+  kid_label?: string | null;
+  citations?: unknown[];
+  cost_summary?: ParentCostSummary;
   report: ParentReportInner;
 }
 

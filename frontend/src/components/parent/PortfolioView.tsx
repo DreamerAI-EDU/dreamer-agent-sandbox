@@ -110,11 +110,10 @@ export function PortfolioView({ studentId }: Props) {
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <h3 className="text-base font-bold text-[#00023D]">{item.title}</h3>
-                  {item.kid_label && (
-                    <span className="rounded-full bg-[#00023D]/8 px-2.5 py-0.5 text-xs font-semibold text-[#00023D]">
-                      {item.kid_label}
-                    </span>
-                  )}
+                  {/* PR-5a (2B): the kid-facing label is an internal slot and
+                      the parent projection no longer carries it — the badge is
+                      gone for good; a parent-facing honour badge would need a
+                      dedicated field via a design-book revision. */}
                 </div>
                 <p className="mt-0.5 text-xs text-black/35">
                   {item.achieved_at.slice(0, 10)} · {item.subject}

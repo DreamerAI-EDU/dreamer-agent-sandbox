@@ -24,6 +24,7 @@ import pytest
 from agents.parent_report_agent import ParentReportAgent
 from agents.parent_report_agent import (
     CYCLE_DAYS,
+    _now_iso,
     EVIDENCE_MAX_CHARS,
     FIRST_STEPS_MIN_DAYS,
     FIRST_STEPS_MIN_SESSIONS,
@@ -178,25 +179,27 @@ def _seed_obs(conn, student_id, event_type, event_data, days_ago):
 # ── Envelope contract ──────────────────────────────────
 
 def test_envelope_contract(db_path):
-    """Seven-field envelope always present.
+    """Envelope keeps the parent-safe fields only.
 
     H-2 (PR-3) flipped the old ``age_band is None`` assertion: the envelope
     now carries the REAL band threaded in by the caller (design book v1.1
     §3.3 / F5), so the parent-facing copy can never be band-mismatched.
+
+    PR-5a ②C — `kid_label` / `citations` / `cost_summary` are scrubbed before
+    the envelope leaves the generator (they are internal slots, never parent
+    copy), so their absence is now part of the contract.
     """
     agent = ParentReportAgent(db_path=db_path)
     result = agent.generate_report(
         "stu_empty", period="cycle", lang_code="zh-hk", age_band="P1-P3"
     )
-    for key in ["content", "mode", "lang_code", "age_band", "kid_label",
-                "citations", "cost_summary"]:
+    for key in ["content", "mode", "lang_code", "age_band", "report"]:
         assert key in result, f"missing envelope key: {key}"
     assert result["mode"] == "parent_report"
     assert result["lang_code"] == "zh-hk"
     assert result["age_band"] == "P1-P3"
-    assert result["kid_label"] is None
-    assert isinstance(result["citations"], list)
-    assert result["cost_summary"]["status"] in ("ok", "no_data")
+    for gone in ("kid_label", "citations", "cost_summary"):
+        assert gone not in result, f"{gone} must not reach the parent envelope"
 
 
 # ── Empty data ─────────────────────────────────────────
@@ -516,6 +519,19 @@ def test_write_session_log_persists_duration(monkeypatch, tmp_path):
         monkeypatch.delenv("DREAMER_DB_PATH", raising=False)
 
 
+def _cost_figures(agent: ParentReportAgent, student_id: str) -> dict:
+    """Rebuild the D5 cost figures at the internal layer.
+
+    PR-5a ②C removed `cost_summary` from the envelope (parents must not see
+    token accounting), but the aggregation itself is untouched — assert it
+    directly on the helper instead of on the response body.
+    """
+    obs = agent._query_obs_events(student_id, None, _now_iso())
+    total, has_cost = agent._aggregate_cost(obs)
+    status = "ok" if has_cost and total > 0 else "no_data"
+    return {"status": status, "total_tokens": total}
+
+
 def test_cost_summary_tokens_aggregated(db_path):
     """cost_summary.total_tokens aggregates cost event total_tokens (D5)."""
     conn = sqlite3.connect(db_path)
@@ -531,8 +547,10 @@ def test_cost_summary_tokens_aggregated(db_path):
 
     agent = ParentReportAgent(db_path=db_path)
     result = agent.generate_report("stu_c", period="cycle", lang_code="zh-hk")
-    assert result["cost_summary"]["status"] == "ok"
-    assert result["cost_summary"]["total_tokens"] == 6783
+    assert "cost_summary" not in result
+    cost = _cost_figures(agent, "stu_c")
+    assert cost["status"] == "ok"
+    assert cost["total_tokens"] == 6783
 
 
 def test_cost_summary_all_tokenless_is_no_data(db_path):
@@ -548,8 +566,10 @@ def test_cost_summary_all_tokenless_is_no_data(db_path):
 
     agent = ParentReportAgent(db_path=db_path)
     result = agent.generate_report("stu_c0", period="cycle", lang_code="zh-hk")
-    assert result["cost_summary"]["status"] == "no_data"
-    assert result["cost_summary"]["total_tokens"] == 0
+    assert "cost_summary" not in result
+    cost = _cost_figures(agent, "stu_c0")
+    assert cost["status"] == "no_data"
+    assert cost["total_tokens"] == 0
 
 
 def test_cost_summary_no_cost_events_is_no_data(db_path):
@@ -563,8 +583,10 @@ def test_cost_summary_no_cost_events_is_no_data(db_path):
 
     agent = ParentReportAgent(db_path=db_path)
     result = agent.generate_report("stu_c1", period="cycle", lang_code="zh-hk")
-    assert result["cost_summary"]["status"] == "no_data"
-    assert result["cost_summary"]["total_tokens"] == 0
+    assert "cost_summary" not in result
+    cost = _cost_figures(agent, "stu_c1")
+    assert cost["status"] == "no_data"
+    assert cost["total_tokens"] == 0
 
 
 # ── execute() wrapper ──────────────────────────────────

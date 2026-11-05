@@ -16,7 +16,7 @@
 // page only dispatches between the three views.
 
 import { useEffect, useState } from 'react';
-import { Navigate, useNavigate, useSearchParams } from 'react-router';
+import { Link, Navigate, useNavigate, useSearchParams } from 'react-router';
 import { api, ApiError } from '../lib/api';
 import { copyEn as copy } from '../lib/i18n';
 import { AppShell } from '../components/AppShell';
@@ -141,6 +141,18 @@ export function TeacherDashboard() {
 
   return (
     <AppShell user={guard.user}>
+      {/* PR-5a ④ — entry point to the PR-5 report console. Label reuses the
+          console's own nav wording ('Reports', TeacherConsoleFrame NAV) so no
+          new copy is invented here; this route only links, it never embeds. */}
+      <div className="mb-4 flex justify-end">
+        <Link
+          to="/teacher/reports"
+          data-testid="link-teacher-reports"
+          className="rounded-full border border-black/10 bg-white px-3 py-1 text-xs text-[#00023D] hover:bg-black/5"
+        >
+          Reports
+        </Link>
+      </div>
       {showDetail ? (
         <TeacherStudentDetail
           key={`${classId}:${studentMask}:${period}`}

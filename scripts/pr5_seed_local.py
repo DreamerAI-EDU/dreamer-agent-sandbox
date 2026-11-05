@@ -354,6 +354,47 @@ def _reissue_reports(db_path: str, out_dir: str) -> list[dict[str, Any]]:
     return reports
 
 
+def _seed_consent_rows(db_path: str) -> dict[str, Any]:
+    """Sign the harness parent's required consents (PR-5a ③).
+
+    Walkthroughs were stopping on the consent gate: the demo parent had no
+    ``consent_log`` rows, so ``required_consent_gaps(role="parent")`` blocked
+    the parent console until somebody clicked through the re-sign page by hand.
+    This writes the same append-only rows the sign endpoint writes — current
+    version, ``action=agreed``, bound to the demo student so the per-student
+    gates (chat / media) are covered as well.
+
+    Harness only: it never touches production consent copy, versions or rows.
+    Idempotent — a doc already current is left alone rather than re-appended.
+    """
+    from auth import consent as consent_mod  # noqa: E402
+
+    docs = consent_mod.load_consent_docs()["documents"]
+    signed: list[str] = []
+    already_current: list[str] = []
+    for doc_type, cfg in docs.items():
+        if "parent" not in consent_mod.doc_roles(cfg):
+            continue
+        if consent_mod.has_current_agreement(PARENT_ID, doc_type):
+            already_current.append(doc_type)
+            continue
+        consent_mod.insert_consent_row(
+            user_id=PARENT_ID,
+            doc_type=doc_type,
+            doc_version=cfg["current_version"],
+            action="agreed",
+            ip="127.0.0.1",
+            user_agent="pr5-seed-local",
+            student_id=STUDENT_ID,
+        )
+        signed.append(doc_type)
+    return {
+        "signed": sorted(signed),
+        "already_current": sorted(already_current),
+        "remaining_gaps": consent_mod.required_consent_gaps(PARENT_ID, "parent"),
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", default=DEFAULT_DB, help="harness SQLite path")
@@ -482,6 +523,10 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         conn.close()
 
+    # 3b. consent rows for the demo parent (PR-5a ③) — the login gate is
+    #     otherwise closed for a freshly seeded parent account.
+    consent_state = _seed_consent_rows(db_path)
+
     # 4. three weeks of 4D scores
     score_rows: list[dict[str, Any]] = []
     for week, per_skill in SCORE_PLAN.items():
@@ -544,6 +589,7 @@ def main(argv: list[str] | None = None) -> int:
         },
         "scores": score_rows,
         "learning_activity": learning_counts,
+        "consent": consent_state,
         "reports": reports,
         "parent_visible_reports": len(visible),
     }

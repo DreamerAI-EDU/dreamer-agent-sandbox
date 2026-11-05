@@ -1,8 +1,12 @@
 // W3-B — Cycle report (period=cycle, standard variant focus).
 //
 // Main in-depth report: summary stats, per-topic mastery cards (progress
-// bar + independent delta badge + backend kid-facing label), narrative
-// digest, portfolio cross-links and cost summary (no_data → 「暫無數據」).
+// bar + independent delta badge + backend kid-facing parent label), narrative
+// digest and portfolio cross-links.
+//
+// PR-5a ②A — the 「Token 用量」 tile was removed: cost never reaches the parent
+// copy (§三 banned term), and the backend stops carrying `cost_summary` on the
+// live envelope in the same slice (②C), so the tile's data source is gone.
 
 import type { ParentReportEnvelope } from '../../lib/parentTypes';
 import { DurationDisplay } from './DurationDisplay';
@@ -15,12 +19,9 @@ interface CycleReportProps {
 }
 
 export function CycleReport({ envelope }: CycleReportProps) {
-  const { report, content, cost_summary } = envelope;
+  const { report, content } = envelope;
   const { summary, topics, period, portfolio_highlights } = report;
   const range = [period.from, period.to].filter(Boolean).join(' 至 ');
-
-  const costText =
-    cost_summary.status === 'ok' ? `${cost_summary.total_tokens.toLocaleString()} tokens` : '暫無數據';
 
   return (
     <section className="space-y-4">
@@ -32,7 +33,7 @@ export function CycleReport({ envelope }: CycleReportProps) {
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         <div className="rounded-2xl border border-black/5 bg-white p-4">
           <p className="text-xs text-black/40">學習次數</p>
           <p className="mt-1 text-2xl font-semibold text-[#00023D]">{summary.session_count}</p>
@@ -43,10 +44,6 @@ export function CycleReport({ envelope }: CycleReportProps) {
         <div className="rounded-2xl border border-black/5 bg-white p-4">
           <p className="text-xs text-black/40">觸及主題</p>
           <p className="mt-1 text-2xl font-semibold text-[#00023D]">{summary.topics_touched}</p>
-        </div>
-        <div className="rounded-2xl border border-black/5 bg-white p-4">
-          <p className="text-xs text-black/40">Token 用量</p>
-          <p className="mt-1 text-sm font-medium text-black/70">{costText}</p>
         </div>
       </div>
 

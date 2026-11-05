@@ -104,6 +104,21 @@ def _subject_of(topic_id: str) -> str:
     return str(topic_id).split("-", 1)[0]
 
 
+# PR-5a ②C — internal slots that must NOT ride on a live envelope.
+# The stored-report projection already drops them (auth/api._PARENT_FORBIDDEN_KEYS
+# / _scrub_parent_keys); the live generator applies the same rules at its own
+# boundary so the legacy /api/parent/report shape and the teacher draft cannot
+# carry a placeholder slot either ("key absent", never "key present but empty").
+_LIVE_ENVELOPE_FORBIDDEN = frozenset({"kid_label", "citations", "cost_summary"})
+
+
+def _scrub_live_envelope(envelope: dict) -> dict:
+    """Drop the internal slots before the envelope leaves the generator (②C)."""
+    for slot in _LIVE_ENVELOPE_FORBIDDEN:
+        envelope.pop(slot, None)
+    return envelope
+
+
 # ---------------------------------------------------------------------------
 # Parent Report Agent
 # ---------------------------------------------------------------------------
@@ -836,7 +851,9 @@ class ParentReportAgent:
         if include_safety:
             report["safety_alerts"] = self._build_safety_alerts(obs_events)
 
-        return {
+        # ②C — build the canonical envelope, then trim the parent-facing slots
+        # at the exit (same rules as the stored-report projection).
+        return _scrub_live_envelope({
             "content": narrative,
             "mode": "parent_report",
             "lang_code": lang_code,
@@ -849,7 +866,7 @@ class ParentReportAgent:
                 else {"status": "no_data", "total_tokens": 0}
             ),
             "report": report,
-        }
+        })
 
     def _empty_report(
         self,
@@ -865,7 +882,7 @@ class ParentReportAgent:
             "zh-cn": "欢迎使用 Dreamer AI！暂时还没有学习记录，完成第一次练习后，这里就会显示进度概览。",
             "en": "Welcome to Dreamer AI! No learning records yet — complete your first practice and progress will appear here.",
         }.get(lang_code, "")
-        return {
+        return _scrub_live_envelope({
             "content": narrative,
             "mode": "parent_report",
             "lang_code": lang_code,
@@ -889,7 +906,7 @@ class ParentReportAgent:
                 "roadmap": None,
                 "portfolio_highlights": [],
             },
-        }
+        })
 
     # ── Sync entry points ─────────────────────────────
 
@@ -1004,7 +1021,9 @@ class ParentReportAgent:
         if include_safety:
             report["safety_alerts"] = self._build_safety_alerts(obs_events)
 
-        return {
+        # ②C — build the canonical envelope, then trim the parent-facing slots
+        # at the exit (same rules as the stored-report projection).
+        return _scrub_live_envelope({
             "content": narrative,
             "mode": "parent_report",
             "lang_code": lang_code,
@@ -1017,7 +1036,7 @@ class ParentReportAgent:
                 else {"status": "no_data", "total_tokens": 0}
             ),
             "report": report,
-        }
+        })
 
     def execute(self, task_id: str, params: Dict) -> Dict:
         """Hermes-compatible entry (sync).

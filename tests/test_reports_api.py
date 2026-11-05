@@ -209,10 +209,14 @@ async def test_parent_report_full_envelope_for_own_student(world, client):
     )
     assert resp.status == 200
     body = await resp.json()
-    # canonical envelope shape (probe-verified against ParentReportAgent)
-    for key in ("content", "mode", "lang_code", "age_band", "kid_label",
-                "citations", "cost_summary", "report"):
+    # canonical envelope shape (probe-verified against ParentReportAgent).
+    # PR-5a: ②C scrubs kid_label/citations/cost_summary at the generator and
+    # ① adds `mode` to _PARENT_FORBIDDEN_KEYS — a parent payload carries none
+    # of them, so only the parent-safe keys are asserted present.
+    for key in ("content", "lang_code", "age_band", "report"):
         assert key in body, f"missing envelope key {key}"
+    for gone in ("mode", "kid_label", "citations", "cost_summary"):
+        assert gone not in body, f"{gone} must not reach the parent payload"
     report = body["report"]
     assert report["student_id"] == SID_A[:8], "parent side must mask id"
     assert report["variant"] == "standard"
@@ -586,6 +590,10 @@ async def test_teacher_and_parent_report_same_source_parity(world, client, monke
         inner = payload.get("report") or {}
         if isinstance(inner.get("student_id"), str):
             inner["student_id"] = inner["student_id"][:8]
+        # PR-5a ① — the machine slot `mode` now reaches the teacher surface
+        # only (_PARENT_FORBIDDEN_KEYS). Parity is about the shared data
+        # layer, not about generator bookkeeping, so drop it on both sides.
+        payload.pop("mode", None)
         return payload
 
     assert _normalise(tbody) == _normalise(pbody), "W3-B surfaces drifted from shared data layer"

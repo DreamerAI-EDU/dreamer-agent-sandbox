@@ -1750,7 +1750,11 @@ async def handle_parent_report(request: web.Request) -> web.Response:
     report = reports_mod.parent_report_for_student(
         student, period, include_safety=True, mask_student_id=True
     )
-    return web.json_response(report)
+    # PR-5a ① — the LIVE path builds its envelope straight from the agent, so
+    # the forbidden slots (incl. the machine `mode`) have to be dropped here
+    # too; the stored path gets them removed by _mask_report_payload. Teacher
+    # surfaces call parent_report_for_student directly and keep `mode`.
+    return web.json_response(_scrub_parent_keys(report))
 
 
 async def handle_teacher_class_progress(request: web.Request) -> web.Response:
@@ -2008,6 +2012,11 @@ _PARENT_FORBIDDEN_KEYS = frozenset(
         "review",
         "internal_label",
         "last_label_internal",
+        # PR-5a ① — P1 sweep (9678a37) fixed the render layer only; the stored
+        # projection now drops the machine slot itself ("mode": "parent_report"
+        # is a generator artifact, not parent copy). The teacher surface keeps
+        # it, so this lives here and NOT in the agent envelope.
+        "mode",
     }
 )
 

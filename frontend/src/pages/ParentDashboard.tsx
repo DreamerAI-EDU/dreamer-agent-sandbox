@@ -25,11 +25,12 @@
 // from /api/students plays that role — see report §4).
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { api, ApiError } from '../lib/api';
 import { useLang } from '../lib/i18n';
 import type { Student, User } from '../lib/types';
 import { PARENT_PERIODS } from '../lib/parentTypes';
+import { PARENT_REPORT_COPY, toReportLang } from '../lib/parentReportCopy';
 import type { ParentPeriod } from '../lib/parentTypes';
 import { AppShell } from '../components/AppShell';
 import { ChildSwitcher } from '../components/parent/ChildSwitcher';
@@ -166,6 +167,14 @@ export function ParentDashboard() {
   }
 
   const selectedStudent = students.find((s) => s.id === studentId) ?? null;
+  // PR-5a ④ — entry point to the approved-report list (B1/B2). The label is the
+  // frozen parent-console string for that page (PARENT_REPORT_COPY.listTitle);
+  // nothing new is worded here, and deep-link state is passed through so B1
+  // opens on the same child the dashboard is showing.
+  const reportListCopy = PARENT_REPORT_COPY[toReportLang(selectedStudent?.lang_code)];
+  const reportListHref = studentId
+    ? `/parent/reports?student=${encodeURIComponent(studentId)}`
+    : '/parent/reports';
 
   return (
     <AppShell user={user}>
@@ -179,11 +188,20 @@ export function ParentDashboard() {
               小朋友嘅學習週報、週期報告與成長旅程
             </p>
           </div>
-          {selectedStudent && (
-            <span className="rounded-full border border-black/10 bg-white px-3 py-1 text-xs text-black/60">
-              {selectedStudent.first_name} · {selectedStudent.age_band}
-            </span>
-          )}
+          <div className="flex items-center gap-2">
+            <Link
+              to={reportListHref}
+              data-testid="link-parent-reports"
+              className="rounded-full border border-black/10 bg-white px-3 py-1 text-xs text-[#00023D] hover:bg-black/5"
+            >
+              {reportListCopy.listTitle}
+            </Link>
+            {selectedStudent && (
+              <span className="rounded-full border border-black/10 bg-white px-3 py-1 text-xs text-black/60">
+                {selectedStudent.first_name} · {selectedStudent.age_band}
+              </span>
+            )}
+          </div>
         </div>
 
         {bootstrapError && (

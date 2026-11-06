@@ -5,5 +5,9 @@ python-dotenv>=1.0.0
 aiohttp>=3.9
 argon2-cffi>=23.1
 PyYAML>=6.0
-reportlab>=4.0
+# PR-6 S2: the approved-report PDF is hash-pinned (T-9 golden), and the bytes
+# depend on the renderer version -> exact pin, not a range. License: BSD-3-Clause
+# (reportlab open-source). No new dependency was introduced: both were already
+# declared for agents/portfolio_pdf.py and its tests.
+reportlab==5.0.1
 pypdf>=4.0

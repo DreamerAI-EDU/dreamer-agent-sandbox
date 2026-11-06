@@ -325,11 +325,24 @@ def _reissue_reports(db_path: str, out_dir: str) -> list[dict[str, Any]]:
             payload=envelope,
             generated_by="pr5_seed_local.py",
         )
+        # PR-6 S2: approval carries the on-disk PDF, so the harness must render
+        # one too — otherwise ``decide_report`` refuses (approval requires a
+        # rendered pdf) and the walkthrough would have no download to click.
+        # Reuse the API helper so the harness bytes == production bytes.
+        from auth.api import _write_report_pdf  # noqa: E402 — lazy: heavy import
+
+        published_at = store_mod.now_iso()
+        pdf_path, pdf_sha256 = _write_report_pdf(
+            store_mod.pdf_row(row["report_id"]), published_at=published_at
+        )
         approved = store_mod.decide_report(
             report_id=row["report_id"],
             decision="approve",
             teacher_id=TEACHER_ID,
             note=f"PR-5 harness auto-approve ({lang})",
+            pdf_path=pdf_path,
+            pdf_sha256=pdf_sha256,
+            published_at=published_at,
         )
         payload_path = os.path.join(out_dir, f"report_week{week}_{lang}.json")
         with open(payload_path, "w", encoding="utf-8", newline="\n") as fh:

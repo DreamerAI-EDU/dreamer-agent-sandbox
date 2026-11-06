@@ -44,6 +44,7 @@ from . import curriculum as curriculum_mod
 from . import db
 from . import payments as payments_mod
 from . import report_descriptors as report_descriptors_mod
+from . import report_pdf_store as report_pdf_store_mod
 from . import report_store as report_store_mod
 from . import reports as reports_mod
 from . import safety as safety_mod
@@ -1942,6 +1943,7 @@ async def handle_teacher_score_put(request: web.Request) -> web.Response:
 #   PUT  /api/teacher/reports/{report_id}       edit   (pending_review only)
 #   POST /api/teacher/reports/{report_id}/approve|reject   state transitions
 #   GET  /api/parent/reports                    approved-only, ownership gated
+#   GET  /api/{teacher|parent}/reports/{report_id}/pdf   PR-6 B5, approved only
 #
 # The state machine lives in auth/report_store.py; the DB is the last line
 # (one-pending partial unique index + no-DELETE + append-only teacher_edits
@@ -1953,6 +1955,17 @@ async def handle_teacher_score_put(request: web.Request) -> web.Response:
 _ERR_REPORT_NOT_FOUND = {"error": "報告唔存在"}
 _ERR_REPORT_STATE = {"error": "報告狀態唔允許呢個操作"}
 _ERR_REPORT_ALREADY_PENDING = {"error": "已有待審報告，請先處理"}
+#: PR-6 §S2 — machine code only (documents the failure for the client); no new
+#: user-facing copy is introduced by the PDF pipeline.
+_ERR_REPORT_PDF = {"ok": False, "error": "report_pdf_unavailable"}
+
+
+class ReportPdfError(RuntimeError):
+    """PDF render / store / hash-verification failure (PR-6 §S2).
+
+    Approval fails closed on this error — an approved row never exists
+    without bytes behind it.
+    """
 
 
 def _report_draft_url(report_id: str) -> str:
@@ -2058,10 +2071,20 @@ def _mask_report_payload(payload: Any) -> Any:
 
 
 def _parent_report_view(
-    row: dict[str, Any], student_id: str, *, include_payload: bool = True
+    row: dict[str, Any],
+    student_id: str,
+    *,
+    include_payload: bool = True,
+    include_pairs: bool = False,
 ) -> dict[str, Any]:
     """Parent-visible projection: no teacher_edits / review / cost / internal
-    labels, and the student is only ever the 8-char mask (§4.3 masking)."""
+    labels, and the student is only ever the 8-char mask (§4.3 masking).
+
+    ``include_pairs`` adds the PR-6 §A1-4 bilingual descriptor block. It is the
+    ONLY extra key the web surface gained: the pairs are derived from the
+    ``scores`` column frozen at generation time, so the same helper feeds both
+    the B2 web render and the S2 PDF (one derivation, one wording source).
+    """
     view: dict[str, Any] = {
         "report_id": row["report_id"],
         "version": row["version"],
@@ -2075,7 +2098,83 @@ def _parent_report_view(
     }
     if include_payload:
         view["payload"] = _mask_report_payload(row.get("payload") or {})
+    if include_pairs:
+        view["descriptor_pairs"] = report_descriptors_mod.descriptor_pairs(
+            row.get("scores") or {},
+            row.get("age_band") or "",
+            row.get("lang_code") or "en",
+        )
     return view
+
+
+def _report_pdf_view(row: dict[str, Any], published_at: str = "") -> dict[str, Any]:
+    """Render input for the PR-6 PDF (parent-safe projection + B2 pairs).
+
+    Built from the SAME parent-safe projection the web surface gets, plus the
+    bilingual descriptor pairs derived from the scores stored on the row at
+    generation time. Deriving from the stored ``scores`` column (not from live
+    score tables) is what makes the approval-time PDF reproducible later: a
+    score written after approval cannot change an approved document.
+
+    ``published_at`` is overridden by the approve path with the timestamp the
+    row is about to be given: the PDF prints the publication date, and a
+    pending row has not got one yet. Rendering with the final value is what
+    makes the stored bytes equal the bytes a later re-render produces.
+    """
+    view = _parent_report_view(row, row["student_id"], include_pairs=True)
+    if published_at:
+        view["published_at"] = published_at
+    return view
+
+
+def _write_report_pdf(row: dict[str, Any], published_at: str = "") -> tuple[str, str]:
+    """Render + persist the approval-time PDF → ``(pdf_path, pdf_sha256)``.
+
+    Raises ``ReportPdfError`` on any failure so the approval path can fail
+    closed (施工令 §S2: PDF 失敗 = approve 失敗) instead of publishing a
+    report whose download would 404 later.
+    """
+    from agents.report_pdf import pdf_sha256, render_report_pdf  # lazy: heavy import
+
+    try:
+        data = render_report_pdf(_report_pdf_view(row, published_at=published_at))
+        stored_path, _ = report_pdf_store_mod.store_pdf(row["report_id"], data)
+        return stored_path, pdf_sha256(data)
+    except Exception as exc:  # noqa: BLE001 — any failure must fail the approval
+        _log_security_warning(
+            "report_pdf_render_failed",
+            user_id="system",
+            target_id=row.get("report_id", "")[:STUDENT_ID_MASK_LEN],
+            detail=f"{type(exc).__name__}: {exc}",
+        )
+        raise ReportPdfError(str(exc)) from exc
+
+
+def _approved_report_pdf(row: dict[str, Any]) -> bytes:
+    """Bytes to serve for an approved row, hash-verified against the row.
+
+    Prefers the stored artifact; if it is gone (fresh container / cleaned
+    volume) it re-renders deterministically and refuses to serve anything
+    whose hash differs from the stored ``pdf_sha256`` — a parent must never
+    receive a document the teacher did not approve.
+    """
+    row = dict(row)
+    stored = report_pdf_store_mod.read_pdf(row.get("pdf_path") or "")
+    if stored is not None and report_pdf_store_mod.sha256_of(stored) == row.get("pdf_sha256"):
+        return stored
+    from agents.report_pdf import pdf_sha256, render_report_pdf
+
+    regenerated = render_report_pdf(_report_pdf_view(row))
+    if pdf_sha256(regenerated) != row.get("pdf_sha256"):
+        _log_security_warning(
+            "report_pdf_hash_mismatch",
+            user_id="system",
+            target_id=row.get("report_id", "")[:STUDENT_ID_MASK_LEN],
+            detail="regenerated PDF does not match the hash stored at approval",
+        )
+        raise ReportPdfError("hash mismatch")
+    report_pdf_store_mod.store_pdf(row["report_id"], regenerated)
+    return regenerated
 
 
 async def handle_teacher_report_generate(request: web.Request) -> web.Response:
@@ -2301,11 +2400,33 @@ async def _teacher_report_decide(request: web.Request, decision: str) -> web.Res
             note = raw_note
 
     try:
+        pdf_path = ""
+        pdf_sha256 = ""
+        published_at = ""
+        if decision == report_store_mod.DECISION_APPROVE:
+            pending = report_store_mod.pdf_row(report_id)
+            # Only render when the transition is actually available; an
+            # already-decided row must fall through to decide_report's 409
+            # rather than produce an orphan artifact.
+            if pending is not None and pending["status"] == report_store_mod.STATUS_PENDING_REVIEW:
+                # The PDF prints the publication date, so the timestamp is
+                # fixed BEFORE the render and handed to decide_report, keeping
+                # the approved bytes and the stored row in agreement.
+                published_at = report_store_mod.now_iso()
+                try:
+                    pdf_path, pdf_sha256 = _write_report_pdf(
+                        pending, published_at=published_at
+                    )
+                except ReportPdfError:
+                    return web.json_response(_ERR_REPORT_PDF, status=500)
         row = report_store_mod.decide_report(
             report_id=report_id,
             decision=decision,
             teacher_id=user["id"],
             note=note,
+            pdf_path=pdf_path,
+            pdf_sha256=pdf_sha256,
+            published_at=published_at,
         )
     except report_store_mod.ReportNotFound:
         return web.json_response(_ERR_REPORT_NOT_FOUND, status=404)
@@ -2361,7 +2482,11 @@ async def handle_parent_reports(request: web.Request) -> web.Response:
         if row is None:
             return web.json_response(_ERR_REPORT_NOT_FOUND, status=404)
         return web.json_response(
-            {"report": _parent_report_view(row, student["id"])}
+            {
+                "report": _parent_report_view(
+                    row, student["id"], include_pairs=True
+                )
+            }
         )
 
     rows = report_store_mod.list_approved_for_student(student["id"])
@@ -2373,6 +2498,98 @@ async def handle_parent_reports(request: web.Request) -> web.Response:
             ],
             "count": len(rows),
         }
+    )
+
+
+async def handle_parent_report_pdf(request: web.Request) -> web.Response:
+    """GET /api/parent/reports/{report_id}/pdf?student_id=… — B5 download.
+
+    Parent-only; ownership is proven through the same reachable-set gate as
+    the JSON surface (``get_approved_for_student`` re-checks both the report
+    and the child in one query). **Approved only** — a pending / rejected /
+    superseded row is a 404, indistinguishable from a non-existent one, so the
+    download surface cannot be used to probe another family's draft states.
+
+    The bytes are hash-verified against ``pdf_sha256`` before they leave the
+    server: a parent never receives a document that differs from the version
+    stored at approval.
+    """
+    user = _session_user(request)
+    if user is None:
+        return web.json_response(_ERR_AUTH, status=401)
+    if user["role"] != "parent":
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    report_id = (request.match_info.get("report_id") or "").strip()
+    identifier = (request.query.get("student_id") or "").strip()
+    if not report_id or not identifier:
+        return web.json_response(_ERR_INVALID, status=400)
+
+    student, ambiguous = students_mod.resolve_student_identifier(identifier, user)
+    if ambiguous:
+        return web.json_response(_ERR_INVALID, status=400)
+    if student is None or not students_mod.can_access_student(user, student):
+        _log_security_warning(
+            "report_pdf_cross_access",
+            user_id=user["id"],
+            target_id=identifier[:STUDENT_ID_MASK_LEN],
+            detail="attempted to download another parent's child report PDF",
+        )
+        return web.json_response(_ERR_FORBIDDEN, status=403)
+
+    row = report_store_mod.get_approved_for_student(report_id, student["id"])
+    if row is None:
+        return web.json_response(_ERR_REPORT_NOT_FOUND, status=404)
+    try:
+        pdf = _approved_report_pdf(row)
+    except ReportPdfError:
+        return web.json_response(_ERR_REPORT_PDF, status=500)
+    return _pdf_response(pdf, report_id, disposition="attachment")
+
+
+async def handle_teacher_report_pdf(request: web.Request) -> web.Response:
+    """GET /api/teacher/reports/{report_id}/pdf — B5 download (teacher side).
+
+    Identical ownership gate to the edit / decide routes (a foreign report is
+    the unified 403 + WARNING). Approved only: a draft has no approval-time
+    artifact, so asking for one is a state error rather than a silent render
+    of unreviewed content.
+    """
+    report_id = request.match_info.get("report_id", "")
+    user, denied = _report_owner_gate(request, report_id)
+    if denied is not None:
+        return denied
+
+    row = report_store_mod.pdf_row(report_id)
+    if row is None:  # pragma: no cover — the gate above already proved presence
+        return web.json_response(_ERR_REPORT_NOT_FOUND, status=404)
+    if row["status"] != report_store_mod.STATUS_APPROVED or not row.get("pdf_sha256"):
+        return web.json_response(_ERR_REPORT_STATE, status=409)
+    try:
+        pdf = _approved_report_pdf(row)
+    except ReportPdfError:
+        return web.json_response(_ERR_REPORT_PDF, status=500)
+    return _pdf_response(pdf, report_id, disposition="attachment")
+
+
+def _pdf_response(data: bytes, report_id: str, *, disposition: str) -> web.Response:
+    """PDF body with a download disposition and no caching of a private doc.
+
+    Filename pattern (施工令 §S2-3 要求申報): ``dreamer-report-<前8位>.pdf`` —
+    the full id stays on the row, the download name only carries the short
+    form so a folder of downloads is scannable and no visitor id ends up in a
+    filename a third-party app might read.
+    """
+    return web.Response(
+        body=data,
+        content_type="application/pdf",
+        headers={
+            "Content-Disposition": (
+                f'{disposition}; filename="dreamer-report-{report_id[:8]}.pdf"'
+            ),
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "private, no-store",
+        },
     )
 
 
@@ -3536,6 +3753,13 @@ def build_app() -> web.Application:
     # list / edit / decide routes above).
     app.router.add_get(
         "/api/teacher/reports/{report_id}", handle_teacher_report_detail
+    )
+    # PR-6 B5 — report PDF downloads (approved only, one per role)
+    app.router.add_get(
+        "/api/teacher/reports/{report_id}/pdf", handle_teacher_report_pdf
+    )
+    app.router.add_get(
+        "/api/parent/reports/{report_id}/pdf", handle_parent_report_pdf
     )
     app.router.add_put(
         "/api/teacher/reports/{report_id}", handle_teacher_report_update

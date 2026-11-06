@@ -756,6 +756,11 @@ def test_p1_detail_summary_grid_drops_the_mode_tile():
     # 四格 -> 三格（节数 / 分钟 / 主题数）
     assert "sm:grid-cols-4" not in source
     assert "sm:grid-cols-3" in source
-    # 冻结词仍然在用，且用在叙述段落上（不新增措辞、不留空壳标签）
-    assert "{copy.narrative}" in source
+    # 冻结词仍然在用，且用在叙述段落上（不新增措辞、不留空壳标签）。
+    # PR-6 §A1-4 之后该标题改成双语堆叠（`<Bi en={en.narrative} zh={zh.narrative} />`）：
+    # 两边都取自同一个冻结 key `narrative`，没有新字，所以这里认「双语对」为通过；
+    # 单语旧形 `{copy.narrative}` 同样接受（PR-5 桌面仍可独立通过）。
+    assert "{copy.narrative}" in source or (
+        "en.narrative" in source and "zh.narrative" in source
+    )
     assert 'data-testid="parent-narrative"' in source

@@ -96,6 +96,11 @@ class ReportConflict(Exception):
         self.existing = existing
 
 
+def now_iso() -> str:
+    """Public ``_now_iso`` — the approve path needs the timestamp up front."""
+    return _now_iso()
+
+
 def _now_iso() -> str:
     return (
         datetime.datetime.now(datetime.timezone.utc)
@@ -142,6 +147,9 @@ def _row_to_dict(row: sqlite3.Row, *, include_payload: bool = False) -> dict[str
         # The stored envelope is the single-language report body (§3.2). Kept
         # out of list views so a 200-row teacher list stays a summary.
         out["payload"] = _load(row["payload"], {})
+    # PR-6 §S2 — the approval-time artifact locator (empty for drafts).
+    out["pdf_path"] = row["pdf_path"] or ""
+    out["pdf_sha256"] = row["pdf_sha256"] or ""
     return out
 
 
@@ -200,6 +208,20 @@ def get_approved_for_student(
         return _row_to_dict(row, include_payload=True) if row is not None else None
     finally:
         conn.close()
+
+
+def pdf_row(report_id: str) -> Optional[dict[str, Any]]:
+    """Row prepared for the PR-6 PDF pipeline.
+
+    ``get_report`` hands back the raw ``sqlite3.Row`` (JSON columns are still
+    strings); the renderer needs ``scores`` / ``payload`` parsed and the two
+    PDF columns present, so the conversion happens once here instead of in
+    every caller. Returns None for an unknown id.
+    """
+    row = get_report(report_id)
+    if row is None:
+        return None
+    return _row_to_dict(row, include_payload=True)
 
 
 def find_pending_report(student_id: str, class_id: str) -> Optional[sqlite3.Row]:
@@ -500,12 +522,28 @@ def decide_report(
     decision: str,
     teacher_id: str,
     note: str = "",
+    pdf_path: str = "",
+    pdf_sha256: str = "",
+    published_at: str = "",
 ) -> dict[str, Any]:
     """Drive the state machine: approve / reject from ``pending_review``.
 
     ``approve`` publishes (``approved_at`` == ``published_at``) and supersedes
     the previous approved version of the same (student, class, week window),
     whose row is UPDATEd to ``superseded`` — never deleted.
+
+    PR-6 §S2: approval carries the rendered PDF. ``pdf_path`` / ``pdf_sha256``
+    are written in the SAME UPDATE that flips the status, so an approved row
+    can never exist without a PDF behind it ("PDF 失敗 = approve 失敗"). A
+    caller that approves without the two values is a programming error and is
+    refused rather than silently publishing a report with no download.
+
+    ``published_at`` is an optional caller-supplied timestamp: the PDF prints
+    the publication date, so the renderer needs the exact value the row will
+    carry *before* the transition happens. The approve path therefore computes
+    the timestamp once, renders with it, and writes the same string here —
+    that is what keeps the approval-time bytes reproducible at download time
+    (T-9 / hash verification). Defaults to "now" for every other caller.
     """
     if decision not in DECISIONS:
         raise ReportConflict(f"unknown decision {decision!r}")
@@ -523,7 +561,7 @@ def decide_report(
         if target not in LEGAL_TRANSITIONS.get(current, ()):
             raise ReportConflict(f"illegal transition: {current} -> {target}")
 
-        now = _now_iso()
+        now = published_at or _now_iso()
         review = _load(row["review"], {})
         if not isinstance(review, dict):
             review = {}
@@ -534,6 +572,8 @@ def decide_report(
             review["note"] = note[:REVIEW_NOTE_MAX_CHARS]
 
         if target == STATUS_APPROVED:
+            if not pdf_path or not pdf_sha256:
+                raise ReportConflict("approval requires a rendered pdf")
             # supersede the previous approved version of the same window (§4.1)
             conn.execute(
                 """UPDATE parent_reports
@@ -553,9 +593,19 @@ def decide_report(
             conn.execute(
                 """UPDATE parent_reports
                    SET status = 'approved', approved_at = ?, approved_by = ?,
-                       published_at = ?, review = ?, updated_at = ?
+                       published_at = ?, review = ?, pdf_path = ?, pdf_sha256 = ?,
+                       updated_at = ?
                    WHERE report_id = ? AND status = 'pending_review'""",
-                (now, teacher_id, now, _dump(review), now, report_id),
+                (
+                    now,
+                    teacher_id,
+                    now,
+                    _dump(review),
+                    pdf_path,
+                    pdf_sha256,
+                    now,
+                    report_id,
+                ),
             )
         else:
             conn.execute(

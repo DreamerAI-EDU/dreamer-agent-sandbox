@@ -235,6 +235,57 @@ def descriptors_for_scores(
     return out
 
 
+def paired_langs(lang_code: str) -> tuple[str, str]:
+    """(top, bottom) pair for the PR-6 bilingual surface (施工令 A1-1).
+
+    ``zh-hk`` → 繁 + EN ; ``zh-cn`` → 簡 + EN ; ``en`` → EN + 繁. The print
+    order is always English on top, so the tuple is ``("en", zh_variant)``:
+    index 0 is the upper line, index 1 the lower one.
+    """
+    if lang_code == "zh-cn":
+        return ("en", "zh-cn")
+    return ("en", "zh-hk")
+
+
+def descriptor_pairs(
+    scores: Mapping[str, Optional[int]], age_band: str, lang_code: str
+) -> dict[str, dict[str, Any]]:
+    """Score map → **both** language cells per dimension (PR-6 S1).
+
+    The stored payload keeps the single-language ``dimension_descriptors``
+    (PR-4 contract, untouched). The bilingual surface needs the other
+    language too, and the pair must come from the SAME 144-cell table cell,
+    so it is derived here from the stored scores + band rather than retyped:
+
+        {"DREAM": {"level": 2, "en": "<en cell>", "zh": "<zh-Hant|zh-Hans cell>"}}
+
+    ``level`` rides along so the PDF can print the frozen level pair
+    (``Achieved 達標``) next to the dimension name without re-deriving it.
+
+    An ungraded dimension (``None``) yields no entry — never a "Not Yet".
+    A band outside the frozen closed set yields ``{}`` (legacy rows keep the
+    pre-PR-4 report; nothing is written for a band it does not own).
+    """
+    if age_band not in BANDS:
+        return {}
+    _, zh_lang = paired_langs(lang_code)
+    out: dict[str, dict[str, Any]] = {}
+    for dimension in DIMENSIONS:
+        score = scores.get(dimension)
+        if score is None:
+            continue
+        if isinstance(score, bool) or not isinstance(score, int) or score not in LEVELS:
+            raise DescriptorError(
+                f"score for {dimension} must be an int in 0-3 or None, got {score!r}"
+            )
+        out[dimension] = {
+            "level": score,
+            "en": descriptor(dimension, score, age_band, "en"),
+            "zh": descriptor(dimension, score, age_band, zh_lang),
+        }
+    return out
+
+
 def attach_dimension_descriptors(
     envelope: dict[str, Any],
     *,

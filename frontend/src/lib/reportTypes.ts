@@ -30,6 +30,11 @@ export const REPORT_STATUSES: ReportStatus[] = [
 /** PR-4 — dimension code -> the descriptor sentence for this band × lang. */
 export type DimensionDescriptors = Record<string, string>;
 
+/** PR-6 §A1-4 — dimension code -> BOTH language cells of the same 144-table
+ *  cell ({en, zh}), derived server-side from the stored scores. The web detail
+ *  route and the S2 PDF both read this, so the wording has one source. */
+export type DimensionDescriptorPairs = Record<string, { en: string; zh: string }>;
+
 export interface ReportPayload {
   content: string;
   mode: string;
@@ -126,6 +131,9 @@ export interface ParentReportDetailResponse {
     age_band: string;
     published_at: string;
     payload: ReportPayload;
+    /** PR-6 S1 — present on the detail route; absent (not empty) for legacy
+     *  rows whose band owns no descriptor cell. */
+    descriptor_pairs?: DimensionDescriptorPairs;
   };
 }
 

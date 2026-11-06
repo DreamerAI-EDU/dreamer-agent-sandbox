@@ -32,6 +32,7 @@ export function TeacherReportReviewPage() {
   const [error, setError] = useState('');
   const [draftText, setDraftText] = useState('');
   const [saving, setSaving] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const [notice, setNotice] = useState('');
   const [note, setNote] = useState('');
 
@@ -79,6 +80,28 @@ export function TeacherReportReviewPage() {
       }
     } finally {
       setSaving(false);
+    }
+  };
+
+  // PR-6 B5 — teacher-side approved-only download. Label is the technical
+  // token `PDF`: the console keeps its existing wording (no new copy).
+  const download = async () => {
+    if (!detail || detail.status !== 'approved') return;
+    setDownloading(true);
+    try {
+      const blob = await api.teacherReportPdf(detail.report_id);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `${detail.report_id}.pdf`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : '');
+    } finally {
+      setDownloading(false);
     }
   };
 
@@ -154,6 +177,17 @@ export function TeacherReportReviewPage() {
           <span className="text-black/40">版本 v{detail.version}</span>
           <span className="text-black/40">審計記錄 {detail.teacher_edits_count} 筆</span>
           <span className="text-black/30">report_id {detail.report_id.slice(0, 8)}…</span>
+          {detail.status === 'approved' && (
+            <button
+              type="button"
+              onClick={() => void download()}
+              disabled={downloading}
+              className="ml-auto rounded-full bg-[#00023D] px-3 py-1 text-[11px] font-bold text-white disabled:opacity-40"
+              data-testid="review-pdf"
+            >
+              PDF
+            </button>
+          )}
         </div>
         {!editable && (
           <p className="mt-3 rounded-lg bg-black/[0.03] px-3 py-2 text-xs text-black/50">

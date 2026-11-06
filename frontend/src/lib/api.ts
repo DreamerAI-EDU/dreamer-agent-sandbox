@@ -128,6 +128,32 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   return data as T;
 }
 
+/** PR-6 B5 — binary GET (the report PDF). Same cookie + CSRF-on-GET contract
+ *  as `request`, but the body stays a Blob instead of being parsed as JSON. */
+async function requestBlob(path: string): Promise<Blob> {
+  let resp: Response;
+  try {
+    resp = await fetch(path, {
+      method: 'GET',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+      credentials: 'include',
+    });
+  } catch {
+    throw new ApiError(0, '網路連線失敗，請稍後再試');
+  }
+  if (!resp.ok) {
+    let message = `請求失敗 (${resp.status})`;
+    try {
+      const data = (await resp.json()) as { error?: unknown };
+      if (data && typeof data.error === 'string') message = data.error;
+    } catch {
+      // Non-JSON error body (e.g. the 409 text) — keep the status wording.
+    }
+    throw new ApiError(resp.status, message);
+  }
+  return resp.blob();
+}
+
 export const api = {
   me: () => request<MeResponse>('/api/auth/me'),
   login: (email: string, password: string) =>
@@ -403,4 +429,11 @@ export const api = {
       `/api/parent/reports?student_id=${encodeURIComponent(studentId)}&report_id=${encodeURIComponent(reportId)}`,
       { csrfOnGet: true },
     ),
+  // PR-6 B5 — approved-only report PDF (one endpoint per role).
+  parentReportPdf: (studentId: string, reportId: string) =>
+    requestBlob(
+      `/api/parent/reports/${encodeURIComponent(reportId)}/pdf?student_id=${encodeURIComponent(studentId)}`,
+    ),
+  teacherReportPdf: (reportId: string) =>
+    requestBlob(`/api/teacher/reports/${encodeURIComponent(reportId)}/pdf`),
 };

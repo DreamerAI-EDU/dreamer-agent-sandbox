@@ -63,7 +63,7 @@ def relative_pdf_path(report_id: str) -> str:
     if configured:
         directory = configured if os.path.isabs(configured) else configured
         return "/".join(
-            [directory.replace("\\", "/").strip("/"), f"{report_id}.pdf"]
+            [directory.replace("\\", "/").rstrip("/"), f"{report_id}.pdf"]
         )
     return "/".join([DEFAULT_PDF_DIR.replace("\\", "/"), f"{report_id}.pdf"])
 

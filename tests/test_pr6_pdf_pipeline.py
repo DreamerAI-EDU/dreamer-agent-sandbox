@@ -243,3 +243,11 @@ async def test_supersede_keeps_the_old_pdf_on_disk(client, world, tmp_path, monk
     assert os.path.isfile(v1_pdf)              # audit：舊檔唔刪
     assert _row(world["db_path"], v1)["status"] == "superseded"
     assert _row(world["db_path"], v2)["status"] == "approved"
+
+
+def test_relative_pdf_path_preserves_absolute_posix_dir(monkeypatch):
+    """M-2 回歸：絕對 POSIX 目錄嘅前導 / 唔准再被 strip 走（Linux-only 缺陷）。"""
+    from auth import report_pdf_store
+    monkeypatch.setenv(report_pdf_store.PDF_DIR_ENV, "/data/report_pdfs")
+    rid = "rpt_" + "0" * 32
+    assert report_pdf_store.relative_pdf_path(rid) == "/data/report_pdfs/" + rid + ".pdf"

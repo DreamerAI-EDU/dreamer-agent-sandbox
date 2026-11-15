@@ -1,0 +1,29 @@
+# /etc/msmtprc — 模板（渲染後權限必須 600，擁有者 root:root）
+# 佔位符由憑證到位時填充；本檔不落任何真實密碼。
+defaults
+auth           on
+tls            on
+tls_trust_file /etc/ssl/certs/ca-certificates.crt
+logfile        /var/log/msmtp.log
+
+# 線路 A：Gmail app password（From 必須等於 user）
+account        gmail
+host           smtp.gmail.com
+port           587
+user           __GMAIL_USER__@gmail.com
+password       __GMAIL_APP_PASSWORD__
+from           __GMAIL_USER__@gmail.com
+
+# 線路 B：Resend SMTP（From 必須是已在 Resend 驗證的域名）
+account        resend
+host           smtp.resend.com
+port           587
+user           resend
+password       __RESEND_API_KEY__
+from           alerts@__VERIFIED_ALERT_DOMAIN__
+
+# 生效線路（二選一）
+account default : __ACTIVE_ACCOUNT__
+
+# 別名：讓 cron 的 mail 走同一帳號
+aliases        /etc/aliases

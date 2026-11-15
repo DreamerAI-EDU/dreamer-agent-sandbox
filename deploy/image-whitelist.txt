@@ -1,0 +1,15 @@
+# deploy/image-whitelist.txt — 生產鏡像白名單（只增不改）
+#
+# 硬規則：
+#   1. 只可新增行；既有行的 image_id / sha 不得原地改寫。變更＝新行 + 舊行末尾標 superseded_by=<新 commit>。
+#   2. b7c42d9 為回滾錨點，永不出白名單（任何 PR 刪除該行一律拒絕）。
+#   3. 部署腳本必須比對 docker inspect --format '{{.Id}}' 與本檔 image_id，不符 exit 90。
+#   4. 每一行必須能追溯到 deploy/IMAGE_ALLOWLIST.md 的准入記錄（commit / base_digest / image_tar_sha256 / 簽署人 / UTC）。
+#
+# 格式（空白分隔）：
+#   <commit>  <image_id>  <registry_tag>  <admitted_utc>  <signed_by>
+#
+# 生效日：2026-11-15（令_走查GO與並行軌三選型）
+
+b7c42d9  sha256:e59c0e763b3b104a673e6701fe466b3a8121adc54d934a70f310b6bc13fd57aa  ghcr.io/dreamerai-edu/dreamer-api:b7c42d9  2026-11-15T07:45:00Z  bootstrap-anchor
+（内容由AI生成，仅供参考）

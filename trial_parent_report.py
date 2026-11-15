@@ -54,6 +54,28 @@ def _seed_schema(conn: sqlite3.Connection) -> None:
             event_type TEXT NOT NULL, event_data TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
+        -- H-2 (PR-3a): ParentReportAgent resolves age_band from the students
+        -- row and raises when it is missing (no preset fallback). The fixture
+        -- must therefore carry the students table, mirroring
+        -- migrations/phase8_auth.sql.
+        CREATE TABLE students (
+            id            TEXT PRIMARY KEY,
+            parent_id     TEXT,
+            teacher_id    TEXT,
+            first_name    TEXT NOT NULL,
+            age_band      TEXT NOT NULL,
+            lang_code     TEXT NOT NULL,
+            pin_hash      TEXT,
+            pin_lock_until TEXT,
+            failed_pin_count INTEGER NOT NULL DEFAULT 0,
+            created_at    TEXT NOT NULL
+        );
+        INSERT INTO students
+            (id, parent_id, teacher_id, first_name, age_band, lang_code,
+             pin_hash, pin_lock_until, failed_pin_count, created_at)
+        VALUES
+            ('t_wire_003', 'parent_wire', 'teacher_wire', 'Wire', 'P4-P6', 'en',
+             NULL, NULL, 0, datetime('now'));
     """)
 
 

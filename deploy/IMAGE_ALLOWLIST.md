@@ -1,14 +1,3 @@
----
-AIGC:
-    Label: "1"
-    ContentProducer: 001191440300708461136T1XGW3
-    ProduceID: 78373afc8115dcc55e8ceaf91b4b85d2_665a0453e0c811f1913b525400393706
-    ReservedCode1: JhMrtrqHMY8I+Ko39061ktfE+HsPDuAHxPogGORuOuF59ziEWWeZkavK34ugMl+cDNi3hOdFZYGLZvk/Nr+R1jcVD5kJ6LFauNchFKnU0oAky2hLVjf8va/xzGTzDm2khcuREHoD8l6gW4Yuvk03ZiXF07q3LcKtglnt7AhNmfFTwf+fFTimZTeALOI=
-    ContentPropagator: 001191440300708461136T1XGW3
-    PropagateID: 78373afc8115dcc55e8ceaf91b4b85d2_665a0453e0c811f1913b525400393706
-    ReservedCode2: JhMrtrqHMY8I+Ko39061ktfE+HsPDuAHxPogGORuOuF59ziEWWeZkavK34ugMl+cDNi3hOdFZYGLZvk/Nr+R1jcVD5kJ6LFauNchFKnU0oAky2hLVjf8va/xzGTzDm2khcuREHoD8l6gW4Yuvk03ZiXF07q3LcKtglnt7AhNmfFTwf+fFTimZTeALOI=
----
-
 # IMAGE ALLOWLIST — 准入記錄（P1，GHCR ＋ 細粒度 PAT）
 
 狀態：**規格定稿 v1.0；未接通**（GHCR push 憑證未到位，見「待接通行」）
@@ -46,4 +35,3 @@ D8-1 准入時第 3 步的 `image_tar_sha256` 由 CI 產出，第 4 步 PR 由�
 1. **fine-grained PAT**：scope 僅 `write:packages`，僅指向 repo `ghcr.io/dreamerai-edu/dreamer-api`；有效期建議 90 天並記錄到期日。
 2. 現有 GHCR 倉庫已存在且已有多 tag（b7c42d9 / 6ac2576 / e6c162c …），無需新建倉庫，只需推送憑證。
 3. 未接通前：本軌只寫流程與腳本，**不執行任何 push、不改 compose 引用來源**。
-*（内容由AI生成，仅供参考）*

@@ -1,14 +1,3 @@
----
-AIGC:
-    Label: "1"
-    ContentProducer: 001191440300708461136T1XGW3
-    ProduceID: 78373afc8115dcc55e8ceaf91b4b85d2_671da9a9e0c811f1913b525400393706
-    ReservedCode1: q9egyFLYO1vbP8mEdnYfYCQjtao2i1WbCNKyrAV42neufrFaDKWFDuZeXGYjPd2yfWpy8aOdNkck1Xq2TEPhTYJNbtSxANAGVkOd5QsPaqSUS17SCFB/Zy81GHizxAIHCwM3rizAYEUISomDAa2TqZ3TgxfUjhXCOyshPmjXCFyj1yuNIfGBMA9EVY8=
-    ContentPropagator: 001191440300708461136T1XGW3
-    PropagateID: 78373afc8115dcc55e8ceaf91b4b85d2_671da9a9e0c811f1913b525400393706
-    ReservedCode2: q9egyFLYO1vbP8mEdnYfYCQjtao2i1WbCNKyrAV42neufrFaDKWFDuZeXGYjPd2yfWpy8aOdNkck1Xq2TEPhTYJNbtSxANAGVkOd5QsPaqSUS17SCFB/Zy81GHizxAIHCwM3rizAYEUISomDAa2TqZ3TgxfUjhXCOyshPmjXCFyj1yuNIfGBMA9EVY8=
----
-
 # P2 告警 Email（msmtp）— 規格 v1.0（未接通）
 
 狀態：**規格與腳本就緒；VPS 未安裝 msmtp，未寫入任何憑證**
@@ -48,4 +37,3 @@ AIGC:
 
 `alert_send.sh` 在無 `/etc/msmtprc` 或無 `ALERT_SMTP_READY=1` 時一律 **dry-run**（打印郵件全文、退出碼 3），
 不會嘗試任何網絡外發，也不會在 VPS 安裝任何套件。
-*（内容由AI生成，仅供参考）*

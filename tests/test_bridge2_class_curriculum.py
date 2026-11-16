@@ -14,6 +14,7 @@ unknown curriculum -> 404, catalog without a role -> 401/403.
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import json
 import os
@@ -202,9 +203,24 @@ async def _mount(client, token, class_id, curriculum_id=CURRICULUM_ID, **extra):
     )
 
 
-async def _advance(client, token, class_id):
+async def _advance(client, token, class_id, *, expected_week=None):
+    """POST advance-week pinned to the week we just read (F-4 replay guard)."""
+    if expected_week is None:
+        cur = await client.get(
+            f"/api/classes/{class_id}/curriculum", headers=_auth(token)
+        )
+        if cur.status == 200:
+            # current_week is null for an unmounted / non-linear class; the pin
+            # stays a legal 1..8 value so the DAO owns the 409, not the parser.
+            expected_week = (await cur.json()).get("current_week") or 1
+        else:
+            # A role/ownership refusal is what such a call is probing: pin a
+            # legal week so the handler reaches its own guard first.
+            expected_week = 1
     return await client.post(
-        f"/api/classes/{class_id}/advance-week", headers=_auth(token)
+        f"/api/classes/{class_id}/advance-week",
+        json={"expected_week": expected_week},
+        headers=_auth(token),
     )
 
 
@@ -553,3 +569,104 @@ def test_bridge2_migration_is_idempotent(tmp_path, monkeypatch):
     assert "curriculum_id" in cols
     assert "class_curriculum" in tables
     assert "idx_class_curriculum_one_active" in indexes
+
+# ---------------------------------------------------------------------------
+# Advance replay guard (F-4 defect) — expected_week IS the idempotency pin
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_replayed_advance_is_refused_and_writes_only_one_week(
+    client, fresh_invite
+):
+    """Same pin twice: first 200, the replay 409, exactly one week of movement."""
+    token = await _setup_teacher(client)
+    cls = await _create_class(client, token)
+    _seed_curriculum()
+    await _mount(client, token, cls["id"])
+
+    first = await _advance(client, token, cls["id"], expected_week=1)
+    assert first.status == 200, await first.text()
+    body = await first.json()
+    assert body["completed_week"] == 1
+    assert body["active_week"] == 2
+
+    replay = await _advance(client, token, cls["id"], expected_week=1)
+    assert replay.status == 409, await replay.text()
+    assert "error" in await replay.json()
+
+    statuses = {r["week_no"]: r["status"] for r in _curriculum_rows(cls["id"])}
+    assert statuses[1] == "completed"
+    assert statuses[2] == "active"
+    assert all(statuses[w] == "locked" for w in range(3, 9))
+
+
+@pytest.mark.asyncio
+async def test_replay_leaves_exactly_one_audit_row(client, fresh_invite, tmp_path):
+    token = await _setup_teacher(client)
+    cls = await _create_class(client, token)
+    _seed_curriculum()
+    await _mount(client, token, cls["id"])
+
+    assert (await _advance(client, token, cls["id"], expected_week=1)).status == 200
+    assert (await _advance(client, token, cls["id"], expected_week=1)).status == 409
+
+    events = [
+        e
+        for e in _audit_events(tmp_path)
+        if e.get("event") == "curriculum_week_advanced"
+    ]
+    assert len(events) == 1
+    assert events[0]["expected_week"] == 1
+
+
+@pytest.mark.asyncio
+async def test_advance_requires_a_wellformed_week_pin(client, fresh_invite):
+    """Missing / extra / mistyped / out-of-range pins are 400 and write nothing."""
+    token = await _setup_teacher(client)
+    cls = await _create_class(client, token)
+    _seed_curriculum()
+    await _mount(client, token, cls["id"])
+    url = f"/api/classes/{cls['id']}/advance-week"
+
+    missing = await client.post(url, headers=_auth(token))
+    assert missing.status == 400, await missing.text()
+
+    empty = await client.post(url, json={}, headers=_auth(token))
+    assert empty.status == 400, await empty.text()
+
+    extra = await client.post(
+        url, json={"expected_week": 1, "week_no": 2}, headers=_auth(token)
+    )
+    assert extra.status == 400, await extra.text()
+
+    for bad in (0, 9, -1, True, "1", None, 1.5):
+        resp = await client.post(
+            url, json={"expected_week": bad}, headers=_auth(token)
+        )
+        assert resp.status == 400, f"{bad!r} -> {resp.status}"
+
+    statuses = {r["week_no"]: r["status"] for r in _curriculum_rows(cls["id"])}
+    assert statuses[1] == "active"
+    assert "completed" not in statuses.values()
+
+
+@pytest.mark.asyncio
+async def test_two_advances_with_the_same_pin_move_exactly_one_week(
+    client, fresh_invite
+):
+    """The F-4 shape: a doubled call must not land two weeks."""
+    token = await _setup_teacher(client)
+    cls = await _create_class(client, token)
+    _seed_curriculum()
+    await _mount(client, token, cls["id"])
+
+    results = await asyncio.gather(
+        _advance(client, token, cls["id"], expected_week=1),
+        _advance(client, token, cls["id"], expected_week=1),
+    )
+    assert sorted(r.status for r in results) == [200, 409]
+
+    statuses = {r["week_no"]: r["status"] for r in _curriculum_rows(cls["id"])}
+    assert statuses[1] == "completed"
+    assert statuses[2] == "active"
+    assert statuses[3] == "locked"

@@ -71,11 +71,17 @@ export function CourseProgressCard({ classId, onAdvanced }: CourseProgressCardPr
   }, [load]);
 
   const advance = async () => {
+    const expectedWeek = course?.current_week;
+    if (expectedWeek === null || expectedWeek === undefined) {
+      // Nothing to advance FROM (no course mounted, or non-linear rows the
+      // server hides): it would be refused anyway, so do not send the call.
+      return;
+    }
     setBusy(true);
     setError('');
     setNote('');
     try {
-      await api.advanceWeek(classId);
+      await api.advanceWeek(classId, expectedWeek);
       await load();
       setNote(copy.courseProgressAdvanced);
       onAdvanced?.();

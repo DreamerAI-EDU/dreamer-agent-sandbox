@@ -36,6 +36,7 @@ ERR_INCOMPLETE = "incomplete"            # not a full 1..8 set -> 409
 ERR_ALREADY_MOUNTED = "already_mounted"  # class already has one -> 409
 ERR_NOT_MOUNTED = "not_mounted"          # advance before mount -> 409
 ERR_NOT_LINEAR = "not_linear"            # gap / two open weeks -> 409
+ERR_STALE_WEEK = "stale_week"          # expected_week != current  -> 409
 ERR_COURSE_COMPLETED = "course_completed"  # week 8 already done -> 409
 
 
@@ -439,6 +440,8 @@ def student_week_badge(student_id: str) -> dict[str, Any]:
 
 def advance_week(
     class_id: str,
+    *,
+    expected_week: int,
 ) -> tuple[Optional[dict[str, Any]], Optional[str]]:
     """Close the active week and open the next one ("下一週").
 
@@ -465,6 +468,14 @@ def advance_week(
         if error is not None:
             conn.rollback()
             return None, error
+
+        if current != expected_week:
+            # Replay guard (F-4 defect): the caller pins the week it read.
+            # If the class has already moved on, this is a retried or
+            # replayed request -- refuse it and change nothing, so one click
+            # can never advance two weeks.
+            conn.rollback()
+            return None, ERR_STALE_WEEK
 
         next_week = _apply_advance(
             conn, class_id, expected_week=current, now=_now_iso()

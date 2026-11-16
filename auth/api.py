@@ -2995,6 +2995,7 @@ _ERR_CURRICULUM_ALREADY_MOUNTED = {"error": "呢班已經掛載咗課程"}
 _ERR_CURRICULUM_NOT_MOUNTED = {"error": "呢班未掛載課程"}
 _ERR_CURRICULUM_NOT_LINEAR = {"error": "進度唔可以跳週"}
 _ERR_CURRICULUM_COMPLETED = {"error": "課程 8 週已完成"}
+_ERR_CURRICULUM_STALE_WEEK = {"error": "週次已經變咗，請重新載入進度"}
 
 _CURRICULUM_ERRORS = {
     curriculum_mod.ERR_NOT_FOUND: (404, _ERR_CURRICULUM_NOT_FOUND),
@@ -3003,6 +3004,7 @@ _CURRICULUM_ERRORS = {
     curriculum_mod.ERR_NOT_MOUNTED: (409, _ERR_CURRICULUM_NOT_MOUNTED),
     curriculum_mod.ERR_NOT_LINEAR: (409, _ERR_CURRICULUM_NOT_LINEAR),
     curriculum_mod.ERR_COURSE_COMPLETED: (409, _ERR_CURRICULUM_COMPLETED),
+    curriculum_mod.ERR_STALE_WEEK: (409, _ERR_CURRICULUM_STALE_WEEK),
 }
 
 
@@ -3085,9 +3087,16 @@ async def handle_mount_curriculum(request: web.Request) -> web.Response:
 async def handle_advance_week(request: web.Request) -> web.Response:
     """POST /api/classes/{id}/advance-week — close week N, open week N+1.
 
+    The body MUST pin the week the caller is advancing FROM:
+    ``{"expected_week": N}`` with N in 1..8; anything else is a 400. The pin
+    is the replay guard — a retried request whose week was already closed by
+    an earlier call matches nothing and writes nothing, so one click can
+    never advance two weeks (F-4).
+
     409 when there is nothing legal to do (unmounted class, a gap in the
-    week statuses, or a further advance after week 8). Every successful
-    advance leaves an audit row — the weekly step is the progress record.
+    week statuses, a further advance after week 8, or an ``expected_week``
+    that is no longer the open week). Every successful advance leaves an
+    audit row — the weekly step is the progress record.
     """
     user = _session_user(request)
     if user is None:
@@ -3106,7 +3115,25 @@ async def handle_advance_week(request: web.Request) -> web.Response:
         )
         return web.json_response(_ERR_FORBIDDEN, status=403)
 
-    result, err = curriculum_mod.advance_week(class_id)
+    payload = await _read_json(request)
+    if not payload:
+        return web.json_response(_ERR_INVALID, status=400)
+    if set(payload) - {"expected_week"}:
+        # exactly one pinned week per call — extra keys are refused,
+        # not ignored (same discipline as mount)
+        return web.json_response(_ERR_INVALID, status=400)
+
+    expected_week = payload.get("expected_week")
+    if (
+        isinstance(expected_week, bool)
+        or not isinstance(expected_week, int)
+        or not 1 <= expected_week <= curriculum_mod.CURRICULUM_WEEKS
+    ):
+        return web.json_response(_ERR_INVALID, status=400)
+
+    result, err = curriculum_mod.advance_week(
+        class_id, expected_week=expected_week
+    )
     if err is not None:
         return _curriculum_error(err)
 
@@ -3118,6 +3145,7 @@ async def handle_advance_week(request: web.Request) -> web.Response:
             "user_id": user["id"],
             "target_id": class_id,
             "week_no": result["completed_week"],
+            "expected_week": expected_week,
             "active_week": result["active_week"],
             "course_completed": result["course_completed"],
             "message": "week advanced via /api/classes/{id}/advance-week",

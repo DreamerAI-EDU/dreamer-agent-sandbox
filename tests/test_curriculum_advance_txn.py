@@ -110,7 +110,7 @@ def test_crash_between_the_two_writes_rolls_everything_back(mounted_class):
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(curriculum_mod, "_apply_advance", _half_write)
         with pytest.raises(RuntimeError):
-            curriculum_mod.advance_week(mounted_class)
+            curriculum_mod.advance_week(mounted_class, expected_week=1)
 
     statuses = _statuses()
     assert statuses[1] == curriculum_mod.STATUS_ACTIVE
@@ -118,7 +118,7 @@ def test_crash_between_the_two_writes_rolls_everything_back(mounted_class):
 
     # The rollback left the connection reusable: a real advance now works and
     # moves exactly one week.
-    payload, error = curriculum_mod.advance_week(mounted_class)
+    payload, error = curriculum_mod.advance_week(mounted_class, expected_week=1)
     assert error is None, error
     assert payload["completed_week"] == 1
     assert payload["active_week"] == 2
@@ -151,14 +151,16 @@ def test_advance_week_still_refuses_unmounted_and_completed_states(
     mounted_class, tmp_path, monkeypatch
 ):
     """The single-transaction rewrite must not weaken the linear rules."""
-    _, error = curriculum_mod.advance_week("class-never-mounted")
+    _, error = curriculum_mod.advance_week("class-never-mounted", expected_week=1)
     assert error == curriculum_mod.ERR_NOT_MOUNTED
 
-    for _ in range(8):  # week 1 active -> ... -> week 8 completed
-        payload, error = curriculum_mod.advance_week(mounted_class)
+    for week in range(1, 9):  # week 1 active -> ... -> week 8 completed
+        payload, error = curriculum_mod.advance_week(
+            mounted_class, expected_week=week
+        )
         assert error is None, error
     assert payload["course_completed"] is True
 
-    payload, error = curriculum_mod.advance_week(mounted_class)
+    payload, error = curriculum_mod.advance_week(mounted_class, expected_week=8)
     assert payload is None
     assert error == curriculum_mod.ERR_COURSE_COMPLETED

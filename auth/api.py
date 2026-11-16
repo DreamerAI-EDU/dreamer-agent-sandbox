@@ -476,6 +476,39 @@ async def handle_me(request: web.Request) -> web.Response:
     return web.json_response({"user": _public_user(user)})
 
 
+async def handle_health(request: web.Request) -> web.Response:
+    """GET /health and GET /api/health — liveness + readiness in one body.
+
+    Unauthenticated by design: a probe has no session cookie, and this body
+    says nothing about any user. Liveness is implied by answering at all;
+    readiness is one ``SELECT 1`` against the auth DB — the cheapest check
+    that still catches the failure mode we actually had (container up, DB
+    locked or unreadable, every request 500s behind a green TCP port).
+
+    Never echoes a path, a row, or an exception string: /health may be
+    reachable from the public origin.
+    """
+    checks = {"db": "ok"}
+    ok = True
+    try:
+        conn = db.connect()
+        try:
+            conn.execute("SELECT 1").fetchone()
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 — probe must never raise
+        checks["db"] = "fail"
+        ok = False
+    return web.json_response(
+        {
+            "status": "ok" if ok else "degraded",
+            "service": "dreamer-api",
+            "checks": checks,
+        },
+        status=200 if ok else 503,
+    )
+
+
 async def handle_verify_email(request: web.Request) -> web.Response:
     payload = await _read_json(request)
     if not payload:
@@ -3691,6 +3724,11 @@ def build_app() -> web.Application:
     app.router.add_post("/api/auth/login", handle_login)
     app.router.add_post("/api/auth/logout", handle_logout)
     app.router.add_get("/api/auth/me", handle_me)
+    # Gate-B leg ③ — probes. /api/health rides the API origin (Caddy forwards
+    # /api/* to this container); /health is the in-container Docker HEALTHCHECK
+    # target and the path deeptutor_config.yaml already points at.
+    app.router.add_get("/health", handle_health)
+    app.router.add_get("/api/health", handle_health)
     app.router.add_post("/api/auth/verify-email", handle_verify_email)
     app.router.add_post(
         "/api/auth/resend-verification", handle_resend_verification

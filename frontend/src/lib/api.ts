@@ -303,11 +303,14 @@ export const api = {
     ),
   // 「下一週」 — the server flips active→completed and unlocks the next week
   // in one transaction; the console only re-reads what the server now says.
-  // A 409 (unmounted / gap / after week 8) is surfaced verbatim.
-  advanceWeek: (classId: string) =>
+  // `expectedWeek` pins the week the console is advancing FROM, so a doubled
+  // click or a retried request carries a stale pin and the server answers 409
+  // without touching a row (F-4 replay guard). A 409 (unmounted / gap / after
+  // week 8 / stale pin) is surfaced verbatim.
+  advanceWeek: (classId: string, expectedWeek: number) =>
     request<AdvanceWeekResponse>(
       `/api/classes/${encodeURIComponent(classId)}/advance-week`,
-      { body: {} },
+      { body: { expected_week: expectedWeek } },
     ),
   // 邀請 — the pre-existing teacher invite flow (student + pending membership
   // + 72h invite + bilingual email). The console adds an entry point only;

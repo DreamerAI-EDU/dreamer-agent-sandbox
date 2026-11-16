@@ -18,6 +18,7 @@ This file is part of the CI manifest (phase2-tests) — see .github/workflows/ci
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import json
 import os
@@ -242,9 +243,24 @@ async def _mount(client, token, class_id, curriculum_id=CURRICULUM_ID):
     return await resp.json()
 
 
-async def _advance(client, token, class_id):
+async def _advance(client, token, class_id, *, expected_week=None):
+    """POST advance-week pinned to the week we just read (F-4 replay guard)."""
+    if expected_week is None:
+        cur = await client.get(
+            f"/api/classes/{class_id}/curriculum", headers=_auth(token)
+        )
+        if cur.status == 200:
+            # current_week is null for an unmounted / non-linear class; the pin
+            # stays a legal 1..8 value so the DAO owns the 409, not the parser.
+            expected_week = (await cur.json()).get("current_week") or 1
+        else:
+            # A role/ownership refusal is what such a call is probing: pin a
+            # legal week so the handler reaches its own guard first.
+            expected_week = 1
     return await client.post(
-        f"/api/classes/{class_id}/advance-week", headers=_auth(token)
+        f"/api/classes/{class_id}/advance-week",
+        json={"expected_week": expected_week},
+        headers=_auth(token),
     )
 
 
